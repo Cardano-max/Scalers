@@ -55,3 +55,74 @@ VALID_BRIEF: dict[str, Any] = {
     "hashtags": ["blackwork", "tattoo", "linework"],
     "call_to_action": "Book your spring chair",
 }
+
+
+# ── Side-effect-boundary + integration DB fixtures (HARN-04 / HARN-INT) ───────
+# Run against the REAL local Postgres so UNIQUE constraints and row-locking are
+# genuinely exercised. DSN resolves from ENGINE_DATABASE_URL (the value CI sets,
+# and what the harness checkpointer reads) first, then SCALERS_TEST_DSN, then a
+# local default. Bring the stack up:  cd infra && docker compose up -d
+import asyncio
+import os
+import sys
+from pathlib import Path
+
+import psycopg
+import pytest
+import pytest_asyncio
+
+# psycopg's async mode cannot run on Windows' default ProactorEventLoop.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+DB_DSN = (
+    os.environ.get("ENGINE_DATABASE_URL")
+    or os.environ.get("SCALERS_TEST_DSN")
+    or "postgresql://scalers:scalers@localhost:5432/scalers"
+)
+
+_SCHEMA_SQL = (
+    Path(__file__).resolve().parents[2] / "infra" / "initdb" / "02-side-effect-boundary.sql"
+)
+
+
+def _require_db() -> None:
+    try:
+        with psycopg.connect(DB_DSN, connect_timeout=3) as conn:
+            conn.execute("SELECT 1")
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(
+            f"local Postgres not reachable at {DB_DSN} ({exc}). "
+            "Start it with: cd infra && docker compose up -d",
+            allow_module_level=True,
+        )
+
+
+def apply_side_effect_schema_sync() -> None:
+    """Apply the outbox/ledger schema + truncate (sync, for non-async setups)."""
+    schema = _SCHEMA_SQL.read_text(encoding="utf-8")
+    with psycopg.connect(DB_DSN, autocommit=True) as conn:
+        conn.execute(schema)
+        conn.execute("TRUNCATE side_effect_ledger, outbox RESTART IDENTITY")
+
+
+@pytest_asyncio.fixture
+async def db():
+    """A clean, schema-applied async connection; tables truncated per test."""
+    _require_db()
+    assert _SCHEMA_SQL.exists(), f"schema migration missing: {_SCHEMA_SQL}"
+    schema = _SCHEMA_SQL.read_text(encoding="utf-8")
+    async with await psycopg.AsyncConnection.connect(DB_DSN, autocommit=True) as setup:
+        await setup.execute(schema)
+        await setup.execute("TRUNCATE side_effect_ledger, outbox RESTART IDENTITY")
+
+    conn = await psycopg.AsyncConnection.connect(DB_DSN, autocommit=False)
+    try:
+        yield conn
+    finally:
+        await conn.close()
+
+
+@pytest_asyncio.fixture
+def dsn() -> str:
+    return DB_DSN
