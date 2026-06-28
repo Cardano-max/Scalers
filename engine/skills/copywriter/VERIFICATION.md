@@ -43,6 +43,16 @@ after the change: `test_ai_flagger.py` + `test_humanize_cell.py` (15 passed),
 |---|---|
 | `test_instructions_compose_brand_voice_and_claims` | The resolved brand-voice context + approved claims are injected into the cell instructions, and the "BRAND VOICE WINS" rule (pattern-vs-voice edge case) is present. |
 
+## EMAIL mode (cold outreach)
+
+`python -m pytest tests/test_copywriter_email.py tests/test_copywriter.py -q` →
+**24 passed**. The email tests prove: subject/body length caps, required visible
+`{{unsubscribe}}` token (and that the token alone does NOT trip `no_placeholder`),
+stray-placeholder rejection, no social-isms (hashtags/@handles/`DM me`/emoji), the
+S3 AI-flagger over subject+body, the repair loop (a missing-unsubscribe email and a
+slop email are repaired), and S2 brand-voice composition into the email
+instructions.
+
 ## Scope / honesty notes
 
 - This verifies the **deterministic surface** (validators, repair loop, S2/S3

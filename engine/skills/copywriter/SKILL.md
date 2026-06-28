@@ -2,6 +2,7 @@
 name: copywriter
 description: Use when the posting copywriter cell turns a scored winning angle into publish-ready social copy — hooks, captions, and CTAs for a tattoo artist. Molds proven content-repurposing / hook patterns into the specific artist's voice and emits several distinct on-brand variants. Trigger words: copywriter, hook, CTA, caption, variants, repurpose, winning angle, content patterns, scroll-stopper.
 license: pattern-adoption (no upstream code vendored — see VETTING.md)
+pinned: ORIGINAL
 ---
 
 # Copywriter (hook / CTA)
@@ -85,6 +86,26 @@ approved_claims=…, …)` returns a typed `Cell[CopywriterDrafts]`:
   platform length, and the **S3 AI-flagger** over every variant.
 - **Input:** the run prompt carries the scored winning angle; the brand-voice
   context + approved claims are composed into the instructions by the harness.
+
+## EMAIL mode (cold outreach — 1mk.7 handoff)
+
+The same gated cell also fills **cold-outreach email** copy, so all copy lives in
+one S3+jury path. `build_copywriter_email_cell(brand_voice_context=…,
+approved_claims=…)` returns `Cell[EmailCopy]` (`{purpose, subject, body}`).
+
+- **Input contract:** growth's outreach policy emits a `Touch`
+  (`engine/outreach/schema.py`) per step — `{index, day_offset, purpose
+  (intro/value-add/soft-CTA/break-up), personalization_brief (≤2 allowed signals),
+  includes_unsubscribe}`. growth owns the sequence + brief; this cell fills the copy.
+- **Email validators** (`copywriter_email_validators`): subject ≤60 chars, body
+  ≤120 words, **no social-isms** (no hashtags/@handles/`link in bio`/`DM me`/emoji),
+  **required visible unsubscribe token** `{{unsubscribe}}`, no other placeholders,
+  banned-slop, and the **S3 AI-flagger over subject + body**.
+- **Unsubscribe (answers growth):** the copy leaves the visible `{{unsubscribe}}`
+  token (CAN-SPAM visible opt-out); the **send/connector layer** fills the
+  per-recipient URL and adds the **RFC 8058** `List-Unsubscribe` /
+  `List-Unsubscribe-Post: List-Unsubscribe=One-Click` header. The cell never
+  invents an unsubscribe URL.
 
 ## Quick reference
 
