@@ -22,23 +22,42 @@ eng contract:
 from __future__ import annotations
 
 from research.adapter import Channel, ProviderResult, ResearchQuery
+from research.safety import RateLimiter
 
 _META_CHANNELS = frozenset({Channel.META_AD_LIBRARY})
+# Official bases — the ONLY hosts this provider may call (TLS): Foreplay (primary)
+# + the Meta Ad Library Graph API (fallback). See safety.OFFICIAL_API_HOSTS.
+META_API_BASES = ("https://api.foreplay.co", "https://graph.facebook.com")
 
 
 class MetaAdLibraryProvider:
-    """Competitor-creative provider (Foreplay primary). Live client is eng-owned."""
+    """Competitor-creative provider (Foreplay primary). Live client is eng-owned.
+
+    sec hardening (bead 1mk.4): keys come from the pack secret (never inline), the
+    only callable bases are the official Foreplay/Meta hosts over TLS, and a
+    token-bucket rate limiter gates calls (respect the library's query caps/ToS).
+    """
 
     name = "meta_ad_library"
     channels: frozenset[Channel] = _META_CHANNELS
 
-    def __init__(self, access_token: str | None = None, *, foreplay_key: str | None = None) -> None:
+    def __init__(
+        self,
+        access_token: str | None = None,
+        *,
+        foreplay_key: str | None = None,
+        rate: float = 1.0,
+        burst: int = 3,
+    ) -> None:
+        # key-from-pack: [secrets.meta_access_token] / [secrets.foreplay_api_key].
         self._access_token = access_token
         self._foreplay_key = foreplay_key
+        self._api_bases = META_API_BASES
+        self._limiter = RateLimiter(rate=rate, burst=burst)
 
     def gather(self, query: ResearchQuery) -> ProviderResult:
         raise NotImplementedError(
             "MetaAdLibraryProvider.gather: eng to wire Foreplay (primary) / Meta "
-            "Ad Library official API for competitor creatives. Router uses the "
-            "fixture provider until then."
+            "Ad Library official API (TLS, key-from-pack, rate-limited) for "
+            "competitor creatives. Router uses the fixture provider until then."
         )
