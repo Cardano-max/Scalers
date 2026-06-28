@@ -24,6 +24,8 @@ class Split(str, Enum):
     CALIBRATION = "CALIBRATION"
     HOLDOUT = "HOLDOUT"  # blind set for brand-voice >=90% (never used to tune)
     SMOKE = "SMOKE"
+    RUBRIC = "RUBRIC"  # jury/human-rater anchor corpus (4jx.12); never scored as
+    # holdout, never feeds a gate (dataset_for filters to CALIBRATION/HOLDOUT)
 
 
 class Scope(str, Enum):

@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS gold_example (
     expected        jsonb,
     rubric_dimensions text[]    NOT NULL DEFAULT '{}',
     split           text        NOT NULL DEFAULT 'CALIBRATION'
-                    CHECK (split IN ('CALIBRATION', 'HOLDOUT', 'SMOKE')),
+                    CHECK (split IN ('CALIBRATION', 'HOLDOUT', 'SMOKE', 'RUBRIC')),
     label_version   integer     NOT NULL DEFAULT 1,
     -- sha256 of the canonical input; the natural-key component that makes
     -- re-ingest idempotent without hashing inside SQL.
