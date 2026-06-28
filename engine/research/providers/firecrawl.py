@@ -31,31 +31,51 @@ from research.adapter import (
     ProviderResult,
     ResearchQuery,
 )
+from research.safety import RateLimiter, assert_safe_url
 
 _FIRECRAWL_CHANNELS = frozenset(
     {Channel.R_TATTOOS, Channel.INSTAGRAM_HASHTAG, Channel.PINTEREST, Channel.TIKTOK, Channel.WEB}
 )
+# Official Firecrawl API base — the ONLY host this provider may call (TLS).
+FIRECRAWL_API_BASE = "https://api.firecrawl.dev"
 
 
 class FirecrawlProvider:
-    """Official-API web/social provider. Live client is eng-owned (see module doc)."""
+    """Official-API web/social provider. Live client is eng-owned (see module doc).
+
+    The sec hardening (bead 1mk.4) is enforced HERE so the live client cannot skip
+    it: keys come from the pack secret (never a vendored .env), the API base is the
+    official https host, every ``fetch(url)`` target passes the SSRF guard, and a
+    token-bucket rate limiter gates calls.
+    """
 
     name = "firecrawl"
     channels: frozenset[Channel] = _FIRECRAWL_CHANNELS
 
-    def __init__(self, api_key: str | None = None) -> None:
-        # Key comes from the tenant pack secret / env at wiring time — never a
+    def __init__(self, api_key: str | None = None, *, rate: float = 2.0, burst: int = 5) -> None:
+        # key-from-pack: the tenant pack secret / env at wiring time — never a
         # vendored .env, never GITHUB_TOKEN harvesting.
         self._api_key = api_key
+        self._api_base = FIRECRAWL_API_BASE
+        self._limiter = RateLimiter(rate=rate, burst=burst)
 
     def gather(self, query: ResearchQuery) -> ProviderResult:
         raise NotImplementedError(
-            "FirecrawlProvider.gather: eng to wire the official Firecrawl API "
-            "(TLS-verified). Until then the router uses the fixture provider."
+            "FirecrawlProvider.gather: eng to wire the official Firecrawl API at "
+            f"{self._api_base} (TLS, key-from-pack, rate-limited). Each target URL "
+            "must pass safety.assert_safe_url; the router uses the fixture until then."
         )
 
     def fetch(self, url: str) -> Document:
+        # SSRF guard FIRST: never ask Firecrawl to fetch a private/loopback/
+        # metadata/obfuscated-numeric/non-https target (replaces the stripped
+        # TLS-disabled fetch.py). Static check only — see the MANDATORY runtime
+        # step below.
+        assert_safe_url(url)
         raise NotImplementedError(
-            "FirecrawlProvider.fetch: eng to wire official Firecrawl fetch with "
-            "TLS verification ON (replaces the stripped TLS-disabled fetch.py)."
+            "FirecrawlProvider.fetch: eng to wire official Firecrawl fetch (TLS on, "
+            "key-from-pack, rate-limited). MANDATORY before connect (sec F2): "
+            "getaddrinfo(host) -> safety.assert_resolved_ips_safe(addrs) -> pin the "
+            "connection to a vetted resolved IP (defeats DNS-rebinding; a hostname "
+            "can resolve to a private IP and pass the static guard)."
         )
