@@ -23,6 +23,7 @@ Decision records — the fixed shape a phase's work is built to. Each is the dep
 | ADR | Decides |
 |-----|---------|
 | [`adr/phase-2-eval-spine.md`](./adr/phase-2-eval-spine.md) | Eval spine: gold-set schema, pgvector KB store, Inspect AI task interface, threshold→CI-gate wiring (per-commit vs per-promotion), self-consistency confidence, Langfuse-canonical observability vs the authoritative `eval_metric` gate |
+| [`adr/phase-3-content-engine-slice.md`](./adr/phase-3-content-engine-slice.md) | Content-engine slice: research→ideate→angle→draft→validator/jury→publish(mock) on the shared spine; typed cell I/O, brand-voice + AI-flagger skill composition, KB voice grounding, media/format gates, routing on the pack autonomy dial, mock publish via the exactly-once boundary; build split for pm |
 
 ## Engineering docs
 
