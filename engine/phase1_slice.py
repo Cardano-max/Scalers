@@ -58,6 +58,41 @@ _SIDE_EFFECT_CHANNEL: dict[PackChannel, Channel] = {
     PackChannel.GMAIL: Channel.OUTREACH,
 }
 
+
+def _assert_channel_map_total(mapping: dict[PackChannel, Channel]) -> None:
+    """Fail fast if any ``config.Channel`` lacks a side-effect mapping (CustomerAcq-epq).
+
+    Structural totality on the vvi safety surface: a future-added channel must
+    never silently fall through to AUTO. This runs at **import**, so adding a new
+    enum value without mapping it breaks the build/test immediately — the totality
+    guarantee is structural, not just test-guarded.
+    """
+    missing = set(PackChannel) - set(mapping)
+    if missing:
+        raise RuntimeError(
+            "config.Channel -> side-effect channel mapping is not total; unmapped: "
+            f"{sorted(c.value for c in missing)}. Add them to _SIDE_EFFECT_CHANNEL "
+            "(an unmapped channel cannot be auto-delivered and must never route AUTO)."
+        )
+
+
+# Enforce totality at import: a new channel without a mapping fails fast here.
+_assert_channel_map_total(_SIDE_EFFECT_CHANNEL)
+
+
+def _resolve_routing(pack: TenantPack, channel: PackChannel) -> tuple[float, AutonomyMode]:
+    """Resolve ``(threshold, autonomy)`` from the pack dial, **fail-closed**.
+
+    A channel with no side-effect target cannot be auto-delivered, so it is forced
+    to ``REVIEW`` regardless of the pack dial — it must never route AUTO
+    (CustomerAcq-epq, defense-in-depth behind the import-time totality guard). The
+    guard makes this unreachable for real channels; this is the belt to its braces.
+    """
+    threshold, autonomy = resolve_channel_policy(pack, channel)
+    if channel not in _SIDE_EFFECT_CHANNEL:
+        autonomy = AutonomyMode.REVIEW
+    return threshold, autonomy
+
 # Deterministic placeholder confidence for the Phase-1 assemble cell. A real
 # self-consistency confidence computer lands in Phase 5; here the slice exercises
 # the router with a concrete, stable signal.
@@ -170,9 +205,10 @@ def slice_route(
     pack's autonomy mode onto the router's and yields the channel threshold, so a
     review-mode channel (e.g. the seed pack's gmail at mode=review/0.9) routes to
     ``review`` even at high confidence, and an auto channel (instagram/facebook at
-    0.85) auto-fires once confidence clears its bar.
+    0.85) auto-fires once confidence clears its bar. An unmapped channel is
+    fail-closed to ``review`` — never AUTO (CustomerAcq-epq).
     """
-    threshold, autonomy = resolve_channel_policy(pack, channel)
+    threshold, autonomy = _resolve_routing(pack, channel)
     return route(confidence, threshold, gates, autonomy)
 
 
@@ -248,9 +284,9 @@ async def run_slice(
     run_id = run_id or f"slice-{tenant_id}-{topic}"
     pack = load_pack(tenant_id)  # INFRA-04: per-tenant config at run start
 
-    # The pack autonomy dial drives routing; map the platform channel to its
-    # side-effect bucket for the outbox.
-    threshold, autonomy = resolve_channel_policy(pack, channel)
+    # The pack autonomy dial drives routing (fail-closed: an unmapped channel can
+    # never AUTO); map the platform channel to its side-effect bucket for the outbox.
+    threshold, autonomy = _resolve_routing(pack, channel)
     side_channel = _SIDE_EFFECT_CHANNEL[channel]
 
     graph = build_slice_graph(
