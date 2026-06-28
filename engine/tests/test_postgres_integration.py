@@ -22,10 +22,18 @@ import uuid
 
 import pytest
 
-pytestmark = pytest.mark.skipif(
-    not os.getenv("ENGINE_DATABASE_URL"),
-    reason="requires Postgres (set ENGINE_DATABASE_URL)",
-)
+# Both markers (mirrors test_phase1_slice.py): `integration` routes these to
+# CI's pgvector job and EXCLUDES them from the DB-free unit run; `skipif` keeps
+# them safe to invoke locally without a DB. Without the `integration` marker
+# they were deselected from the integration job AND skipped in the unit job —
+# i.e. never run in CI (same class of hole as dh4).
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not os.getenv("ENGINE_DATABASE_URL"),
+        reason="requires Postgres (set ENGINE_DATABASE_URL)",
+    ),
+]
 
 # psycopg's async pool cannot use Windows' default ProactorEventLoop. Select a
 # SelectorEventLoop policy for the test session on Windows so the async Postgres
