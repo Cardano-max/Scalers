@@ -1,0 +1,26 @@
+# Scalers Prometheus scrape config.
+# Reload after edits (web.enable-lifecycle is on):
+#   curl -XPOST http://localhost:9090/-/reload
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    stack: scalers
+
+scrape_configs:
+  # Prometheus scrapes itself (sanity / up signal).
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # The Scalers engine. It must expose Prometheus metrics at /metrics on this
+  # host:port (see infra/observability.md → "Metrics contract for eng").
+  # The engine runs on the HOST (via uv), not in this compose, so we reach it
+  # through host.docker.internal. Until the engine is instrumented this target
+  # shows DOWN — that is expected and non-gating; dashboards just read empty.
+  - job_name: scalers-engine
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:8000"]
+        labels:
+          service: engine
