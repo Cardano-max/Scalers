@@ -43,7 +43,6 @@ from cells.validators import (
     Severity,
     ValidationIssue,
     ValidatorBank,
-    banned_phrases,
     no_placeholder,
     non_empty,
 )
@@ -415,9 +414,7 @@ def copywriter_email_validators(*, config: FlaggerConfig = FlaggerConfig()) -> V
         email_no_stray_placeholders(),
         email_requires_unsubscribe(),
         email_no_socialisms(),
-        banned_phrases("subject"),
-        banned_phrases("body"),
-        email_no_ai_tells(config),   # S3
+        email_no_ai_tells(config),   # S3 (covers banned-slop via AF-05 BANNED_SLOP over subject+body)
     ))
 
 
