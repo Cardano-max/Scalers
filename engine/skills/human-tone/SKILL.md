@@ -4,7 +4,7 @@ description: Detect and remove AI-writing tells (em-dashes, contrast framing,
   rule-of-three, generic transitions) so copy reads as written by a real person.
   Enforced as a deterministic validator + a voice-QA rewrite cell.
 upstream: Varnan-Tech/opendirectory — "human-tone" (MIT)
-pinned: 9c30f79 (pure markdown; no scripts)
+pinned: 9c30f79eb975c50a97bed10b47e14f18116a3e3b  # pure markdown; no scripts
 status: ELIGIBLE — sec S1 APPROVED; not IN USE until operator adoption + agent assignment
 ---
 
