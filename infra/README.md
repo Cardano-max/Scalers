@@ -57,6 +57,21 @@ clashes with something already running.
    docker exec scalers-redis redis-cli ping   # -> PONG
    ```
 
+## Database schema / migrations
+
+SQL in `initdb/` runs **in filename order on a fresh cluster** (first boot):
+
+| File | Adds |
+|------|------|
+| `01-pgvector.sql` | the `vector` extension |
+| `02-side-effect-boundary.sql` | `side_effect_ledger` + `outbox`, both with `UNIQUE(idempotency_key)` — the exactly-once boundary (systemdesign §3, HARN-04) |
+
+If your data volume already exists, apply new migrations without wiping it:
+
+```bash
+bash migrate.sh        # idempotent — re-running is a no-op
+```
+
 ## Persistence
 
 Data lives in named volumes (`scalers_pgdata`, `scalers_redisdata`,
