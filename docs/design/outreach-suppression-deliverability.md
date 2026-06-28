@@ -99,6 +99,29 @@ class SuppressionStore:
     def load_seed(self, tenant_id: str, csv_uri: str) -> int: ...   # minio seed
 ```
 
+### 1.5 Unsubscribe loop (RFC 8058) — copy → connector → endpoint → suppression
+
+The copy and the send layer split this cleanly (confirmed with writer, copywriter
+EMAIL mode PR #39):
+
+1. **Copy** (writer's email cell) emits `EmailCopy{subject, body}` with a
+   **required visible `{{unsubscribe}}` token** — the `email_requires_unsubscribe`
+   validator is an ERROR if it's missing, and the cell **never invents a URL**.
+2. **Connector / send layer (growth+eng, this engine)** fills the token per
+   recipient at send time: substitutes `{{unsubscribe}}` with a signed,
+   per-recipient unsubscribe URL **and** adds the RFC 8058 `List-Unsubscribe` +
+   `List-Unsubscribe-Post: List-Unsubscribe=One-Click` headers. A touch whose
+   body still contains an unfilled `{{unsubscribe}}` token is **blocked** from send
+   (defense-in-depth against the validator being bypassed).
+3. **Unsubscribe endpoint** — a click (or the one-click POST) hits our endpoint,
+   verifies the signature, and calls `suppress(reason="unsubscribe",
+   source="rfc8058")` (§1.3) immediately (≤2-day SLA satisfied by acting now).
+4. The address is suppressed for all future touches; an in-flight sequence
+   hard-stops.
+
+The signed URL carries the `prospect_ref` (not the raw email) so the endpoint is
+PII-free in logs; the mapping ref→email lives only in the operational store.
+
 ---
 
 ## 2. Deliverability verification (cold-email-verifier path)
