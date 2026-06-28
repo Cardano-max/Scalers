@@ -7,6 +7,19 @@
     "deterministic": "code-detectable pre-jury by the validator bank (reads VoiceDimensions); the aggregator can also read the validator's gate result directly.",
     "judge": "semantic; each cross-family judge emits the code as a flag alongside its per-dimension score when present."
   },
+  "catalog_version": 1,
+  "code_stability": "STABLE ENUM, APPEND-ONLY. The strings in code_catalog are frozen: never renamed or removed — only new codes added (with a catalog_version bump). The jury cell emits codes ONLY from this catalog; the aggregator matches against it as a closed set (an unknown code = a bug, not a silent pass). pmm owns the voice_* + APPR_* codes; sec owns the SAFE_* codes (sec/rubrics/safety-hard-fails.json) — the full jury code space is the UNION of both catalogs.",
+  "code_catalog": [
+    "VOICE_HF_BANNED_LEXICON",
+    "VOICE_HF_UNAPPROVED_CLAIM",
+    "VOICE_HF_WRONG_POV",
+    "VOICE_HF_EMOJI_HASHTAG_POLICY",
+    "APPR_HF_SENSITIVE_EXPLOIT",
+    "APPR_HF_COMMERCIALIZE_TRAUMA",
+    "APPR_HF_PITY_SAVIOR",
+    "APPR_HF_PRESSURE",
+    "APPR_SC_OUT_OF_SCOPE"
+  ],
   "hard_fails": [
     { "code": "VOICE_HF_BANNED_LEXICON", "dimension": "voice", "trigger": "any banned-lexicon phrase or AI-tell present", "detection": "deterministic", "source": "dimensions.vocabulary.ban", "floor": { "voice_anchor": 0, "on_voice": false } },
     { "code": "VOICE_HF_UNAPPROVED_CLAIM", "dimension": "voice", "trigger": "a NON-regulated factual/offer claim not in approved_claims (brand/offer puffery, e.g. 'voted coziest studio')", "detection": "deterministic", "source": "dimensions.vocabulary.approved_claims", "floor": { "voice_anchor": 0, "on_voice": false }, "boundary": "CEDES the regulated subset to sec: any medical/health claim, outcome guarantee, or false credential → sec SAFE_HF_REGULATED_CLAIM (not this code). This code = unapproved claims that are NOT regulated.", "note": "also the validator claim gate; the legal/medical-sensitive subset escalates upstream via sensitive-ban-patterns.json" },
