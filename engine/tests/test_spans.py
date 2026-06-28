@@ -11,12 +11,7 @@ import pytest
 
 from harness.graph import END, START, Harness, build_demo_graph
 from harness.runstore import InMemoryRunStore, RunStatus, execute_and_record
-from harness.spans import (
-    MAX_IO_CHARS,
-    instrument,
-    set_redactor,
-    span,
-)
+from harness.spans import MAX_IO_CHARS, set_redactor, span
 from harness.state import GraphState
 
 
@@ -87,8 +82,6 @@ async def test_failed_span_marks_status_and_is_identifiable():
 
 
 async def test_gate_and_tool_spans_via_helper_with_parent_linkage():
-    seen = {}
-
     class Worker:
         name = "worker"
 
