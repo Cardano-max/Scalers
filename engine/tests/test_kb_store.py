@@ -120,7 +120,7 @@ def test_label_version_bump_keeps_old_metrics(kb_store):
 
 
 def test_metric_passed_is_computed(kb_store):
-    mid = kb_store.record_metric(EvalMetric(metric="ece", value=0.03, tenant_id="t", threshold=0.05, direction=Direction.LTE))
+    kb_store.record_metric(EvalMetric(metric="ece", value=0.03, tenant_id="t", threshold=0.05, direction=Direction.LTE))
     assert kb_store.get_metrics(tenant_id="t", metric="ece")[0].passed is True
     kb_store.record_metric(EvalMetric(metric="ece", value=0.09, tenant_id="t", threshold=0.05, direction=Direction.LTE))
     eces = [m.value for m in kb_store.get_metrics(tenant_id="t", metric="ece") if not m.passed]
