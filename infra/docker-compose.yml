@@ -2,12 +2,17 @@
 #   docker compose up -d   → Postgres+pgvector, Redis, MinIO (+ console)
 # All credentials/ports come from .env (copy .env.example → .env).
 # No cloud, no AWS — everything runs locally on named volumes.
+#
+# Every image is pinned to a specific version tag AND its immutable multi-arch
+# digest (tag@sha256:...) for reproducibility — no `:latest`, no floating tags.
+# To bump an image: pick the new tag, then resolve its digest with
+#   docker buildx imagetools inspect <image:tag> --format '{{.Manifest.Digest}}'
 
 name: scalers
 
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:0.8.3-pg16@sha256:131dcf7ff6a900545df8e7e092c270aa8c6db2f2c818e408cb45ec21316b74e6
     container_name: scalers-postgres
     restart: unless-stopped
     environment:
@@ -29,7 +34,7 @@ services:
       start_period: 10s
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.9-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     container_name: scalers-redis
     restart: unless-stopped
     # appendonly → queue/scheduler state survives restarts.
@@ -46,7 +51,7 @@ services:
       start_period: 5s
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     container_name: scalers-minio
     restart: unless-stopped
     command: ["server", "/data", "--console-address", ":9001"]
@@ -67,7 +72,7 @@ services:
 
   # One-shot: create the assets bucket, then exit. Not part of steady state.
   minio-init:
-    image: minio/mc:latest
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     container_name: scalers-minio-init
     depends_on:
       minio:
