@@ -138,13 +138,14 @@ def test_resolve_and_pin_dns_failure_is_ssrf_error():
         resolve_and_pin("nope.invalid", resolver=_boom)
 
 
-def test_firecrawl_fetch_runs_ssrf_guard_before_notimplemented():
-    # An unsafe target is rejected by the guard (SSRFError), not reached as a
-    # NotImplemented seam — proving the guard runs first.
+def test_firecrawl_fetch_runs_ssrf_guard_before_gate():
+    # An unsafe target is rejected by the SSRF guard, not reached as the disabled
+    # gate — proving the guard runs first.
     with pytest.raises(SSRFError):
         FirecrawlProvider().fetch("https://127.0.0.1/secret")
-    # A safe target passes the guard, then hits the (un-wired) live seam.
-    with pytest.raises(NotImplementedError):
+    # A safe target passes the guard, then hits the gate (disabled = mock-default).
+    from research.providers.firecrawl import FirecrawlDisabledError
+    with pytest.raises(FirecrawlDisabledError):
         FirecrawlProvider().fetch("https://www.reddit.com/r/tattoos/")
 
 
