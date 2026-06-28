@@ -67,8 +67,8 @@ Implements the `engine/harness/` interfaces from `docs/systemdesign.md` §6.2.
 | `harness/state.py`  | `GraphState` (Pydantic) + `Node` protocol + `Gate` / `Decision` / `RouteDecision` / `AutonomyMode` |
 | `harness/router.py` | Pure-code `route(confidence, threshold, gates, autonomy)` → auto/review/regenerate (HARN-05) |
 | `harness/nodes.py`  | Deterministic Research and Assemble cells + typed-cell seam |
-| `harness/graph.py`  | `Harness` (add_node/add_edge/add_conditional/compile) + `CompiledGraph` (run/resume) + checkpointer factory (HARN-01) |
-| `main.py`           | FastAPI `/healthz` + demo `POST /runs` |
+| `harness/graph.py`  | `Harness` (add_node/add_edge/add_conditional/compile) + `CompiledGraph` (run/resume/astream) + checkpointer factory (HARN-01) |
+| `main.py`           | **Thin** FastAPI portal: `/healthz` + webhook ingress + SSE out (NOT the engine) |
 
 ### §6.2 interfaces
 
@@ -123,14 +123,21 @@ python -m venv .venv
 .venv/Scripts/python -m uvicorn main:app --reload   # run
 ```
 
-### Demo
+### Thin portal
+
+FastAPI is **not** the engine — the LangGraph StateGraph is. The portal exposes
+only liveness, webhook ingress, and SSE egress; the SSE endpoint forwards the
+graph's own event stream (it adds no control logic).
 
 ```bash
 curl localhost:8000/healthz
-curl -X POST localhost:8000/runs \
+# webhook ingress (acknowledge + hand off):
+curl -X POST localhost:8000/webhooks/meta \
   -H 'content-type: application/json' \
   -d '{"topic": "cold email outreach", "thread_id": "demo-1"}'
+# SSE out — relays the LangGraph run frame-by-frame:
+curl -N 'localhost:8000/runs/stream?topic=cold%20email%20outreach&thread_id=demo-1'
 ```
 
-A run drives the fixed graph (Research → Assemble) deterministically and routes
-the result through the pure-code router.
+The SSE stream emits one `node` frame per node (Research → Assemble) and a final
+`decision` frame from the pure-code router.

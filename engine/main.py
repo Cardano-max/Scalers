@@ -1,22 +1,31 @@
-"""FastAPI surface for the engine (HARN-01 demo).
+"""Thin FastAPI portal for the engine (HARN-01).
 
-Exposes a liveness probe and a demo run endpoint that drives the fixed graph
-end to end (Research -> Assemble) and routes the result through the pure-code
-router. This is the thin edge over the deterministic core; it adds no control
-logic of its own.
+FastAPI is **not** the engine — the LangGraph StateGraph is. This surface is the
+thin ingress/egress only:
+
+* ``GET  /healthz``        — liveness + config probe.
+* ``POST /webhooks/{src}`` — inbound webhook ingress (acknowledge + hand off).
+* ``GET  /runs/stream``    — SSE out: relays the LangGraph run's per-node frames.
+
+The SSE endpoint adds no control logic — it iterates the graph's own event
+stream and forwards each frame. The graph owns flow; the portal only forwards.
 """
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+import json
+from collections.abc import AsyncIterator
+
+from fastapi import FastAPI, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from harness.config import get_settings
 from harness.graph import get_graph
 from harness.router import route
-from harness.state import AutonomyMode, GraphState, RouteDecision
+from harness.state import AutonomyMode, GraphState
 
-app = FastAPI(title="Scalers Growth Engine", version="0.1.0")
+app = FastAPI(title="Scalers Growth Engine — portal", version="0.1.0")
 
 
 class HealthResponse(BaseModel):
@@ -24,22 +33,6 @@ class HealthResponse(BaseModel):
     models: dict[str, str]
     temperature: float
     checkpointer: str
-
-
-class RunRequest(BaseModel):
-    topic: str = Field(..., min_length=1)
-    thread_id: str = Field(..., min_length=1)
-    tenant_id: str = "demo"
-    autonomy: AutonomyMode = AutonomyMode.AUTO
-
-
-class RunResponse(BaseModel):
-    run_id: str
-    topic: str
-    draft: str
-    confidence: float
-    decision: RouteDecision
-    step_log: list[str]
 
 
 @app.get("/healthz", response_model=HealthResponse)
@@ -55,30 +48,80 @@ def healthz() -> HealthResponse:
     )
 
 
-@app.post("/runs", response_model=RunResponse)
-async def create_run(request: RunRequest) -> RunResponse:
-    """Run the fixed graph for ``topic`` and route the result.
+class WebhookAck(BaseModel):
+    run_id: str
+    source: str
+    status: str
 
-    Deterministic: the same ``topic`` always yields the same draft, confidence,
-    and decision. The ``thread_id`` keys the checkpointer so a run is resumable.
+
+class WebhookPayload(BaseModel):
+    topic: str = Field(..., min_length=1)
+    thread_id: str = Field(..., min_length=1)
+
+
+@app.post("/webhooks/{source}", status_code=202, response_model=WebhookAck)
+def ingest_webhook(source: str, payload: WebhookPayload) -> WebhookAck:
+    """Thin webhook ingress: acknowledge and hand off to the engine.
+
+    Phase 1 only acknowledges the trigger (202). The durable enqueue into the
+    engine is eng3's side-effect boundary (HARN-03/04); the real Meta/Gmail
+    handlers land in Phase 6. The portal never runs business logic itself.
     """
 
-    graph = get_graph()
-    init = GraphState(
-        tenant_id=request.tenant_id,
-        run_id=request.thread_id,
-        topic=request.topic,
-    )
-    final = await graph.run(request.thread_id, init)
+    return WebhookAck(run_id=payload.thread_id, source=source, status="accepted")
 
-    confidence = final.confidence or 0.0
-    decision = route(confidence, autonomy=request.autonomy)
-    assert final.assembled is not None  # Assemble always runs in the fixed graph
-    return RunResponse(
-        run_id=request.thread_id,
-        topic=final.assembled.topic,
-        draft=final.assembled.draft,
-        confidence=confidence,
-        decision=decision,
-        step_log=final.step_log,
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+async def _run_event_stream(
+    topic: str, thread_id: str, tenant_id: str, autonomy: AutonomyMode
+) -> AsyncIterator[str]:
+    """Relay a LangGraph run as SSE frames: one per node, then the routed decision."""
+
+    graph = get_graph()
+    init = GraphState(tenant_id=tenant_id, run_id=thread_id, topic=topic)
+
+    async for update in graph.astream(thread_id, init):
+        for node, channels in update.items():
+            yield _sse(
+                "node",
+                {"node": node, "step_log": channels.get("step_log", [])},
+            )
+
+    snapshot = graph.get_state(thread_id)
+    values = snapshot.values
+    confidence = values.get("confidence") or 0.0
+    decision = route(confidence, autonomy=autonomy)
+    assembled = values["assembled"]
+    yield _sse(
+        "decision",
+        {
+            "run_id": thread_id,
+            "topic": assembled.topic,
+            "draft": assembled.draft,
+            "confidence": confidence,
+            "decision": decision.value,
+        },
+    )
+    yield "data: [DONE]\n\n"
+
+
+@app.get("/runs/stream")
+def stream_run(
+    topic: str = Query(..., min_length=1),
+    thread_id: str = Query(..., min_length=1),
+    tenant_id: str = Query("demo"),
+    autonomy: AutonomyMode = Query(AutonomyMode.AUTO),
+) -> StreamingResponse:
+    """SSE out: run the fixed graph (Research -> Assemble) and stream its frames.
+
+    The engine is the LangGraph graph; this endpoint only forwards its event
+    stream and appends the final routing decision.
+    """
+
+    return StreamingResponse(
+        _run_event_stream(topic, thread_id, tenant_id, autonomy),
+        media_type="text/event-stream",
     )

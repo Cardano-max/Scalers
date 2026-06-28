@@ -1,4 +1,9 @@
-"""FastAPI surface tests (HARN-01): /healthz + demo run endpoint."""
+"""Thin-portal tests (HARN-01): /healthz + webhook ingress + SSE out.
+
+FastAPI is the thin ingress/egress, not the engine. These tests assert it
+forwards LangGraph frames and acknowledges webhooks — they do not test control
+logic in the portal (there is none; the graph owns flow).
+"""
 
 from __future__ import annotations
 
@@ -21,34 +26,46 @@ def test_healthz_reports_pins_and_temperature():
     assert body["checkpointer"] == "memory"
 
 
-def test_demo_run_research_to_assemble_and_routes():
-    resp = client.post("/runs", json={"topic": "launch", "thread_id": "demo-1"})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["topic"] == "launch"
-    assert "launch" in body["draft"]
-    assert body["step_log"] == ["research", "assemble"]
-    assert 0.0 <= body["confidence"] <= 1.0
-    # Deterministic confidence (3 findings -> 0.9) clears the auto bar.
-    assert body["decision"] == "auto"
-
-
-def test_demo_run_is_deterministic():
-    a = client.post("/runs", json={"topic": "same", "thread_id": "x"}).json()
-    b = client.post("/runs", json={"topic": "same", "thread_id": "y"}).json()
-    assert a["draft"] == b["draft"]
-    assert a["confidence"] == b["confidence"]
-    assert a["decision"] == b["decision"]
-
-
-def test_review_autonomy_forces_review():
+def test_webhook_ingress_acknowledges_without_running_engine():
     resp = client.post(
-        "/runs",
-        json={"topic": "x", "thread_id": "rev", "autonomy": "review"},
+        "/webhooks/meta", json={"topic": "x", "thread_id": "wh-1"}
     )
-    assert resp.json()["decision"] == "review"
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body == {"run_id": "wh-1", "source": "meta", "status": "accepted"}
 
 
-def test_run_requires_topic_and_thread_id():
-    assert client.post("/runs", json={"thread_id": "t"}).status_code == 422
-    assert client.post("/runs", json={"topic": "t"}).status_code == 422
+def test_webhook_requires_topic_and_thread_id():
+    assert client.post("/webhooks/meta", json={"thread_id": "t"}).status_code == 422
+    assert client.post("/webhooks/meta", json={"topic": "t"}).status_code == 422
+
+
+def test_sse_stream_relays_graph_frames_then_decision():
+    resp = client.get("/runs/stream", params={"topic": "launch", "thread_id": "sse-1"})
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    body = resp.text
+
+    # One node frame per node, in fixed order, then the routed decision + DONE.
+    assert "event: node" in body
+    assert '"node": "research"' in body
+    assert '"node": "assemble"' in body
+    assert "event: decision" in body
+    assert '"decision": "auto"' in body  # 3 findings -> 0.9 clears the auto bar
+    assert '"draft"' in body and "launch" in body
+    assert "data: [DONE]" in body
+
+
+def test_sse_stream_is_deterministic():
+    a = client.get("/runs/stream", params={"topic": "same", "thread_id": "a"}).text
+    b = client.get("/runs/stream", params={"topic": "same", "thread_id": "b"}).text
+    # Strip the thread_id-specific run_id from the decision frame before comparing.
+    assert a.replace('"a"', '"X"') == b.replace('"b"', '"X"')
+
+
+def test_sse_review_autonomy_forces_review():
+    resp = client.get(
+        "/runs/stream",
+        params={"topic": "x", "thread_id": "rev", "autonomy": "review"},
+    )
+    assert '"decision": "review"' in resp.text

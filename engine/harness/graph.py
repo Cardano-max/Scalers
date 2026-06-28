@@ -71,6 +71,20 @@ class CompiledGraph:
         )
         return GraphState.model_validate(result)
 
+    async def astream(
+        self, run_id: str, init: GraphState, *, stream_mode: str = "updates"
+    ):
+        """Yield per-node state updates as the run progresses.
+
+        The thin FastAPI portal relays these straight out as SSE frames — the
+        graph owns control flow, the portal only forwards events.
+        """
+
+        async for update in self._graph.astream(
+            init, self._config(run_id), stream_mode=stream_mode
+        ):
+            yield update
+
     def get_state(self, run_id: str) -> Any:
         """Return the persisted checkpoint snapshot for ``run_id``."""
 
