@@ -35,6 +35,7 @@ from langgraph.types import Command
 from .config import get_settings
 from .nodes import AssembleNode, ResearchNode
 from .serde import make_serde
+from .spans import instrument
 from .state import Decision, GraphState, Node
 
 __all__ = [
@@ -184,9 +185,13 @@ class Harness:
         self._builder = StateGraph(GraphState)
 
     def add_node(self, node: Node) -> None:
-        """Register a node under its ``name``."""
+        """Register a node under its ``name``, auto-instrumented for spans.
 
-        self._builder.add_node(node.name, node)
+        Every node is wrapped so it emits a structured ``node`` span (OBS-01)
+        with duration + I/O; the wrapper is transparent to control flow.
+        """
+
+        self._builder.add_node(node.name, instrument(node))
 
     def add_edge(self, src: str, dst: str) -> None:
         """Add a static edge ``src -> dst`` (use ``START`` / ``END`` sentinels)."""

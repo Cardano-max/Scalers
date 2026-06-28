@@ -77,9 +77,60 @@ async def test_run_and_runstore_roundtrip_on_real_postgres():
         assert [s.state for s in record.steps] == ["research", "assemble"]
         assert [s.seq for s in record.steps] == [0, 1]
         assert record.auto_count == 1
+
+        # OBS-01: structured spans persisted to Postgres with real durations + I/O.
+        reread = store.get_run(run_id)
+        for s in reread.steps:
+            assert s.kind == "node"
+            assert s.duration_ms is not None and s.duration_ms >= 0
+            assert s.input and s.output and s.status == "ok"
+            assert s.start_ts and s.end_ts and s.span_id
+        # nested cell spans survive the JSONB round-trip (reasoning trace).
+        assert reread.steps[0].children[0].kind == "cell"
+        assert reread.steps[0].children[0].parent_span_id == reread.steps[0].span_id
+
         # Query API reads it back from Postgres.
-        assert store.get_run(run_id).run_id == run_id
+        assert reread.run_id == run_id
         assert any(r.run_id == run_id for r in store.list_runs("itest"))
+    finally:
+        pool = getattr(checkpointer, "conn", None)
+        if pool is not None and hasattr(pool, "close"):
+            await pool.close()
+        get_settings.cache_clear()
+
+
+async def test_failed_node_identifiable_in_span_trajectory_on_real_postgres():
+    from harness.config import get_settings
+    from harness.graph import END, START, Harness, make_checkpointer
+    from harness.runstore import PostgresRunStore, RunStatus, execute_and_record
+
+    get_settings.cache_clear()
+    checkpointer = await make_checkpointer()
+    try:
+        class Boom:
+            name = "boom"
+
+            async def __call__(self, state):
+                raise RuntimeError("kaboom on real pg")
+
+        h = Harness()
+        h.add_node(Boom())
+        h.add_edge(START, "boom")
+        h.add_edge("boom", END)
+        store = PostgresRunStore(os.environ["ENGINE_DATABASE_URL"])
+        store.setup()
+
+        run_id = f"pg-fail-{uuid.uuid4().hex[:12]}"
+        with pytest.raises(RuntimeError):
+            await execute_and_record(
+                h.compile(checkpointer), store, run_id=run_id, tenant_id="itest",
+                run_type="posting", trigger="manual", init=_init("x", run_id),
+            )
+        record = store.get_run(run_id)
+        assert record.status is RunStatus.FAILED
+        assert record.failed_step is not None
+        assert record.failed_step.node == "boom"
+        assert "kaboom" in record.failed_step.error
     finally:
         pool = getattr(checkpointer, "conn", None)
         if pool is not None and hasattr(pool, "close"):

@@ -17,6 +17,7 @@ from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from .spans import span
 from .state import AssembleOutput, GraphState, ResearchOutput
 
 _T = TypeVar("_T", bound=BaseModel)
@@ -30,12 +31,14 @@ def typed_cell(schema: type[_T], payload: object) -> _T:
     """Validate ``payload`` against ``schema`` or raise :class:`CellError`.
 
     The parser-repair boundary: no raw, unvalidated output flows downstream.
+    Emits a nested ``cell`` span (OBS-01) under the current node span.
     """
 
-    try:
-        return schema.model_validate(payload)
-    except ValidationError as exc:
-        raise CellError(f"{schema.__name__} validation failed: {exc}") from exc
+    with span(f"cell:{schema.__name__}", kind="cell"):
+        try:
+            return schema.model_validate(payload)
+        except ValidationError as exc:
+            raise CellError(f"{schema.__name__} validation failed: {exc}") from exc
 
 
 def _confidence_for(findings: list[str]) -> float:

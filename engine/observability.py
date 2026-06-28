@@ -55,3 +55,54 @@ def get_langfuse() -> Any | None:
         secret_key=os.environ["LANGFUSE_SECRET_KEY"],
         host=os.environ.get("LANGFUSE_HOST", _DEFAULT_HOST),
     )
+
+
+def mirror_run(
+    run_id: str,
+    tenant_id: str,
+    spans: list[Any],
+    *,
+    run_type: str | None = None,
+    client: Any | None = None,
+) -> bool:
+    """Best-effort mirror of a run's spans to Langfuse (per the rvy.1 ADR).
+
+    Returns ``True`` if the spans were sent, ``False`` if Langfuse is
+    unconfigured/unreachable or the SDK raised. **Never raises** — observability
+    is best-effort and must never block or fail a run; the authoritative store
+    is the Postgres run store.
+    """
+
+    lf = client if client is not None else get_langfuse()
+    if lf is None:
+        return False
+    try:
+        trace = lf.trace(
+            id=run_id, name=run_type or "run", metadata={"tenant_id": tenant_id}
+        )
+        for sp in spans:
+            _mirror_span(trace, sp)
+        flush = getattr(lf, "flush", None)
+        if callable(flush):
+            flush()
+        return True
+    except Exception:
+        return False
+
+
+def _mirror_span(parent: Any, sp: Any) -> None:
+    """Recursively mirror one span (and its children) as Langfuse spans."""
+
+    child = parent.span(
+        name=getattr(sp, "node", "span"),
+        input=getattr(sp, "input", None),
+        output=getattr(sp, "output", None),
+        metadata={
+            "kind": getattr(sp, "kind", None),
+            "status": getattr(sp, "status", None),
+            "duration_ms": getattr(sp, "duration_ms", None),
+            "error": getattr(sp, "error", None),
+        },
+    )
+    for grandchild in getattr(sp, "children", []) or []:
+        _mirror_span(child, grandchild)

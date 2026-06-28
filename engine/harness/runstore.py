@@ -23,7 +23,12 @@ from pydantic import BaseModel, Field
 
 from .graph import CompiledGraph
 from .router import route
+from .spans import Span, collecting
 from .state import AutonomyMode, GraphState, RouteDecision
+
+# A persisted trajectory step is a structured Span (OBS-01). The name is kept
+# for back-compat; the legacy fields (seq/at/text/state) still populate.
+RunStep = Span
 
 
 class RunStatus(str, Enum):
@@ -33,29 +38,34 @@ class RunStatus(str, Enum):
     NEEDS_REVIEW = "needs-review"
 
 
-class RunStep(BaseModel):
-    """One append-only trajectory step."""
-
-    model_config = {"frozen": True}
-
-    seq: int
-    at: str
-    text: str
-    state: str
-
-
 class RunRecord(BaseModel):
-    """A run row + its trajectory (the console Runs/Overview read model)."""
+    """A run row + its trajectory (the console Runs/Overview read model).
+
+    ``steps`` are structured spans (OBS-01): node spans are the trajectory; each
+    carries ``children`` (cell/gate/tool spans) for the reasoning trace.
+    """
 
     run_id: str
     tenant_id: str
     type: str
     trigger: str
     status: RunStatus
-    steps: list[RunStep] = Field(default_factory=list)
+    steps: list[Span] = Field(default_factory=list)
     auto_count: int = 0
     review_count: int = 0
     retries: int = 0
+
+    @property
+    def last_step(self) -> Span | None:
+        """The last node span (the run's current/final node)."""
+
+        return self.steps[-1] if self.steps else None
+
+    @property
+    def failed_step(self) -> Span | None:
+        """The first failed node span, if any — makes the failed node identifiable."""
+
+        return next((s for s in self.steps if s.status == "failed"), None)
 
 
 class RunExistsError(RuntimeError):
@@ -69,6 +79,27 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _legacy_step(run_id: str, *, text: str, state: str, seq: int) -> Span:
+    """Build a minimal valid Span for the legacy string-based ``append_step``."""
+
+    import uuid
+
+    now = _now()
+    return Span(
+        span_id=uuid.uuid4().hex,
+        run_id=run_id,
+        node=state,
+        kind="node",
+        start_ts=now,
+        end_ts=now,
+        status="ok",
+        seq=seq,
+        at=now,
+        text=text,
+        state=state,
+    )
+
+
 @runtime_checkable
 class RunStore(Protocol):
     """Thin durable-run interface — DBOS-swappable (stack-decision.md)."""
@@ -76,6 +107,8 @@ class RunStore(Protocol):
     def start_run(self, run_id: str, tenant_id: str, run_type: str, trigger: str) -> None: ...
 
     def append_step(self, run_id: str, *, text: str, state: str) -> None: ...
+
+    def append_spans(self, run_id: str, spans: list[Span]) -> None: ...
 
     def finish_run(
         self,
@@ -111,9 +144,14 @@ class InMemoryRunStore:
 
     def append_step(self, run_id: str, *, text: str, state: str) -> None:
         run = self._runs[run_id]
-        step = RunStep(seq=len(run.steps), at=_now(), text=text, state=state)
         # Append-only: never mutate or drop an existing step.
-        run.steps.append(step)
+        run.steps.append(_legacy_step(run_id, text=text, state=state, seq=len(run.steps)))
+
+    def append_spans(self, run_id: str, spans: list[Span]) -> None:
+        run = self._runs[run_id]
+        base = len(run.steps)
+        for i, sp in enumerate(spans):
+            run.steps.append(sp.model_copy(update={"seq": base + i}))
 
     def finish_run(
         self,
@@ -195,22 +233,29 @@ class PostgresRunStore:
             raise RunExistsError(run_id) from exc
 
     def append_step(self, run_id: str, *, text: str, state: str) -> None:
+        self.append_spans(run_id, [_legacy_step(run_id, text=text, state=state, seq=0)])
+
+    def append_spans(self, run_id: str, spans: list[Span]) -> None:
+        if not spans:
+            return
+        import json
+
         with self._connect() as conn:
-            # seq = current array length; append atomically under the row lock.
-            # Cast the value params to ::text — without it PG gives them the
-            # 'any' pseudo-type and raises IndeterminateDatatype (could not
-            # determine data type of parameter).
+            # Append-only under the row lock. Serialize spans (incl. nested
+            # children) to a JSON array in Python and concat — avoids the
+            # jsonb_build_object IndeterminateDatatype trap and handles nesting.
+            base = conn.execute(
+                "SELECT jsonb_array_length(steps) AS n FROM runs WHERE run_id=%s",
+                (run_id,),
+            ).fetchone()["n"]
+            payload = [
+                sp.model_copy(update={"seq": base + i}).model_dump(mode="json")
+                for i, sp in enumerate(spans)
+            ]
             conn.execute(
-                """
-                UPDATE runs
-                   SET steps = steps || jsonb_build_array(
-                           jsonb_build_object(
-                               'seq', jsonb_array_length(steps),
-                               'at', %s::text, 'text', %s::text, 'state', %s::text)),
-                       updated_at = now()
-                 WHERE run_id = %s
-                """,
-                (_now(), text, state, run_id),
+                "UPDATE runs SET steps = steps || %s::jsonb, updated_at=now() "
+                "WHERE run_id=%s",
+                (json.dumps(payload), run_id),
             )
 
     def finish_run(
@@ -278,13 +323,18 @@ async def execute_and_record(
     """
 
     store.start_run(run_id, tenant_id, run_type, trigger)
-    try:
-        async for update in graph.astream(run_id, init):
-            for node in update:
-                store.append_step(run_id, text=f"{node} completed", state=node)
-    except Exception:
-        store.finish_run(run_id, status=RunStatus.FAILED)
-        raise
+    with collecting(run_id) as collector:
+        try:
+            async for _ in graph.astream(run_id, init):
+                pass  # spans are gathered by the node instrumentation
+        except Exception:
+            store.append_spans(run_id, collector.spans)  # incl. the failed node
+            store.finish_run(run_id, status=RunStatus.FAILED)
+            _mirror(run_id, tenant_id, run_type, collector.spans)
+            raise
+
+        store.append_spans(run_id, collector.spans)
+        spans = list(collector.spans)
 
     values = (await graph.get_state(run_id)).values
     confidence = values.get("confidence") or 0.0
@@ -295,6 +345,18 @@ async def execute_and_record(
         auto_count=1 if decision is RouteDecision.AUTO else 0,
         review_count=1 if decision is RouteDecision.REVIEW else 0,
     )
+    _mirror(run_id, tenant_id, run_type, spans)
     result = store.get_run(run_id)
     assert result is not None
     return result
+
+
+def _mirror(run_id: str, tenant_id: str, run_type: str, spans: list[Span]) -> None:
+    """Best-effort Langfuse mirror — never raises, never gates (rvy.1 ADR)."""
+
+    try:
+        from observability import mirror_run
+
+        mirror_run(run_id, tenant_id, spans, run_type=run_type)
+    except Exception:
+        pass
