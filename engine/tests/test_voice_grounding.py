@@ -20,6 +20,7 @@ from kb.voice import (
     GroundingCoverage,
     VoiceDimensions,
     VoiceDimensionsError,
+    VoiceGrounding,
     build_voice_grounding,
     load_voice_dimensions,
 )
@@ -119,6 +120,33 @@ def test_malformed_emission_raises(tmp_path):
 def test_bad_skill_ref_shape_raises(skills_root):
     with pytest.raises(VoiceDimensionsError):
         load_voice_dimensions(_pack(skill="not-family-tenant-shaped"), skills_root=skills_root)
+
+
+# ── coverage enum case-reconciliation (ADR lowercase vs contract uppercase) ──
+
+
+def test_coverage_canonical_value_is_lowercase():
+    # ADR PR#38 is canonical: values serialize lowercase.
+    assert GroundingCoverage.SPARSE.value == "sparse"
+    assert [c.value for c in GroundingCoverage] == ["full", "partial", "sparse"]
+
+
+def test_coverage_accepts_either_case_on_input():
+    # Tolerant boundary: fixtures/JSON built to pmm's earlier uppercase Literal
+    # ("FULL"/"PARTIAL"/"SPARSE") still resolve — so a9m.5 validates on first wire.
+    for up, member in (("FULL", GroundingCoverage.FULL),
+                       ("Partial", GroundingCoverage.PARTIAL),
+                       ("sparse", GroundingCoverage.SPARSE)):
+        assert GroundingCoverage(up) is member
+
+
+def test_voice_grounding_validates_uppercase_coverage():
+    g = VoiceGrounding.model_validate({
+        "tenant_id": "t", "dimensions": {}, "exemplars": [],
+        "coverage": "SPARSE", "low_grounding": True, "exemplar_count": 0,
+    })
+    assert g.coverage is GroundingCoverage.SPARSE
+    assert g.coverage.value == "sparse"  # re-serializes canonical
 
 
 # ── degrade ladder (coverage enum) ────────────────────────────────────────────

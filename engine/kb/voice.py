@@ -82,11 +82,27 @@ class VoiceDimensions(BaseModel):
 
 
 class GroundingCoverage(str, Enum):
-    """How much real past content backs the voice (drives the degrade ladder)."""
+    """How much real past content backs the voice (drives the degrade ladder).
+
+    Canonical VALUES are lowercase, per the arch-locked ADR Decision 3 (PR #38) —
+    the interface pmm's contract defers to as FINAL. To absorb the case mismatch
+    with pmm's earlier ``Literal["FULL",...]`` spec (and any fixtures/JSON built to
+    it), input parsing is case-INSENSITIVE: ``GroundingCoverage("FULL")`` resolves
+    to ``FULL`` and re-serializes to the canonical ``"full"``. Robust at the
+    boundary; single canonical value on the wire."""
 
     FULL = "full"        # dimensions present AND >= k exemplars
     PARTIAL = "partial"  # dimensions present but thin / below-k exemplars
     SPARSE = "sparse"    # new tenant / too few exemplars -> low_grounding
+
+    @classmethod
+    def _missing_(cls, value: object) -> "GroundingCoverage | None":
+        if isinstance(value, str):
+            lowered = value.lower()
+            for member in cls:
+                if member.value == lowered:
+                    return member
+        return None
 
 
 class VoiceGrounding(BaseModel):
