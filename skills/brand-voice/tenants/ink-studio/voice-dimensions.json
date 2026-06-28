@@ -1,0 +1,44 @@
+{
+  "_note": "TEST tenant ink-studio — VoiceDimensions fill derived from writer's seed brand-dna.md (skills/brand-voice/tenants/ink-studio/brand-dna.md; underlying DNA owned by writer). Matches the arch-locked shape (a9m.1 Decision 3). Provided alongside ladies8391/voice-dimensions.json so the eng has BOTH test tenants for the two-tenant isolation test (a tenant-A read returns 0 tenant-B exemplars). The skill emits this from the DNA at resolve time; this is the reference fill.",
+  "tenant_id": "ink-studio",
+  "dimensions": {
+    "tone": [
+      "warm, plain-spoken, confident, unhurried — a skilled friend who happens to be an artist, not a brand/salesperson, not edgy",
+      "first person singular 'I' (Mara); the studio is 'the studio' or 'Ink & Iron', never a faceless 'we'",
+      "CTA: soft and concrete, invite a conversation not a hard close ('DM me to start your design', 'consults are free — booking link in bio')"
+    ],
+    "structure": [
+      "short, concrete sentences; often one idea per line",
+      "lead with the client or the piece, not with the studio",
+      "describe the process honestly; name aftercare; let the work carry the post",
+      "0-1 emoji per caption; 3-6 specific lowercase hashtags"
+    ],
+    "vocabulary": {
+      "prefer": [
+        "drawn for you", "fine line", "blackwork", "botanical", "your story",
+        "consult", "healed and settled", "take our time"
+      ],
+      "ban": [
+        "unleash", "elevate your ink", "level up", "dive in", "game-changer",
+        "in today's world", "let's face it", "look no further", "one-stop", "transform your look",
+        "painless / any pain promise", "best / #1 / superlatives", "walk-in / flash framing",
+        "price/discount language", "comparisons to other artists", "shock/edgy branding",
+        "AI-tells: em-dash-as-drama, rule-of-three padding ('clean, bold, timeless'), contrast framing ('it's not just a tattoo, it's a statement')",
+        "hype emoji: 🔥 💯 ✨ 🙌"
+      ],
+      "approved_claims": [
+        "Custom designs only — drawn from scratch for one client; no flash copies.",
+        "11 years tattooing, 7 specializing in fine-line and blackwork.",
+        "Free 20-minute consultation before every booking.",
+        "Two-chair private studio in Brooklyn, NY.",
+        "Vegan inks available on request.",
+        "Licensed and bloodborne-pathogen certified in New York State.",
+        "Aftercare guidance and a healing check-in included with every piece."
+      ],
+      "emoji_policy": "0-1 per caption, only 🖤 or 🌿; never 🔥💯✨🙌",
+      "hashtag_policy": "3-6, lowercase, specific (#finelinetattoo #blackworktattoo #brooklyntattoo #customtattoo #botanicaltattoo); never #inkedlife/#tattoooftheday spam or 20-tag walls"
+    }
+  },
+  "source": "skills/brand-voice/tenants/ink-studio/brand-dna.md (Voice & tone rules + Do/Do-not + Approved claims) — DNA owned by writer",
+  "claims_discipline": "approved_claims is the allow-list: a draft MUST block + escalate on any factual/credential/offer claim not in this list."
+}
