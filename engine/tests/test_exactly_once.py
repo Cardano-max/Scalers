@@ -26,6 +26,14 @@ from sideeffects.boundary import EnqueueStatus, SideEffectBoundary
 from sideeffects.dispatcher import Dispatcher
 from tests.mock_connector import MockConnector
 
+# These exercise the exactly-once guarantee against a REAL Postgres (UNIQUE
+# constraints, row locking, crash recovery), so they carry the `integration`
+# marker (dhv.5 / PR #2 convention): excluded from the DB-free unit run, run in
+# CI's pgvector-service job where ENGINE_DATABASE_URL is set. Without it these
+# tests were deselected in the integration job AND skipped in the unit job — the
+# guarantee never actually ran in CI (CustomerAcq-dh4).
+pytestmark = pytest.mark.integration
+
 KEY_ARGS = ("nw", Channel.OUTREACH, "bayside-pg", "the one true message")
 
 

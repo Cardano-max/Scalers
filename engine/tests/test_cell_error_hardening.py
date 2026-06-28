@@ -9,7 +9,6 @@ on a code path, routed toward bounded recovery, never raw.
 
 from __future__ import annotations
 
-import asyncio
 
 import pytest
 from pydantic_ai.exceptions import UnexpectedModelBehavior
