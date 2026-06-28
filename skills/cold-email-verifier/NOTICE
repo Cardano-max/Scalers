@@ -1,0 +1,27 @@
+cold-email-verifier skill
+=========================
+
+PATTERN-ONLY re-authoring, VERIFIER HALF ONLY. Reproduces no upstream text/scripts.
+We adopt the *verification* idea and re-write it as an original, deterministic
+in-house validator (engine/outreach/verifier.py). Grounded in
+docs/skills/winning-strategies-kb.md.
+
+Upstream pattern : "cold-email-verifier" (r/ClaudeAI 20-skills list)
+Pinned commit    : ORIGINAL (no upstream code vendored)   # sec resolves/verifies real 40-hex SHA at
+                   fetch; non-loadable until filled (vetting-protocol.md).
+
+EXPLICITLY STRIPPED (capability we do NOT take)
+-----------------------------------------------
+- **guess / enrich** an address — that is data-broker enrichment
+  (apollo/zoominfo/clearbit/hunter class), REJECTED in the registry. Not adopted.
+- **autonomous CSV processing** — no bulk auto-run over a list; verification is
+  per-prospect, in-policy, deterministic.
+- **any send** — verification never sends; sending is the 439-gated harness
+  side-effect boundary.
+
+WHAT SURVIVES
+-------------
+The deterministic verify checks only (syntax, disposable, role, shape; optional
+live MX via an eng seam). SKILL.md + references/*.md (prompt) + the in-house
+validator (code). No network in the deterministic core, no enrichment, no broker
+call, no money surface.

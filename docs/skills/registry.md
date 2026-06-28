@@ -35,6 +35,36 @@ This document is **governance + the adopt-list**. The operator approves adoption
 | coldoutboundskills | `growthenginenowoslawski/coldoutboundskills` @ `<PIN-AT-ADOPTION>` | **REJECTED** (sec) | `.ts` scripts **SPEND REAL MONEY** (Dynadot bulk domain purchase) + create live Instantly/Smartlead campaigns. Money/destructive class. | — | — | none | **REJECTED** — mine patterns only |
 | coreyhaines31/marketingskills (67 Node CLIs) | `coreyhaines31/marketingskills` @ `<PIN-AT-ADOPTION>` | **REJECTED by default** (sec) | 67 bundled CLIs read env API tokens, hit data brokers (apollo/zoominfo/clearbit/hunter) + **send real email** (resend/sendgrid/postmark). | — | — | none | **REJECTED** — opt-in only later, scoped creds + `--dry-run`, never default |
 | Nuwa Skill Distiller | skillhub.club / lobehub (off-GitHub) | **REJECTED** (sec) | Unclear/no OSS license; auto-generates executable `SKILL.md` (generation + injection surface). | — | — | none | **REJECTED** — use first-party skill-creator |
+| **outreach-sequence-builder** *(1mk.7)* | "outreach-sequence-builder" (r/ClaudeAI 20-skills) @ `ORIGINAL` (no upstream code vendored — mine-patterns-only; coldoutbound family is REJECTED, not a pin source) | **APPROVED — ELIGIBLE** (sec S1 2026-06-28, see §Sign-off) | Nothing vendored; the REJECTED family's money/send capability (`coldoutboundskills` real-money; marketingskills email-SEND CLIs) **not taken**. Sending = harness side-effect boundary, **439-gated**. Enforcement is deterministic `engine/outreach/`. See `skills/outreach-sequence-builder/VETTING.md`. | `skills/outreach-sequence-builder/` + `engine/outreach/` | **PENDING-on-gold-set** (`evals/gold/outreach-smoke.jsonl`; calibration = rvy.7/.8) | *(intended: outreach engine — sequence)* | **ELIGIBLE (conditional)** — strip verified by sec (deterministic; suppression-first, capped, NEVER auto-sends — `plan.will_send` always False); eval-gate PENDING-on-gold-set; operator adoption pending; **all sends remain 439-gated at the harness side-effect boundary (approve-first)** |
+| **cold-email-verifier** *(1mk.7, verifier-only)* | "cold-email-verifier" (r/ClaudeAI 20-skills) @ `ORIGINAL` (no upstream code vendored — verify-half only; broker enrich/guess/send NOT adopted) | **APPROVED — ELIGIBLE** (sec S1 2026-06-28, see §Sign-off) | **guess/enrich/auto-CSV (broker enrichment) NOT adopted** (apollo/hunter class — REJECTED); no send; deterministic verify-only (syntax/disposable/role/shape). Live MX probe = separate eng seam (own resolver + TLS). See `skills/cold-email-verifier/VETTING.md`. | `skills/cold-email-verifier/` + `engine/outreach/verifier.py` | **PENDING-on-gold-set** | *(intended: outreach engine — deliverability gate)* | **ELIGIBLE (conditional)** — strip verified by sec (deterministic verify-only; no broker/guess/enrich/send); eval-gate PENDING-on-gold-set; operator adoption pending; **live MX-probe seam to be re-vetted by sec before live (own resolver + TLS)** |
+
+---
+
+## §Sign-off — outreach (1mk.7: outreach-sequence-builder + cold-email-verifier)
+
+Highest-risk category (money/send/broker-enrichment all in the REJECTED class). sec verified PR #47 independently.
+
+```
+Skills:       outreach-sequence-builder, cold-email-verifier (verifier-half only)
+Provenance:   ORIGINAL / pattern-only — no upstream code vendored. Aliases from the
+              r/ClaudeAI list; the cold-outbound family (coldoutboundskills) is
+              REJECTED, so it is NOT a pin source.
+Reviewed by:  sec    Date: 2026-06-28
+```
+
+**Read + strip (verified, not on report).** Danger sweep across the PR is clean: `engine/outreach/` has **no smtplib / socket / dns / requests / send / subprocess / eval / getenv / GITHUB_TOKEN**. The REJECTED-class capabilities are genuinely **not taken**:
+- `cold-email-verifier`: only the **deterministic verify half** — `verifier.py` is pure/hermetic (regex syntax + disposable-domain + role-account + shape heuristics). The broker **guess/enrich/auto-CSV** half (apollo/hunter class) is **not implemented**; **no send**. A live MX probe is a *defensive, injected* eng seam (`mx_check`) that only downgrades a verdict and is exception-safe — own resolver + TLS, **to be re-vetted before live**.
+- `outreach-sequence-builder`: no money/send capability (coldoutboundskills not vendored). `policy.py` composes the gates **suppression-first → reply/bounce hard-stop → deliverability verify → over-personalization guard → capped 4-touch (RFC-8058 unsubscribe) → escalate**, and **`plan.will_send` is always False** — nothing auto-sends; sending is the **439-gated** harness side-effect boundary (approve-first).
+
+```
+SEC VERDICT:  APPROVED — ELIGIBLE (both). Deterministic, suppression-first, capped,
+              escalate-only, NEVER auto-sends; broker/enrich/send not taken. NOT IN USE:
+              eval-gate PENDING-on-gold-set (rvy.7/.8) + operator adoption = release gates.
+HARD CONDITIONS before any live send / live verify:
+  - all sends stay behind the 439 harness side-effect boundary (approve-first);
+  - the live MX-probe seam (cold-email-verifier) returns to sec (own resolver + TLS,
+    no broker) before it is wired.
+```
 
 ---
 
