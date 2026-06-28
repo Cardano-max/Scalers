@@ -7,11 +7,33 @@ logic in the portal (there is none; the graph owns flow).
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from main import app
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _force_in_memory(monkeypatch):
+    """Keep the portal tests hermetic on the in-memory checkpointer.
+
+    Unsets any ambient ``ENGINE_DATABASE_URL`` (e.g. when the Postgres
+    integration suite is run in the same session) and resets the settings +
+    cached graph so these tests always exercise the in-memory portal. The real
+    Postgres path is covered by ``test_postgres_integration``.
+    """
+
+    monkeypatch.delenv("ENGINE_DATABASE_URL", raising=False)
+    import harness.graph as graph_mod
+    from harness.config import get_settings
+
+    get_settings.cache_clear()
+    graph_mod._graph = None
+    yield
+    get_settings.cache_clear()
+    graph_mod._graph = None
 
 
 def test_healthz_reports_pins_and_temperature():

@@ -1,18 +1,30 @@
-"""The hand-built Harness over the LangGraph spine (systemdesign §6.2 / HARN-01).
+"""The hand-built Harness over the LangGraph spine + durable checkpointer
+(systemdesign §6.2 / §2.2 / HARN-01 / HARN-03).
 
 ``Harness`` wraps a LangGraph ``StateGraph`` behind the §6.2 control-core
 interface: ``add_node`` / ``add_edge`` / ``add_conditional`` / ``compile``.
 Edges are static or keyed on COMPUTED fields only — the model never chooses the
-next step. ``compile`` injects a checkpointer (LangGraph's Postgres
-checkpointer in production; in-memory for the demo/tests) and returns a durable
-``CompiledGraph`` whose ``run`` / ``resume`` drive and continue a run — ``resume``
-continues a graph paused at a LangGraph ``interrupt()`` for human-in-the-loop.
+next step. ``compile`` injects a checkpointer (LangGraph's **Postgres**
+checkpointer in production — durable state, crash recovery; in-memory for the
+demo/tests) and returns a ``CompiledGraph``:
+
+* ``run``     — start a fresh run, keyed by ``run_id``.
+* ``recover`` — resume a *crashed* run from the last completed checkpoint.
+* ``resume``  — resume a run paused at a LangGraph ``interrupt()`` (HITL).
+* ``astream`` — relay per-node frames out to the thin portal.
+
+A checkpoint is a save-point, not exactly-once execution (§2.2): re-running a
+COMPLETED ``run_id`` would replay the checkpoint and make append-reduced
+channels (``step_log``) accumulate (CustomerAcq-fk5). ``run`` guards against
+that — replaying a completed thread is rejected; crashed/paused threads route to
+``recover`` / ``resume``. Run-key uniqueness is also enforced at the durable
+store (see ``runstore``).
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from functools import lru_cache
+import asyncio
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -22,34 +34,72 @@ from langgraph.types import Command
 
 from .config import get_settings
 from .nodes import AssembleNode, ResearchNode
+from .serde import make_serde
 from .state import Decision, GraphState, Node
 
-__all__ = ["Harness", "CompiledGraph", "make_checkpointer", "get_graph", "START", "END"]
+__all__ = [
+    "Harness",
+    "CompiledGraph",
+    "RunAlreadyCompletedError",
+    "RunInProgressError",
+    "make_checkpointer",
+    "build_demo_graph",
+    "get_graph",
+    "START",
+    "END",
+]
 
 
-def make_checkpointer() -> BaseCheckpointSaver:
-    """Return the durable Postgres checkpointer, or in-memory if no DB is set.
+class RunAlreadyCompletedError(RuntimeError):
+    """Raised when ``run`` is called for a ``run_id`` already at END (fk5).
 
-    The Postgres dependency is imported lazily so the engine runs (and tests
-    pass) without ``langgraph-checkpoint-postgres`` installed.
+    Replaying a completed thread would re-accumulate append-reduced channels and
+    skew the router. Use a fresh ``run_id`` per run.
     """
 
+
+class RunInProgressError(RuntimeError):
+    """Raised when ``run`` is called for a crashed/paused ``run_id``.
+
+    The run has a checkpoint with pending work — continue it with ``recover``
+    (crash) or ``resume`` (HITL interrupt), don't restart it.
+    """
+
+
+async def make_checkpointer() -> BaseCheckpointSaver:
+    """Return the durable async Postgres checkpointer, or in-memory if no DB.
+
+    The harness runs every graph via async ``ainvoke`` / ``astream``, so the
+    Postgres path uses ``AsyncPostgresSaver`` over an ``AsyncConnectionPool`` —
+    the *synchronous* ``PostgresSaver`` raises ``NotImplementedError`` under the
+    async Pregel loop (``aget_tuple``). The Postgres dependency is imported
+    lazily so the in-memory path needs no driver. Both checkpointers use the
+    type-allow-listed serializer so durable checkpoints survive strict msgpack
+    mode (CustomerAcq-fk5 secondary note).
+    """
+
+    serde = make_serde()
     database_url = get_settings().database_url
     if database_url:
-        from langgraph.checkpoint.postgres import PostgresSaver
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+        from psycopg.rows import dict_row
+        from psycopg_pool import AsyncConnectionPool
 
-        checkpointer = PostgresSaver.from_conn_string(database_url)
-        checkpointer.setup()
+        pool = AsyncConnectionPool(
+            conninfo=database_url,
+            max_size=10,
+            open=False,
+            kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
+        )
+        await pool.open()
+        checkpointer = AsyncPostgresSaver(pool, serde=serde)
+        await checkpointer.setup()  # idempotent: creates the LangGraph checkpoint tables
         return checkpointer
-    return InMemorySaver()
+    return InMemorySaver(serde=serde)
 
 
 class CompiledGraph:
-    """A durable, runnable graph (systemdesign §6.2).
-
-    ``run`` executes a fresh run keyed by ``run_id``; ``resume`` continues a run
-    paused at an ``interrupt()`` by feeding the human's ``Decision``.
-    """
+    """A durable, runnable graph (systemdesign §6.2 / §2.2)."""
 
     def __init__(self, graph: Any) -> None:
         self._graph = graph
@@ -58,9 +108,30 @@ class CompiledGraph:
         return {"configurable": {"thread_id": run_id}}
 
     async def run(self, run_id: str, init: GraphState) -> GraphState:
-        """Run the graph from ``init``, checkpointing under ``run_id``."""
+        """Start a fresh run from ``init``, checkpointing under ``run_id``.
+
+        Rejects a ``run_id`` that already has durable state: completed threads
+        raise :class:`RunAlreadyCompletedError` (fk5), in-progress threads raise
+        :class:`RunInProgressError` (use ``recover`` / ``resume``).
+        """
+
+        snapshot = await self._graph.aget_state(self._config(run_id))
+        if snapshot.values:
+            if snapshot.next:
+                raise RunInProgressError(run_id)
+            raise RunAlreadyCompletedError(run_id)
 
         result = await self._graph.ainvoke(init, self._config(run_id))
+        return GraphState.model_validate(result)
+
+    async def recover(self, run_id: str) -> GraphState:
+        """Resume a crashed run from the last completed checkpoint (§2.2).
+
+        Completed nodes are not re-executed; only the pending node(s) re-run, so
+        the run finishes exactly once.
+        """
+
+        result = await self._graph.ainvoke(None, self._config(run_id))
         return GraphState.model_validate(result)
 
     async def resume(self, run_id: str, decision: Decision) -> GraphState:
@@ -73,7 +144,7 @@ class CompiledGraph:
 
     async def astream(
         self, run_id: str, init: GraphState, *, stream_mode: str = "updates"
-    ):
+    ) -> AsyncIterator[dict]:
         """Yield per-node state updates as the run progresses.
 
         The thin FastAPI portal relays these straight out as SSE frames — the
@@ -85,10 +156,21 @@ class CompiledGraph:
         ):
             yield update
 
-    def get_state(self, run_id: str) -> Any:
-        """Return the persisted checkpoint snapshot for ``run_id``."""
+    async def get_state(self, run_id: str) -> Any:
+        """Return the persisted checkpoint snapshot for ``run_id``.
 
-        return self._graph.get_state(self._config(run_id))
+        Uses the async ``aget_state`` so it works with the async Postgres
+        checkpointer (the sync ``get_state`` raises on ``AsyncPostgresSaver``);
+        ``aget_state`` works equally on the in-memory checkpointer.
+        """
+
+        return await self._graph.aget_state(self._config(run_id))
+
+    async def is_complete(self, run_id: str) -> bool:
+        """True if ``run_id`` has a checkpoint that reached END."""
+
+        snapshot = await self._graph.aget_state(self._config(run_id))
+        return bool(snapshot.values) and not snapshot.next
 
 
 class Harness:
@@ -134,11 +216,24 @@ def build_demo_graph(checkpointer: BaseCheckpointSaver | None = None) -> Compile
     harness.add_edge(START, "research")
     harness.add_edge("research", "assemble")
     harness.add_edge("assemble", END)
-    return harness.compile(checkpointer or InMemorySaver())
+    return harness.compile(checkpointer or InMemorySaver(serde=make_serde()))
 
 
-@lru_cache(maxsize=1)
-def get_graph() -> CompiledGraph:
-    """Return the process-wide demo graph with its configured checkpointer."""
+_graph: CompiledGraph | None = None
+_graph_lock = asyncio.Lock()
 
-    return build_demo_graph(make_checkpointer())
+
+async def get_graph() -> CompiledGraph:
+    """Return the process-wide demo graph with its configured checkpointer.
+
+    Async because the durable checkpointer (``make_checkpointer``) opens an
+    async connection pool and awaits ``setup()``. Cached behind a lock so a
+    burst of concurrent requests builds the graph exactly once.
+    """
+
+    global _graph
+    if _graph is None:
+        async with _graph_lock:
+            if _graph is None:
+                _graph = build_demo_graph(await make_checkpointer())
+    return _graph

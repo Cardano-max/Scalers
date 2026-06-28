@@ -57,9 +57,9 @@ inside bounded, typed cells. It never decides the next step. Routing and
 scoring are pure Python; models are pinned and decision/classify cells run at
 temperature 0.
 
-## Phase 1 (HARN-01/05/06) — control core
+## Phase 1 (HARN-01/03/05/06) — control core
 
-Implements the `engine/harness/` interfaces from `docs/systemdesign.md` §6.2.
+Implements the `engine/harness/` interfaces from `docs/systemdesign.md` §6.2 (+ §2.2 / §5.1 durability).
 
 | Module | Responsibility |
 |--------|----------------|
@@ -67,7 +67,10 @@ Implements the `engine/harness/` interfaces from `docs/systemdesign.md` §6.2.
 | `harness/state.py`  | `GraphState` (Pydantic) + `Node` protocol + `Gate` / `Decision` / `RouteDecision` / `AutonomyMode` |
 | `harness/router.py` | Pure-code `route(confidence, threshold, gates, autonomy)` → auto/review/regenerate (HARN-05) |
 | `harness/nodes.py`  | Deterministic Research and Assemble cells + typed-cell seam |
-| `harness/graph.py`  | `Harness` (add_node/add_edge/add_conditional/compile) + `CompiledGraph` (run/resume/astream) + checkpointer factory (HARN-01) |
+| `harness/graph.py`  | `Harness` (add_node/add_edge/add_conditional/compile) + `CompiledGraph` (run/recover/resume/astream) + durable checkpointer factory + replay guard (HARN-01/03) |
+| `harness/serde.py`  | Checkpoint serializer with state types allow-listed (durable, strict-msgpack-safe) |
+| `harness/recovery.py` | Bounded 3-level recovery: retry → regenerate → human-review (HARN-03, §2.4) |
+| `harness/runstore.py` | Thin `RunStore` (DBOS-swappable) + `InMemory`/`Postgres` impls (JSONB append-only `steps[]`) + query API + `execute_and_record` (HARN-03, §5.1) |
 | `main.py`           | **Thin** FastAPI portal: `/healthz` + webhook ingress + SSE out (NOT the engine) |
 
 ### §6.2 interfaces
@@ -107,20 +110,45 @@ def route(confidence: float, threshold: float, gates: list[Gate],
 (inclusive auto bar). Regenerate is gate-driven; confidence vs the threshold
 splits auto from review.
 
-### Checkpointer
+### Durability & crash recovery (HARN-03)
 
-`make_checkpointer()` returns LangGraph's durable `PostgresSaver` when
-`ENGINE_DATABASE_URL` is set (the operator's durable-substrate decision;
-resumable runs), and an in-memory checkpointer otherwise — so the demo and tests
-run with no external dependency. The Postgres dependency is imported lazily.
+`make_checkpointer()` (async) returns LangGraph's durable **`AsyncPostgresSaver`**
+over a psycopg `AsyncConnectionPool` when `ENGINE_DATABASE_URL` is set — the
+operator's durable-substrate decision — and an in-memory checkpointer otherwise,
+so the demo and tests run with no external dependency. The harness drives every
+graph via async `ainvoke`/`astream`, so the checkpointer must be async (the sync
+`PostgresSaver` raises under the async loop); `get_state`/`is_complete` likewise
+use `aget_state`. The Postgres dependency is imported lazily; both checkpointers
+use the allow-listed serializer. Verified end to end against a real Postgres via
+`tests/test_postgres_integration.py` (skipped unless `ENGINE_DATABASE_URL` is set).
+
+A checkpoint is a **save-point, not exactly-once execution** (§2.2). State is
+persisted after every node, so a crashed run resumes from the last completed
+node — `CompiledGraph.recover(run_id)` re-runs only the pending node(s); completed
+nodes are not re-applied. Re-running a **completed** `run_id` is rejected
+(`RunAlreadyCompletedError`) rather than replaying the checkpoint and
+re-accumulating append-reduced channels (CustomerAcq-fk5); run-key uniqueness is
+also enforced at the durable store. (Exactly-once side effects are a separate
+guarantee at the DB boundary — eng3, HARN-04. DBOS Transact stays deferred behind
+the `RunStore` interface.)
+
+### Run-state store (§5.1)
+
+`RunStore` is a thin, DBOS-swappable interface over a Postgres `runs` row with a
+JSONB **append-only** `steps[]` trajectory, status, and auto/review/retry
+counters — the read model the gateway serves for the console Runs/Overview.
+`execute_and_record(...)` is the durable run-driver: it runs the graph and
+appends a step per node, then finishes with the routed decision. Query via
+`get_run` (trajectory) / `list_runs` (history).
 
 ## Develop
 
+Uses [uv](https://docs.astral.sh/uv/) (single engine build config).
+
 ```bash
-python -m venv .venv
-.venv/Scripts/python -m pip install -e ".[test]"   # add ",postgres" for the durable checkpointer
-.venv/Scripts/python -m pytest          # test
-.venv/Scripts/python -m uvicorn main:app --reload   # run
+uv sync                  # install deps; add: uv sync --extra postgres for the durable checkpointer
+uv run pytest            # full engine suite (cells + harness); offline, no API key / DB needed
+uv run uvicorn main:app --reload   # run the thin portal
 ```
 
 ### Thin portal

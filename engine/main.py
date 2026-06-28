@@ -80,7 +80,7 @@ async def _run_event_stream(
 ) -> AsyncIterator[str]:
     """Relay a LangGraph run as SSE frames: one per node, then the routed decision."""
 
-    graph = get_graph()
+    graph = await get_graph()
     init = GraphState(tenant_id=tenant_id, run_id=thread_id, topic=topic)
 
     async for update in graph.astream(thread_id, init):
@@ -90,7 +90,7 @@ async def _run_event_stream(
                 {"node": node, "step_log": channels.get("step_log", [])},
             )
 
-    snapshot = graph.get_state(thread_id)
+    snapshot = await graph.get_state(thread_id)
     values = snapshot.values
     confidence = values.get("confidence") or 0.0
     decision = route(confidence, autonomy=autonomy)
