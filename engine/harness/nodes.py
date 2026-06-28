@@ -138,7 +138,7 @@ class SelectAngleNode:
         if state.angles is None:
             raise CellError("select_angle ran before ideate produced candidates")
         research = state.research_result
-        low_grounding = research is None or not research.items
+        low_grounding = research is None or not research.items or research.over_budget
         try:
             selection = select_angle(
                 state.angles,

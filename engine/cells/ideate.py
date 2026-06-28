@@ -38,11 +38,15 @@ class MediaKind(str, Enum):
 
 
 class Angle(BaseModel):
-    """One strategic angle candidate (ADR schema)."""
+    """One strategic angle candidate (ADR schema + the bead's `intent`)."""
 
     model_config = {"frozen": True}
 
     hook: str = Field(description="The one-sentence strategic angle / hook.")
+    intent: str = Field(
+        description="The post's strategic intent — what it's for (e.g. drive bookings, "
+        "build trust, answer a pricing objection). One short phrase."
+    )
     rationale: str = Field(description="Why it fits this tenant + the findings.")
     format_hint: MediaKind = Field(description="REEL | IMAGE | CAROUSEL | TEXT — informs media spec.")
 
@@ -77,8 +81,9 @@ _INSTRUCTIONS = (
     "You are a social-media strategist for a tattoo studio. Given research findings "
     "and brand context, propose 3-5 distinct candidate ANGLES for one organic post. "
     "Each angle needs: a concrete one-sentence hook (no AI boilerplate, no placeholders, "
-    "no hashtags), a short rationale tying it to the findings and the artist's voice, "
-    "and a format_hint (reel/image/carousel/text). Make the angles genuinely different "
+    "no hashtags), a one-phrase intent (what the post is FOR — bookings, trust, a "
+    "pricing answer, etc.), a short rationale tying it to the findings and the artist's "
+    "voice, and a format_hint (reel/image/carousel/text). Make the angles genuinely different "
     "from each other — different value propositions, not reworded twins. Ground every "
     "angle in the findings where you can; do not invent fake sources or numbers."
 )
@@ -124,7 +129,10 @@ def build_ideate_prompt(
     sources). Pure + deterministic (items are pre-sorted by score by the adapter).
     """
     items = list(research.items[:_TOP_RESEARCH])
-    low_grounding = not items or research.over_budget and not items
+    # Low grounding when there is nothing to ground on, OR the research was cut
+    # short by the budget cap (partial/untrustworthy coverage) — per the AC,
+    # "empty/over-budget research -> brand-only + low-grounding flag".
+    low_grounding = not items or research.over_budget
 
     lines = [f"TOPIC: {topic}", ""]
     if items:

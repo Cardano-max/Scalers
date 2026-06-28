@@ -33,7 +33,8 @@ def _research(*texts_scores) -> ResearchResult:
 def _angle_payload(*hooks) -> dict:
     return {
         "angles": [
-            {"hook": h, "rationale": f"fits because of {h}", "format_hint": "reel"}
+            {"hook": h, "intent": "drive bookings", "rationale": f"fits because of {h}",
+             "format_hint": "reel"}
             for h in hooks
         ]
     }
@@ -54,7 +55,7 @@ def test_ideate_returns_typed_angleset():
     out = cell.run_sync("ctx", model=tool_model(_VALID))
     assert isinstance(out, AngleSet)
     assert len(out.angles) == 3
-    assert all(isinstance(a, Angle) and a.rationale for a in out.angles)
+    assert all(isinstance(a, Angle) and a.rationale and a.intent for a in out.angles)
     assert out.angles[0].format_hint is MediaKind.REEL
 
 
@@ -97,8 +98,8 @@ def test_prompt_includes_research_and_flags_low_grounding():
 
 def test_select_angle_picks_highest_grounding():
     angles = AngleSet(angles=[
-        Angle(hook="generic studio vibes", rationale="nice", format_hint=MediaKind.IMAGE),
-        Angle(hook="cover-up regret transformations", rationale="addresses cover-up demand", format_hint=MediaKind.CAROUSEL),
+        Angle(hook="generic studio vibes", intent="x", rationale="nice", format_hint=MediaKind.IMAGE),
+        Angle(hook="cover-up regret transformations", intent="x", rationale="addresses cover-up demand", format_hint=MediaKind.CAROUSEL),
     ])
     r = _research(("cover-up demand is high", 0.9), ("regret transformations resonate", 0.8))
     sel = select_angle(angles, r)
@@ -108,8 +109,8 @@ def test_select_angle_picks_highest_grounding():
 
 def test_select_angle_dedupes_near_duplicates():
     angles = AngleSet(angles=[
-        Angle(hook="Cover-up regret!", rationale="a", format_hint=MediaKind.REEL),
-        Angle(hook="cover up regret", rationale="b", format_hint=MediaKind.REEL),  # dup hook
+        Angle(hook="Cover-up regret!", intent="x", rationale="a", format_hint=MediaKind.REEL),
+        Angle(hook="cover up regret", intent="x", rationale="b", format_hint=MediaKind.REEL),  # dup hook
     ])
     sel = select_angle(angles, _research(("cover up regret", 0.5)))
     assert sel.candidate_count == 1
@@ -117,8 +118,8 @@ def test_select_angle_dedupes_near_duplicates():
 
 def test_select_angle_low_grounding_brand_only():
     angles = AngleSet(angles=[
-        Angle(hook="first angle", rationale="a", format_hint=MediaKind.IMAGE),
-        Angle(hook="second angle", rationale="b", format_hint=MediaKind.REEL),
+        Angle(hook="first angle", intent="x", rationale="a", format_hint=MediaKind.IMAGE),
+        Angle(hook="second angle", intent="x", rationale="b", format_hint=MediaKind.REEL),
     ])
     sel = select_angle(angles, _research(), low_grounding=True)
     assert sel.low_grounding is True and sel.angle.hook == "first angle" and sel.score == 0.0
@@ -127,6 +128,28 @@ def test_select_angle_low_grounding_brand_only():
 def test_select_angle_no_viable_raises():
     with pytest.raises(NoViableAngleError):
         select_angle(AngleSet(angles=[]), _research(("x", 0.5)))
+
+
+def test_select_angle_is_deterministic_reproducible():
+    angles = AngleSet(angles=[
+        Angle(hook="cover-up regret transformations", intent="x", rationale="cover-up demand", format_hint=MediaKind.REEL),
+        Angle(hook="guest spot dates", intent="x", rationale="scarcity", format_hint=MediaKind.IMAGE),
+    ])
+    r = _research(("cover-up demand is high", 0.9), ("regret transformations", 0.7))
+    a = select_angle(angles, r)
+    b = select_angle(angles, r)
+    assert a == b  # pure code, temp-0 equivalent: same input -> same pick
+
+
+def test_over_budget_research_flags_low_grounding():
+    # over-budget (even with partial items) -> brand-only grounding signal
+    r = ResearchResult(
+        query_intent="map_market",
+        items=(ResearchItem(source="exa", kind="signal", text="partial", score=0.5),),
+        sources_used=("exa",), over_budget=True,
+    )
+    _prompt, low = build_ideate_prompt(r, topic="t")
+    assert low is True
 
 
 # ── harness nodes + step_log ─────────────────────────────────────────────────
@@ -144,7 +167,7 @@ async def test_select_angle_node_records_choice():
     node = SelectAngleNode()
     state = _state_with(
         research=_research(("cover-up demand", 0.9)),
-        angles=AngleSet(angles=[Angle(hook="cover-up demand angle", rationale="r", format_hint=MediaKind.REEL)]),
+        angles=AngleSet(angles=[Angle(hook="cover-up demand angle", intent="x", rationale="r", format_hint=MediaKind.REEL)]),
     )
     out = await node(state)
     assert isinstance(out["angle"], AngleSelection)
