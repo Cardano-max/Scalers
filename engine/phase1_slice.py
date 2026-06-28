@@ -288,6 +288,12 @@ async def run_slice(
     # never AUTO); map the platform channel to its side-effect bucket for the outbox.
     threshold, autonomy = _resolve_routing(pack, channel)
     side_channel = _SIDE_EFFECT_CHANNEL[channel]
+    # CustomerAcq-4hj / ADR #38 Decision 5: IG and FB both map to side_channel
+    # POSTING, so without the platform the idempotency key would collide and
+    # cross-posting the SAME creative to both would silently drop one (ON CONFLICT).
+    # Qualify the target with the platform — target="{platform}:feed" — so each
+    # platform gets a DISTINCT key and both effects persist.
+    posting_target = f"{channel.value}:{target}"
 
     graph = build_slice_graph(
         dsn=dsn,
@@ -297,7 +303,7 @@ async def run_slice(
         threshold=threshold,
         gates=gates,
         channel=side_channel,
-        target=target,
+        target=posting_target,
         checkpointer=checkpointer,
     )
     state = await graph.run(
@@ -313,7 +319,7 @@ async def run_slice(
 
     # The intent was enqueued by the in-graph Enqueue node; drain it now.
     draft = state.assembled.draft if state.assembled else ""
-    result.idempotency_key = idempotency_key(tenant_id, side_channel, target, draft)
+    result.idempotency_key = idempotency_key(tenant_id, side_channel, posting_target, draft)
     result.enqueue_status = EnqueueStatus.ENQUEUED
     result.dispatched = await Dispatcher(dsn, connector).dispatch_pending()
     return result
