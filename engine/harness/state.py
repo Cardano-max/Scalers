@@ -17,6 +17,10 @@ from typing import Annotated, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
+# Phase-3 artifact type carried through the graph (a9m.5). Leaf import — cells
+# never import harness.state, so this is cycle-free.
+from cells.post_schemas import PostDraft
+
 
 class RouteDecision(str, Enum):
     """What the harness does with a produced action (systemdesign §6.2).
@@ -118,6 +122,7 @@ class GraphState(BaseModel):
 
     research: ResearchOutput | None = None
     assembled: AssembleOutput | None = None
+    draft: PostDraft | None = None  # Phase-3 Draft (Create) cell artifact (a9m.5)
 
     confidence: float | None = None
     gates: Annotated[list[Gate], _last_value] = Field(default_factory=list)

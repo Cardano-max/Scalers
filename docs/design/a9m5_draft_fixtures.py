@@ -55,8 +55,9 @@ def voice_grounding(coverage: str) -> dict:
         "PARTIAL": [_exemplar("First tattoo? We'll go slow. Free consult, no pressure.", 0.82)],
         "SPARSE": [],
     }[coverage]
+    # canonical GroundingCoverage serialized form is lowercase (eng4 #69 / contract §1)
     return {"tenant_id": "ladies8391", "dimensions": _DIMS, "exemplars": ex,
-            "coverage": coverage, "low_grounding": coverage == "SPARSE",
+            "coverage": coverage.lower(), "low_grounding": coverage == "SPARSE",
             "exemplar_count": len(ex)}
 
 
