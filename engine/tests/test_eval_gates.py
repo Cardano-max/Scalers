@@ -110,8 +110,7 @@ def test_brand_voice_rate_not_promotable_when_kappa_fails():
 
 
 def test_thresholds_come_from_config_and_are_tightenable():
-    # Default precision bar 0.95; tighten to 0.99 → a 0.97 cell now fails.
-    pairs = [("a", "a")] * 97 + [("a", "b")] * 3  # ~0.97 precision-ish; use direct
+    # Default precision bar 0.95; tighten to 0.99 — thresholds come from config.
     base = DEFAULT_GATES
     tight = DEFAULT_GATES.tighten(PRECISION, 0.99)
     assert base.by_metric(PRECISION).threshold == 0.95

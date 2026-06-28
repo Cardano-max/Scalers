@@ -41,6 +41,15 @@ postgres = [
 observability = [
     "langfuse>=2.0",
 ]
+# DeepEval — OPTIONAL, NON-GATING (EVAL-03 / rvy.8). The per-commit calibration/
+# accuracy gates compute ECE/P-R/F1/kappa hermetically in-repo (evals/metrics.py)
+# so the gate stays deterministic + offline within rvy.7's CI budget, and the
+# eval_metric store is the authoritative gating source per the rvy.1 ADR. DeepEval
+# is for the periodic/trend lane (recompute the same metrics, richer reports); it
+# is never imported on the gating path, so CI runs without it installed.
+eval = [
+    "deepeval>=1.0",
+]
 
 [dependency-groups]
 dev = [
