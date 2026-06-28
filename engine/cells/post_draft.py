@@ -12,40 +12,9 @@ the real-publisher's job (Phase-6), not representable in this spec.
 
 from __future__ import annotations
 
-from enum import Enum
+# Canonical home is cells/post_schemas.py (the neutral leaf). Re-exported here for
+# back-compat with existing importers (a9m.6 validators). ONE MediaKind/MediaSpec/
+# PostDraft object across the engine — see post_schemas for why (identity checks).
+from cells.post_schemas import MediaKind, MediaSpec, PostDraft
 
-from pydantic import BaseModel, Field
-
-from cells.content_brief import Platform
-
-
-class MediaKind(str, Enum):
-    """The asset kind a draft implies (also referenced by a9m.4's Angle.format_hint)."""
-
-    IMAGE = "image"
-    REEL = "reel"
-    CAROUSEL = "carousel"
-    TEXT = "text"
-
-
-class MediaSpec(BaseModel):
-    """The creative spec for a post (no real asset in Phase-3 — see ``brief``)."""
-
-    model_config = {"frozen": True}
-
-    kind: MediaKind
-    aspect_ratio: str | None = Field(default=None, description='None for text; e.g. "4:5", "9:16".')
-    duration_s: float | None = Field(default=None, description="REEL only; seconds.")
-    brief: str = Field(description="What the creative should show (mock: no real asset).")
-
-
-class PostDraft(BaseModel):
-    """One organic social post, ready for media/format validation + scoring."""
-
-    model_config = {"frozen": True}
-
-    platform: Platform
-    caption: str
-    hashtags: list[str] = Field(default_factory=list, description="Without the '#' sign.")
-    call_to_action: str
-    media: MediaSpec
+__all__ = ["MediaKind", "MediaSpec", "PostDraft"]
