@@ -7,6 +7,7 @@ description: Use when the research engine needs to find WHERE a tattoo studio's
   Trigger words: where are my customers, communities, channels, where to post,
   distribution, audience location, entry tactics.
 license: pattern-only derivative — see NOTICE
+pinned: 8bfcdffb655f16e713940cd04fb08891899c47db  # family ref (ORIGINAL/pattern-only; not verbatim upstream)
 ---
 
 # Where Your Customer Lives (tattoo-native)

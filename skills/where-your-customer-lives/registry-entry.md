@@ -9,7 +9,7 @@ design.
 | **Skill** | `where-your-customer-lives` |
 | **Bead** | `CustomerAcq-1mk.4` |
 | **Upstream source** | "where-your-customer-lives" (r/ClaudeAI 20-skills list; family: `coreyhaines31/marketingskills`, MIT) |
-| **Pinned commit** | `<PIN-AT-ADOPTION>` — sec resolves/verifies real 40-hex SHA at fetch |
+| **Pinned commit** | `8bfcdffb655f16e713940cd04fb08891899c47db` — sec resolves/verifies real 40-hex SHA at fetch |
 | **Skill type** | Pattern-only re-authoring; prompt-only after strip |
 | **What was stripped/sandboxed** | `fetch.py` (TLS disabled, `CERT_NONE`) **stripped**; `.env.example` + `GITHUB_TOKEN` read **stripped**; 67 parent-repo CLIs **not vendored**. Network via `engine/research/` adapter, TLS restored. |
 | **Re-authored to our format** | Yes — `skills/where-your-customer-lives/` |

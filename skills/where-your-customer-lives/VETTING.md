@@ -7,7 +7,7 @@ pending sec). Canonical row: `docs/skills/registry.md`. **ELIGIBLE ≠ IN USE.**
 |-------|-------|
 | Skill | `where-your-customer-lives` |
 | Upstream pattern | "where-your-customer-lives" (r/ClaudeAI 20-skills list; family: coreyhaines31/marketingskills, MIT) |
-| Pinned commit | `<PIN-AT-ADOPTION>` — sec resolves/verifies real 40-hex SHA at fetch |
+| Pinned commit | `8bfcdffb655f16e713940cd04fb08891899c47db` — sec resolves/verifies real 40-hex SHA at fetch |
 | Skill type | Pattern-only re-authoring; prompt-only after strip |
 | Our-format path | `skills/where-your-customer-lives/` |
 | Enforcement / wiring | `engine/research/` adapter + router (network seam; live providers eng-owned) |

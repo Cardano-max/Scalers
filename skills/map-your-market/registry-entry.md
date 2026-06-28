@@ -9,7 +9,7 @@ HARD RULE, **no green row → no agent use.** Ships eligibility **HELD** by desi
 | **Skill** | `map-your-market` |
 | **Bead** | `CustomerAcq-1mk.4` |
 | **Upstream source** | "map-your-market" (r/ClaudeAI 20-skills list; family: `coreyhaines31/marketingskills`, MIT) |
-| **Pinned commit** | `<PIN-AT-ADOPTION>` — sec resolves/verifies the real 40-hex SHA at fetch; non-loadable until filled |
+| **Pinned commit** | `8bfcdffb655f16e713940cd04fb08891899c47db` — sec resolves/verifies the real 40-hex SHA at fetch; non-loadable until filled |
 | **Skill type** | Pattern-only re-authoring; prompt-only after strip |
 | **What was stripped/sandboxed** | `fetch.py` (TLS disabled, `CERT_NONE`) **stripped in full**; `.env.example` + `GITHUB_TOKEN` read **stripped**; 67 parent-repo live-API CLIs **not vendored**. Network re-routed through `engine/research/` adapter with TLS restored. |
 | **Re-authored to our format** | Yes — `skills/map-your-market/` (original methodology, tattoo-retargeted, grounded in winning-strategies-kb.md) |

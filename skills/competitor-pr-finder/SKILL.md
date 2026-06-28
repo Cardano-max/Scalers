@@ -7,6 +7,7 @@ description: Use when the research engine needs to mine competitor tattoo studio
   ready-to-adapt seed. Trigger words: competitor, competitor ads, what's working,
   ad angles, positioning, differentiation, Meta Ad Library, Foreplay.
 license: pattern-only derivative — see NOTICE
+pinned: 8bfcdffb655f16e713940cd04fb08891899c47db  # family ref (ORIGINAL/pattern-only; not verbatim upstream)
 ---
 
 # Competitor PR Finder (tattoo-native)

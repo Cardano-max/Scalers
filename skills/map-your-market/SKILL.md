@@ -7,6 +7,7 @@ description: Use when the research engine needs to map tattoo-market demand — 
   the strategist can score. Trigger words: market research, demand, pain points,
   angles, ICP, what do clients want, audience research.
 license: pattern-only derivative — see NOTICE
+pinned: 8bfcdffb655f16e713940cd04fb08891899c47db  # family ref (ORIGINAL/pattern-only; not verbatim upstream)
 ---
 
 # Map Your Market (tattoo-native)

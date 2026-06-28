@@ -10,7 +10,7 @@ approves adoption + agent assignment.
 |-------|-------|
 | Skill | `map-your-market` |
 | Upstream pattern | "map-your-market" (r/ClaudeAI 20-skills list; family: coreyhaines31/marketingskills, MIT) |
-| Pinned commit | `<PIN-AT-ADOPTION>` — sec to resolve/verify the real 40-hex SHA at fetch; non-loadable until filled |
+| Pinned commit | `8bfcdffb655f16e713940cd04fb08891899c47db` — sec to resolve/verify the real 40-hex SHA at fetch; non-loadable until filled |
 | Skill type | Pattern-only re-authoring; prompt-only after strip |
 | Our-format path | `skills/map-your-market/` |
 | Enforcement / wiring | `engine/research/` adapter + router (network seam; live providers eng-owned) |

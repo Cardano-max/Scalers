@@ -9,7 +9,7 @@ docs/skills/winning-strategies-kb.md.
 
 Upstream pattern : "where-your-customer-lives" (r/ClaudeAI 20-skills list;
                    family: coreyhaines31/marketingskills, MIT)
-Pinned commit    : <PIN-AT-ADOPTION>   # sec resolves/verifies the real 40-hex SHA
+Pinned commit    : 8bfcdffb655f16e713940cd04fb08891899c47db   # sec resolves/verifies the real 40-hex SHA
                    at fetch; non-loadable until filled (vetting-protocol.md).
 
 STRIPPED (never vendored)

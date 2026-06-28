@@ -9,7 +9,7 @@ docs/skills/winning-strategies-kb.md.
 
 Upstream pattern : "map-your-market" (r/ClaudeAI 20-skills list; family:
                    coreyhaines31/marketingskills, MIT)
-Pinned commit    : <PIN-AT-ADOPTION>   # sec resolves + verifies the real 40-hex
+Pinned commit    : 8bfcdffb655f16e713940cd04fb08891899c47db   # sec resolves + verifies the real 40-hex
                    SHA at fetch time. The alias name is NOT provenance; this row
                    is non-loadable until the SHA is filled (vetting-protocol.md).
 

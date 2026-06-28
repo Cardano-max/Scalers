@@ -8,7 +8,7 @@ in the registry). **ELIGIBLE ≠ IN USE.**
 |-------|-------|
 | Skill | `competitor-pr-finder` |
 | Upstream pattern | "competitor-pr-finder" (r/ClaudeAI 20-skills list; family: coreyhaines31/marketingskills, MIT) |
-| Pinned commit | `<PIN-AT-ADOPTION>` — sec resolves/verifies real 40-hex SHA at fetch |
+| Pinned commit | `8bfcdffb655f16e713940cd04fb08891899c47db` — sec resolves/verifies real 40-hex SHA at fetch |
 | Skill type | Pattern-only re-authoring; prompt-only after strip |
 | Our-format path | `skills/competitor-pr-finder/` |
 | Enforcement / wiring | `engine/research/` adapter (Meta-Ad-Library/Foreplay provider; eng-owned live client) |
