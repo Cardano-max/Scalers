@@ -11,8 +11,10 @@ from cells.base import (
     DEFAULT_MODEL,
     Cell,
     CellError,
+    CellExecutionError,
     CellInput,
     CellResult,
+    CellValidationError,
     TypedCell,
 )
 from cells.metrics import ValidRateReport
@@ -30,8 +32,10 @@ __all__ = [
     "DEFAULT_MODEL",
     "Cell",
     "CellError",
+    "CellExecutionError",
     "CellInput",
     "CellResult",
+    "CellValidationError",
     "TypedCell",
     "ValidRateReport",
     "RepairError",

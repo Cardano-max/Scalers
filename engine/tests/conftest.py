@@ -43,6 +43,19 @@ def text_model(*texts: str) -> FunctionModel:
     return FunctionModel(fn)
 
 
+def error_model(exc: BaseException) -> FunctionModel:
+    """A model that raises ``exc`` instead of responding.
+
+    Simulates a non-ModelBehavior failure (network/timeout/connector/etc.) at the
+    model boundary so the cell wrapper's error handling can be exercised.
+    """
+
+    def fn(messages, info: AgentInfo) -> ModelResponse:
+        raise exc
+
+    return FunctionModel(fn)
+
+
 # A well-formed content brief payload reused across tests.
 VALID_BRIEF: dict[str, Any] = {
     "headline": "Bold blackwork sleeve drop",

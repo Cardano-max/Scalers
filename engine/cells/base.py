@@ -49,17 +49,38 @@ DEFAULT_MODEL: KnownModelName = "anthropic:claude-sonnet-4-6"
 
 
 class CellError(Exception):
-    """Raised when a cell cannot produce a valid typed object.
+    """A cell failed on a code path. Raw text never escapes; the harness's
+    bounded-recovery layer (HARN-03) catches this instead of an uncaught error.
 
-    This is the "fail on a code path" outcome: the model's output could not be
-    repaired into a schema- and validator-valid object within the retry budget.
-    Raw text is never returned in its place.
+    Every exception out of a cell run is one of the two subclasses below, so a
+    caller can ``except CellError`` and know nothing slipped past untyped.
+    ``recoverable`` is a hint for the bounded-recovery router (retry → regenerate
+    → human-review).
     """
 
-    def __init__(self, message: str, *, attempts: int, cause: Exception | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        attempts: int = 1,
+        cause: Exception | None = None,
+        recoverable: bool = True,
+    ) -> None:
         super().__init__(message)
         self.attempts = attempts
+        self.recoverable = recoverable
         self.__cause__ = cause
+
+
+class CellValidationError(CellError):
+    """The model's output could not be repaired into a schema- and validator-valid
+    object within the retry budget (the ``UnexpectedModelBehavior`` case)."""
+
+
+class CellExecutionError(CellError):
+    """The cell failed to execute for a non-output reason — network, timeout,
+    connector, cancellation-adjacent, or any other exception raised while running
+    the model. Surfaced as a typed error so it never propagates raw."""
 
 
 @dataclass(frozen=True)
@@ -172,12 +193,23 @@ class Cell(Generic[TOut]):
             validation=report,
         )
 
-    def _on_failure(self, exc: UnexpectedModelBehavior) -> CellError:
+    def _on_validation_failure(self, exc: UnexpectedModelBehavior) -> CellValidationError:
+        """Repair budget exhausted: typed failure, recorded against the valid rate."""
         self.metrics.record(valid=False, first_pass=False, repairs=self.retries)
-        return CellError(
+        return CellValidationError(
             f"cell {self.name!r} could not produce valid output after "
             f"{self.retries} repair attempt(s)",
             attempts=self.retries + 1,
+            cause=exc,
+        )
+
+    def _on_execution_failure(self, exc: Exception) -> CellExecutionError:
+        """Any non-output exception (network/timeout/connector/...): typed, recorded
+        as an operational error, routed into bounded recovery — never uncaught."""
+        self.metrics.record_error()
+        return CellExecutionError(
+            f"cell {self.name!r} failed to execute: {type(exc).__name__}: {exc}",
+            attempts=1,
             cause=exc,
         )
 
@@ -213,8 +245,13 @@ class Cell(Generic[TOut]):
         """Like :meth:`run` but returns the full :class:`CellResult` (value + metrics)."""
         try:
             result = await self._agent.run(prompt, model=model, message_history=message_history)
+        except CellError:
+            raise  # already typed (e.g. raised from a validator) — don't double-wrap
         except UnexpectedModelBehavior as exc:
-            raise self._on_failure(exc) from exc
+            raise self._on_validation_failure(exc) from exc
+        except Exception as exc:
+            # network/timeout/connector/anything else — never let it propagate raw.
+            raise self._on_execution_failure(exc) from exc
         return self._result_from(result.output, result.all_messages())
 
     def run_detailed_sync(
@@ -227,8 +264,13 @@ class Cell(Generic[TOut]):
         """Synchronous :meth:`run_detailed`."""
         try:
             result = self._agent.run_sync(prompt, model=model, message_history=message_history)
+        except CellError:
+            raise  # already typed (e.g. raised from a validator) — don't double-wrap
         except UnexpectedModelBehavior as exc:
-            raise self._on_failure(exc) from exc
+            raise self._on_validation_failure(exc) from exc
+        except Exception as exc:
+            # network/timeout/connector/anything else — never let it propagate raw.
+            raise self._on_execution_failure(exc) from exc
         return self._result_from(result.output, result.all_messages())
 
 

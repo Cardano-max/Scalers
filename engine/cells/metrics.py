@@ -28,6 +28,9 @@ class ValidRateReport:
     after_retry_valid: int = 0
     failed: int = 0
     repairs: int = 0
+    # Operational failures (network/timeout/connector/etc.) — tracked separately
+    # from `failed` so infra noise does not deflate the model-output valid rates.
+    errors: int = 0
 
     def record(self, *, valid: bool, first_pass: bool, repairs: int = 0) -> None:
         """Record one cell run.
@@ -44,6 +47,14 @@ class ValidRateReport:
                 self.first_pass_valid += 1
         else:
             self.failed += 1
+
+    def record_error(self) -> None:
+        """Record an operational failure (the model never produced a judgeable output).
+
+        Kept out of ``total``/``failed`` so the first-pass / after-retry valid
+        rates stay a measure of model-output quality, not infra reliability.
+        """
+        self.errors += 1
 
     @property
     def first_pass_rate(self) -> float:
@@ -63,5 +74,6 @@ class ValidRateReport:
             f"{self.label}: n={self.total} "
             f"first-pass={self.first_pass_rate:.1%} "
             f"after-retry={self.after_retry_rate:.1%} "
-            f"(repair rescued {self.repair_rescued}, failed {self.failed})"
+            f"(repair rescued {self.repair_rescued}, failed {self.failed}, "
+            f"exec errors {self.errors})"
         )
