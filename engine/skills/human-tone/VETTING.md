@@ -1,22 +1,23 @@
 # Vetting record — human-tone (CustomerAcq-1mk.3)
 
 This is the eng3-side vetting/registration record for the `human-tone` skill,
-prepared for the 1mk.1 supply-chain gate. **sec owns the S1 sign-off**; this
-skill is **NOT registered for agent use** until sec signs off and a row exists in
-the 1mk.1 skill registry. Recorded here against the 4-step gate so sec can
-complete it.
+prepared for the 1mk.1 supply-chain gate. **sec owns the S1 sign-off** (now
+**APPROVED**, see below). The canonical registry row lives in
+`docs/skills/registry.md` (sec, PR #25). **ELIGIBLE != IN USE**: no agent loads
+this skill until the operator approves adoption + agent assignment.
 
 | Field | Value |
 |-------|-------|
 | Skill | `human-tone` |
 | Upstream source | Varnan-Tech/opendirectory — "human-tone" |
 | License | MIT |
-| Pinned commit | **TBD by sec at registration** (record the exact upstream commit) |
+| Pinned commit | `9c30f79` (confirmed by sec at registration) |
 | Our-format path | `engine/skills/human-tone/SKILL.md` |
 | Enforcement code | `engine/cells/ai_flagger.py` (validator), `engine/cells/humanize.py` (rewrite cell) |
 | Eval-gate status | PASS — labeled-set test `tests/test_ai_flagger.py::test_labeled_set_separates_slop_from_human` (recall 1.0, false-positive rate 0.0 on the seed set) |
-| sec sign-off (S1) | **PENDING** |
-| Registered for | none yet (blocked on sign-off) |
+| sec sign-off (S1) | **APPROVED** — independently verified nothing-to-strip + eval-gate PASS |
+| Canonical registry | `docs/skills/registry.md` (sec, PR #25) |
+| Status | **ELIGIBLE** (not in use) — awaiting operator adoption + agent assignment |
 
 ## 4-step gate
 
@@ -28,8 +29,7 @@ complete it.
    temp-0 model call in the rewrite cell (the only model use; gated behind the
    deterministic flagger).
 3. **Re-author into our format + pin** — done (`SKILL.md`), re-authored with our
-   determinism rules and brand-voice intent. Pin the upstream commit at
-   registration (sec).
+   determinism rules and brand-voice intent. Upstream pinned at `9c30f79` by sec.
 4. **Eval gold-set gate** — the deterministic detector is demonstrated on a
    labeled set (see Eval-gate status). When the Phase-2 eval gold set is wired,
    re-run against it before final registration.
@@ -41,10 +41,11 @@ network, or file/exec surface. It was still read for prompt-injection / off-poli
 content; none found. The risk profile is "lowest" (pure markdown), matching the
 R&D pick.
 
-## Notes for sec
+## Notes
 
-- No agent may load/use this skill until the 1mk.1 registry has a row with S1
-  sign-off + eval-gate status for it.
+- **ELIGIBLE != IN USE** (sec): S1 is approved and the registry row exists, but no
+  agent loads this skill until the **operator** approves adoption + agent
+  assignment.
 - The validator (`ai_flagger`) is safe to wire into the bank now (pure code, no
   model, no I/O); the *rewrite cell* makes a model call and should ship behind the
   same autonomy/eval gates as any other cell.
