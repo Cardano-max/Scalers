@@ -17,6 +17,8 @@ from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from cells.media_validators import validate_post_draft
+
 from .spans import span
 from .state import AssembleOutput, GraphState, ResearchOutput
 
@@ -84,4 +86,27 @@ class AssembleNode:
             "assembled": assembled,
             "confidence": _confidence_for(research.findings),
             "step_log": ["assemble"],
+        }
+
+
+class MediaValidateNode:
+    """Media/format validation node (a9m.6): pure-code gates over the PostDraft.
+
+    Runs after the draft cell; writes the per-check gates into ``GraphState.gates``
+    (last-value, what the router reads) and records pass/fail to ``step_log``. No
+    LLM — deterministic platform rules.
+    """
+
+    name = "validate_media"
+
+    async def __call__(self, state: GraphState) -> GraphState:
+        if state.draft is None:
+            raise CellError("validate_media ran before a draft was produced")
+        with span("node:validate_media", kind="node"):
+            gates = validate_post_draft(state.draft)
+        failed = [g.name for g in gates if not g.passed]
+        tag = "ok" if not failed else "fail:" + ",".join(failed)
+        return {  # type: ignore[return-value]
+            "gates": gates,
+            "step_log": [f"validate_media:{tag}"],
         }

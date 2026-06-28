@@ -17,6 +17,10 @@ from typing import Annotated, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
+# Phase-3 content engine: the typed post draft the media/format validators (a9m.6)
+# check (produced by the draft cell, a9m.5).
+from cells.post_draft import PostDraft
+
 
 class RouteDecision(str, Enum):
     """What the harness does with a produced action (systemdesign §6.2).
@@ -118,6 +122,9 @@ class GraphState(BaseModel):
 
     research: ResearchOutput | None = None
     assembled: AssembleOutput | None = None
+
+    # Phase-3 posting: the draft cell's output (a9m.5), validated by a9m.6.
+    draft: PostDraft | None = None
 
     confidence: float | None = None
     gates: Annotated[list[Gate], _last_value] = Field(default_factory=list)
