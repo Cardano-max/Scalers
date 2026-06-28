@@ -104,19 +104,49 @@ def build_ai_flagger_cell(flagger: Skill, **o) -> Cell[AuthenticityVerdict]: ...
 
 ## Decision 3 — Brand-voice grounding from the KB (KNOW-02)
 
-The Copywriter cell is grounded on the tenant's past on-voice content via a new `KbStore` retrieval method (the store already has the gold/metric side from the Phase-2 ADR):
+The Copywriter cell consumes a **typed `VoiceGrounding` payload**, not raw exemplars. Grounding has two sources: the tenant's **voice dimensions** (from the brand-voice skill, authored from the per-tenant `brand-dna.md`) and **retrieved exemplars** (pgvector similarity over `kb_chunks`). The payload also carries a **coverage flag** so a thin/new-tenant KB degrades safely instead of fabricating voice.
 
 ```python
 class Exemplar(BaseModel):
     content: str; metrics: dict; similarity: float
+
+class VoiceDimensions(BaseModel):
+    """The tenant's brand-voice rubric. SHAPE is arch-owned; SEMANTICS/content are
+    sourced from the brand-voice skill (authored from the per-tenant brand-dna.md
+    by the skill-creator pipeline — the engine loads the skill, it does not read
+    brand-dna.md directly). pmm/writer own what goes in each field."""
+    tone: str          # e.g. "dry, confident, anti-hype"
+    vocabulary: str    # preferred lexicon/phrasing (banned words are validator GATES, not here)
+    structure: str     # sentence/format patterns: length, emoji policy, CTA style
+
+class GroundingCoverage(str, Enum):
+    FULL = "full"        # dimensions present AND >= k on-voice exemplars
+    PARTIAL = "partial"  # dimensions present but thin / below-k exemplars
+    SPARSE = "sparse"    # new tenant / too few exemplars -> low_grounding
+
+class VoiceGrounding(BaseModel):
+    tenant_id: str
+    dimensions: VoiceDimensions      # from the brand-voice skill (brand-dna.md)
+    exemplars: list[Exemplar]        # from kb_chunks (KNOW-02 retrieval)
+    coverage: GroundingCoverage
+    low_grounding: bool              # True iff coverage == SPARSE
+    exemplar_count: int
+
 # add to kb/store.py:
 def voice_exemplars(self, *, tenant_id: str, query: str, k: int = 5) -> list[Exemplar]: ...
 #   pgvector similarity over kb_chunks (kind in {"post","voice"}), tenant-scoped.
+
+# assemble the payload the Copywriter consumes (knowledge layer):
+def build_voice_grounding(pack, kb, *, query: str, k: int = 5) -> VoiceGrounding: ...
+#   dimensions <- brand-voice skill (pack.voice.skill); exemplars <- kb.voice_exemplars(...);
+#   coverage/low_grounding computed from exemplar_count + dimension presence.
 ```
 
-The Copywriter prompt is assembled in code from: **selected angle + research findings + brand-voice skill instructions + top-k voice exemplars**. Grounding is retrieval, not fine-tuning (VOICE-01 LoRA is deferred v2).
+The Copywriter prompt is assembled in code from: **selected angle + research findings + `VoiceGrounding` (dimensions + skill instructions + top-k exemplars)**. When `low_grounding` is true the cell grounds on **dimensions only** and the slice flags **lower confidence** (Decision 4 / edge cases) — it never fabricates a voice it has no evidence for. Grounding is retrieval, not fine-tuning (VOICE-01 LoRA is deferred v2).
 
-**Rationale.** Reuses the KNOW-01 pgvector KB and its tenant isolation; the `brand_voice_onvoice` metric already recorded there (`kb/store.py`) closes the loop — Phase-3 grounding feeds the Phase-2 eval the holdout measures.
+**`kb_chunks` ownership (the content/voice partition):** the table does **not** exist yet — the Phase-2 KB scaffold (rvy.2) created only the eval partition (`gold_example`/`gold_label`/`eval_metric`, `infra/initdb/03-eval-kb.sql`). The **column shape is arch-owned** (systemdesign §5.1: `kb_chunks(tenant_id, kind, content, embedding vector, metrics jsonb)` + tenant-scoped pgvector index); the **DDL/migration is a build bead** — `infra/initdb/04-kb-content.sql`, the KNOW-02/stream-B dependency that `a9m.3` builds on, mirroring how rvy.2 scaffolded the eval partition. ADRs decide the shape; they do not ship migrations.
+
+**Rationale.** A typed `VoiceGrounding` (dimensions + exemplars + coverage) is the single contract the Copywriter consumes, the eval scores, and the console can show — one definition, no divergence. Reuses the KNOW-01 pgvector KB + tenant isolation; the `brand_voice_onvoice` metric already recorded in `kb/store.py` closes the loop so Phase-3 grounding feeds the Phase-2 holdout eval; and the coverage flag makes the "thin KB" edge case a typed signal rather than silent low-quality output.
 
 ---
 
@@ -184,10 +214,11 @@ Parallelizable streams, each with the interface it owns. A–G can proceed concu
 | Stream | Owns | Interface | Req | Depends |
 |--------|------|-----------|-----|---------|
 | **A** | Research adapter + budget cap | `ResearchSource.search(query, budget) -> list[Finding]`; pluggable (Firecrawl/Exa), one failing source never blocks | RSCH-01 | — |
-| **B** | KB voice-exemplar retrieval | `KbStore.voice_exemplars(tenant_id, query, k)` | KNOW-02 | KB (exists) |
+| **B0** | `kb_chunks` content/voice partition DDL | `infra/initdb/04-kb-content.sql` (shape from systemdesign §5.1; arch-owned shape) | KNOW-01 | eval KB (exists) |
+| **B** | KB voice grounding | `KbStore.voice_exemplars(...)` + `build_voice_grounding(...) -> VoiceGrounding` (dimensions + exemplars + coverage) | KNOW-02 | B0, C |
 | **C** | Skill loader + composition | `SkillLoader.load(ref) -> Skill` | (enabler) | — |
 | **D** | Ideate cell + SelectAngle (pure code) | `build_ideate_cell`, `select_angle(AngleSet, kb_history) -> Angle` | POST-01 | C |
-| **E** | Copywriter cell | `build_copywriter_cell` | POST-01, KNOW-02 | B, C |
+| **E** | Copywriter cell (consumes `VoiceGrounding`) | `build_copywriter_cell` | POST-01, KNOW-02 | B, C |
 | **F** | Media/format validator bank | new `ValidatorBank` gates | POST-02 | validators (exists) |
 | **G** | AI-flagger cell | `build_ai_flagger_cell` | (safety) | C |
 | **H** | Posting subgraph wiring: Check&Score + route + mock publish + persist Action + `is_enabled` short-circuit | the spine; reuses `slice_route`, `produce_and_record_decision`, `SideEffectBoundary`, `MockPostingConnector` | POST-01(4) | all |
