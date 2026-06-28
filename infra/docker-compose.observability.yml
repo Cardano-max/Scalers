@@ -1,0 +1,70 @@
+# Scalers observability stack — Prometheus (metrics scrape) + Grafana (dashboards).
+#   docker compose -f infra/docker-compose.observability.yml up -d
+#   Grafana  → http://localhost:${GRAFANA_PORT:-3001}  (admin / ${GRAFANA_PASSWORD:-admin})
+#   Prometheus → http://localhost:${PROMETHEUS_PORT:-9090}
+#
+# Langfuse (traces/evals) is a SEPARATE stack — infra/docker-compose.langfuse.yml,
+# canonical per the rvy.1 ADR. Tracing is best-effort/non-gating; metrics here are
+# the operator dashboard source. Bring both up for the full obs picture.
+#
+# Local only, no AWS, named volumes, reboot-safe (restart: unless-stopped).
+# Images pinned to tag@sha256 digest like the rest of the stack — bump deliberately.
+#
+# Grafana is on 3001 by default so it does NOT collide with Langfuse on 3000.
+
+name: scalers-observability
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0@sha256:6559acbd5d770b15bb3c954629ce190ac3cbbdb2b7f1c30f0385c4e05104e218
+    container_name: scalers-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"   # allows `curl -XPOST .../-/reload` after editing scrape config
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    extra_hosts:
+      # lets the in-container Prometheus scrape the engine running on the host
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  grafana:
+    image: grafana/grafana:11.4.0@sha256:d8ea37798ccc41061a62ab080f2676dda6bf7815558499f901bdb0f533a456fb
+    container_name: scalers-grafana
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+volumes:
+  promdata:
+  grafanadata:
