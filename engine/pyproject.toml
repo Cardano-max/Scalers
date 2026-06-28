@@ -6,6 +6,11 @@ requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.2",
+    # Load API keys from a gitignored .env into the process environment at
+    # startup (SEC/INFRA) so Pydantic-AI reads ANTHROPIC_API_KEY natively.
+    # Imported directly by engine/harness/config.py, so declared explicitly
+    # rather than relied on as a pydantic-settings transitive.
+    "python-dotenv>=1.0",
     # Typed LLM cells (HARN-02). slim core + anthropic provider only; the
     # framework itself is provider-agnostic and tests use the built-in
     # Test/Function models, so no other provider extras are pulled in.
