@@ -7,6 +7,11 @@ global:
   external_labels:
     stack: scalers
 
+# Alerting rules (CustomerAcq-13u). Evaluated by Prometheus and shown under
+# /alerts + /api/v1/rules. Notification routing would need Alertmanager (not wired).
+rule_files:
+  - /etc/prometheus/alerts.yml
+
 scrape_configs:
   # Prometheus scrapes itself (sanity / up signal).
   - job_name: prometheus
