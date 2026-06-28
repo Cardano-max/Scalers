@@ -46,3 +46,91 @@ uv run pytest    # run the suite (no network / API key needed — tests inject m
 
 Production runs need `ANTHROPIC_API_KEY`; tests drive cells with Pydantic-AI's
 `FunctionModel`, so the suite is fully offline and deterministic.
+
+---
+
+
+Scalers Growth Engine — the deterministic control core (FastAPI + LangGraph).
+
+**Harness law:** the graph topology is fixed in code and the LLM runs only
+inside bounded, typed cells. It never decides the next step. Routing and
+scoring are pure Python; models are pinned and decision/classify cells run at
+temperature 0.
+
+## Phase 1 (HARN-01/05/06) — control core
+
+Implements the `engine/harness/` interfaces from `docs/systemdesign.md` §6.2.
+
+| Module | Responsibility |
+|--------|----------------|
+| `harness/config.py` | Pinned model versions + temperature-0 enforcement (HARN-06) |
+| `harness/state.py`  | `GraphState` (Pydantic) + `Node` protocol + `Gate` / `Decision` / `RouteDecision` / `AutonomyMode` |
+| `harness/router.py` | Pure-code `route(confidence, threshold, gates, autonomy)` → auto/review/regenerate (HARN-05) |
+| `harness/nodes.py`  | Deterministic Research and Assemble cells + typed-cell seam |
+| `harness/graph.py`  | `Harness` (add_node/add_edge/add_conditional/compile) + `CompiledGraph` (run/resume) + checkpointer factory (HARN-01) |
+| `main.py`           | FastAPI `/healthz` + demo `POST /runs` |
+
+### §6.2 interfaces
+
+```python
+class Node(Protocol):
+    name: str
+    async def __call__(self, state: GraphState) -> GraphState: ...
+
+class Harness:
+    def add_node(self, node: Node) -> None: ...
+    def add_edge(self, src: str, dst: str) -> None: ...
+    def add_conditional(self, src: str, choose: Callable[[GraphState], str]) -> None: ...
+    def compile(self, checkpointer: BaseCheckpointSaver) -> CompiledGraph: ...
+
+class CompiledGraph:
+    async def run(self, run_id: str, init: GraphState) -> GraphState: ...
+    async def resume(self, run_id: str, decision: Decision) -> GraphState: ...  # HITL
+
+def route(confidence: float, threshold: float, gates: list[Gate],
+          autonomy: AutonomyMode) -> RouteDecision: ...  # "auto"|"review"|"regenerate"
+```
+
+`resume()` continues a graph paused at a LangGraph `interrupt()` (human-in-the-loop).
+
+### Pinned models (`docs/stack-decision.md`)
+
+- Opus — `claude-opus-4-8` (hardest writing/judging)
+- Sonnet — `claude-sonnet-4-6` (balanced default)
+- Haiku — `claude-haiku-4-5` (cheap classification/triage)
+
+### Router
+
+`route` is a pure function. Decision order (first match wins): any failed gate →
+`regenerate` (deterministic reject; re-run) → `confidence < threshold` → `review`
+→ autonomy `REVIEW` → `review` → otherwise `auto`. Default `threshold = 0.85`
+(inclusive auto bar). Regenerate is gate-driven; confidence vs the threshold
+splits auto from review.
+
+### Checkpointer
+
+`make_checkpointer()` returns LangGraph's durable `PostgresSaver` when
+`ENGINE_DATABASE_URL` is set (the operator's durable-substrate decision;
+resumable runs), and an in-memory checkpointer otherwise — so the demo and tests
+run with no external dependency. The Postgres dependency is imported lazily.
+
+## Develop
+
+```bash
+python -m venv .venv
+.venv/Scripts/python -m pip install -e ".[test]"   # add ",postgres" for the durable checkpointer
+.venv/Scripts/python -m pytest          # test
+.venv/Scripts/python -m uvicorn main:app --reload   # run
+```
+
+### Demo
+
+```bash
+curl localhost:8000/healthz
+curl -X POST localhost:8000/runs \
+  -H 'content-type: application/json' \
+  -d '{"topic": "cold email outreach", "thread_id": "demo-1"}'
+```
+
+A run drives the fixed graph (Research → Assemble) deterministically and routes
+the result through the pure-code router.

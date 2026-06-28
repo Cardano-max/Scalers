@@ -5,16 +5,32 @@ description = "Scalers engine — Control + Intelligence + Knowledge core (Pytho
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.7",
+    "pydantic-settings>=2.2",
     # Typed LLM cells (HARN-02). slim core + anthropic provider only; the
     # framework itself is provider-agnostic and tests use the built-in
     # Test/Function models, so no other provider extras are pulled in.
     "pydantic-ai-slim[anthropic]==2.0.0",
+    # Control spine (HARN-01/03/05): LangGraph StateGraph + Postgres checkpointer.
+    "langgraph>=0.2",
+    # Thin portal (HARN-01): FastAPI /healthz + webhook ingress + SSE out.
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+]
+
+[project.optional-dependencies]
+# Durable Postgres checkpointer + run-state store (HARN-03). Imported lazily;
+# not required for the in-memory demo or the test suite.
+postgres = [
+    "langgraph-checkpoint-postgres>=2.0",
+    "psycopg[binary,pool]>=3.1",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
+    # FastAPI TestClient transport.
+    "httpx>=0.27",
 ]
 
 [tool.pytest.ini_options]
