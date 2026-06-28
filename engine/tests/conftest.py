@@ -93,9 +93,11 @@ DB_DSN = (
     or "postgresql://scalers:scalers@localhost:5432/scalers"
 )
 
-_SCHEMA_SQL = (
-    Path(__file__).resolve().parents[2] / "infra" / "initdb" / "02-side-effect-boundary.sql"
-)
+_INITDB = Path(__file__).resolve().parents[2] / "infra" / "initdb"
+# The side-effect schema chain: the exactly-once boundary (02) + the OBS-03
+# deep-link/engagement capture columns (04). Applied in order.
+_SCHEMA_SQLS = [_INITDB / "02-side-effect-boundary.sql", _INITDB / "04-side-effect-capture.sql"]
+_SCHEMA_SQL = _SCHEMA_SQLS[0]  # back-compat alias
 
 
 def _require_db() -> None:
@@ -111,10 +113,10 @@ def _require_db() -> None:
 
 
 def apply_side_effect_schema_sync() -> None:
-    """Apply the outbox/ledger schema + truncate (sync, for non-async setups)."""
-    schema = _SCHEMA_SQL.read_text(encoding="utf-8")
+    """Apply the outbox/ledger schema chain + truncate (sync, for non-async setups)."""
     with psycopg.connect(DB_DSN, autocommit=True) as conn:
-        conn.execute(schema)
+        for sql in _SCHEMA_SQLS:
+            conn.execute(sql.read_text(encoding="utf-8"))
         conn.execute("TRUNCATE side_effect_ledger, outbox RESTART IDENTITY")
 
 
@@ -122,10 +124,10 @@ def apply_side_effect_schema_sync() -> None:
 async def db():
     """A clean, schema-applied async connection; tables truncated per test."""
     _require_db()
-    assert _SCHEMA_SQL.exists(), f"schema migration missing: {_SCHEMA_SQL}"
-    schema = _SCHEMA_SQL.read_text(encoding="utf-8")
     async with await psycopg.AsyncConnection.connect(DB_DSN, autocommit=True) as setup:
-        await setup.execute(schema)
+        for sql in _SCHEMA_SQLS:
+            assert sql.exists(), f"schema migration missing: {sql}"
+            await setup.execute(sql.read_text(encoding="utf-8"))
         await setup.execute("TRUNCATE side_effect_ledger, outbox RESTART IDENTITY")
 
     conn = await psycopg.AsyncConnection.connect(DB_DSN, autocommit=False)
