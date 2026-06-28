@@ -64,5 +64,9 @@ shows them at `/alerts` + `/api/v1/rules` with no extra component. Covers: engin
 failure rate, run/cell latency p95, gate failure spike, side-effect failure rate, complaint rate, publish
 quota near limit. **Notification routing needs Alertmanager** (not wired — add if paging is wanted).
 
+> Canonical failure token is `failed` in both `scalers_runs_total.status` and `scalers_side_effects_total.outcome`
+> (confirmed with eng3). The run-`failed` and side-effect paths land in **Phase 6** (the real publish loop), so
+> `HighRunFailureRate` and `SideEffectFailureRate` read **empty until then — expected, not a broken alert**.
+
 ## Feeds
 Console **System-health** card + the obs slice (`kkg`) read from these same series / Grafana.

@@ -4,10 +4,16 @@
 # (Slack/email) needs Alertmanager — not wired here; add it if paging is wanted.
 #
 # Label-value note: `status` (scalers_runs_total) and `outcome`
-# (scalers_side_effects_total) are free-form strings emitted by the engine. The
-# failure regexes below track eng3's current vocabulary (success="completed",
-# failure="failed"; side-effect "sent"/"failed"/"deduped"). Re-confirm the regex
-# as more emit points land (coordinated with eng3 on 13u).
+# (scalers_side_effects_total) are free-form strings emitted by the engine.
+# Canonical failure token (confirmed with eng3, 13u): **"failed"** in BOTH series
+# (runs: "completed"/"failed"; side-effects: "sent"/"deduped"/"failed"). The
+# regexes below match "failed" plus defensive extras (harmless if never emitted).
+#
+# NOT-YET-WIRED (expected, non-gating): the run-"failed" path and side-effect
+# outcomes land with the real publish loop in **Phase 6**; until then the SSE path
+# only records status="completed". So HighRunFailureRate and SideEffectFailureRate
+# read EMPTY until Phase 6 — that is correct, not a broken alert. eng3 keeps
+# "failed" canonical when wiring, so these fire unchanged.
 groups:
   - name: scalers-engine-availability
     rules:
