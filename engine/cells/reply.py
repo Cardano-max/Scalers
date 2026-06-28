@@ -49,7 +49,6 @@ from cells.validators import (
     Severity,
     ValidationIssue,
     ValidatorBank,
-    banned_phrases,
     no_placeholder,
     non_empty,
     word_count_between,
@@ -140,9 +139,8 @@ def reply_validators(*, config: FlaggerConfig = FlaggerConfig()) -> ValidatorBan
     return ValidatorBank(validators=(
         non_empty("text"),
         no_placeholder("text"),
-        banned_phrases("text"),
         word_count_between("text", 1, _REPLY_MAX_WORDS),
-        ai_flagger("text", config),          # S3
+        ai_flagger("text", config),          # S3 (covers banned-slop via AF-05 BANNED_SLOP)
         dm_requires_escalation(),            # HARD RULE (boundary)
         expertise_requires_escalation(),
     ))

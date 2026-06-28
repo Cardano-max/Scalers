@@ -1,0 +1,26 @@
+outreach-sequence-builder skill
+===============================
+
+PATTERN-ONLY re-authoring. Reproduces NONE of any upstream skill's text, scripts,
+or assets — only the high-level idea ("buying signal in → multi-touch sequence
+out"), re-written as original methodology, constrained to email, and retargeted
+to tattoo-studio outreach. Grounded in docs/skills/winning-strategies-kb.md.
+
+Upstream pattern : "outreach-sequence-builder" (r/ClaudeAI 20-skills list)
+Pinned commit    : ORIGINAL (no upstream code vendored)   # sec resolves/verifies the real 40-hex SHA
+                   at fetch; non-loadable until filled (vetting-protocol.md).
+
+NOT ADOPTED / mine-patterns-only
+--------------------------------
+- `growthenginenowoslawski/coldoutboundskills` — **REJECTED** (registry): its
+  scripts SPEND REAL MONEY (Dynadot bulk domain purchase) + create live
+  Instantly/Smartlead campaigns. We mine the *pattern* only; none of it is vendored.
+- `coreyhaines31/marketingskills` email-SEND CLIs (resend/sendgrid/postmark) —
+  **REJECTED** by default; not vendored. Sending is the harness side-effect
+  boundary (exactly-once), gated by bead 439 — never an off-the-shelf sender.
+
+WHAT SURVIVES
+-------------
+SKILL.md (original methodology) + references/*.md only. Prompt-only. The
+enforcement is our deterministic `engine/outreach/` policy. No network, file,
+exec, credential, or money surface ships with this skill. NEVER auto-sends.

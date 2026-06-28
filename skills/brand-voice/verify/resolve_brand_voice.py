@@ -74,6 +74,11 @@ class BrandVoiceContext:
     examples: list[dict] = field(default_factory=list)  # on-voice grounding few-shots
     degraded: bool = False                      # True => sparse tenant, positioning-only
     notes: list[str] = field(default_factory=list)
+    # The emitted VoiceDimensions (a9m.3 / voice-grounding-contract §1, §2): the
+    # machine-readable {tone, vocabulary{prefer,ban,approved_claims,emoji_policy,
+    # hashtag_policy}, structure} surfaced from brand-dna.md. None only if the
+    # bundle ships no voice-dimensions.json (a misconfig the slice surfaces).
+    dimensions: dict | None = None
 
     def system_prompt(self, base_instructions: str, n_examples: int = 4) -> str:
         """Assemble the cell's system prompt: brand context FIRST, then the task.
@@ -125,6 +130,16 @@ def _load_examples(path: Path) -> list[dict]:
     return out
 
 
+def _load_dimensions(path: Path) -> dict | None:
+    """Load the emitted VoiceDimensions (voice-dimensions.json), or None if absent."""
+    if not path.is_file():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    # The skill emits the `dimensions` block; tolerate either the full file
+    # (with tenant_id/source) or a bare dimensions object.
+    return data.get("dimensions", data)
+
+
 def resolve(tenant_id: str, *, packs_dir: Path = DEFAULT_PACKS_DIR,
             skill_dir: Path = SKILL_DIR) -> BrandVoiceContext:
     """Resolve `brand-voice/<tenant>` into a BrandVoiceContext.
@@ -151,15 +166,18 @@ def resolve(tenant_id: str, *, packs_dir: Path = DEFAULT_PACKS_DIR,
     dna_path = tdir / "brand-dna.md"
     examples = _load_examples(tdir / "examples.jsonl")
     grounding = [e for e in examples if e.get("split") == "grounding"]
+    dimensions = _load_dimensions(tdir / "voice-dimensions.json")  # emitted VoiceDimensions
 
     notes: list[str] = []
+    if dimensions is None:
+        notes.append(f"no voice-dimensions.json for {artist!r}; dimensions unavailable (misconfig)")
     if not dna_path.is_file() or not dna_path.read_text(encoding="utf-8").strip():
         # New artist, little past content -> positioning-only graceful degrade.
         notes.append(f"no brand DNA for {artist!r}; degraded to positioning-only")
         return BrandVoiceContext(
             tenant_id=tenant_id, skill_ref=skill_ref,
             brand_dna="(no brand DNA on file — positioning-only)",
-            examples=[], degraded=True, notes=notes,
+            examples=[], degraded=True, notes=notes, dimensions=dimensions,
         )
 
     if not grounding:
@@ -168,5 +186,5 @@ def resolve(tenant_id: str, *, packs_dir: Path = DEFAULT_PACKS_DIR,
     return BrandVoiceContext(
         tenant_id=tenant_id, skill_ref=skill_ref,
         brand_dna=dna_path.read_text(encoding="utf-8"),
-        examples=grounding, degraded=False, notes=notes,
+        examples=grounding, degraded=False, notes=notes, dimensions=dimensions,
     )

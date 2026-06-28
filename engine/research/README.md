@@ -76,6 +76,27 @@ the engine runs end-to-end now. To go live:
 Until step 4, the router degrades cleanly: an un-wired live provider is skipped
 with a note, never an exception.
 
+## Live-go security gate (HARD — sec re-vet before any live provider ships)
+
+Enforced in `research/safety.py`; the live providers are wired through it so the
+conditions cannot be skipped:
+
+- **TLS-in-code** — `assert_safe_url` rejects any non-`https://` target; the
+  upstream TLS-disabled `fetch.py` stays stripped.
+- **official-API-only** — `assert_official_endpoint` allowlists the API base host
+  per provider (`api.firecrawl.dev`; `api.foreplay.co` / `graph.facebook.com`).
+- **SSRF guard on `fetch(url)`** — `assert_safe_url` blocks private / loopback /
+  link-local / reserved / cloud-metadata targets and URLs with embedded
+  credentials. `FirecrawlProvider.fetch` runs it **before** anything else; the
+  live client must additionally re-check the *resolved* IP after DNS.
+- **rate limits** — every provider carries a `RateLimiter` token bucket (respect
+  source ToS / API caps).
+- **key-from-pack** — providers take the key in their constructor from the tenant
+  pack secret / env, never a vendored `.env`, never `GITHUB_TOKEN`.
+
+sec must re-vet these on the live wiring before the providers leave MOCK/fixture
+mode (recorded against bead 1mk.4; carries forward to the Phase-3 a9m.2 adapter).
+
 ## Eval
 
 Research output quality is gated against a gold set (Phase-2 `rvy`). A smoke set

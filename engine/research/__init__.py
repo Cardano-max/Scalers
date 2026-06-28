@@ -25,6 +25,16 @@ from research.adapter import (
 )
 from research.providers import FirecrawlProvider, FixtureProvider, MetaAdLibraryProvider
 from research.router import ResearchRouter
+from research.safety import (
+    OFFICIAL_API_HOSTS,
+    RateLimiter,
+    RateLimitError,
+    SSRFError,
+    assert_official_endpoint,
+    assert_resolved_ips_safe,
+    assert_safe_url,
+    resolve_and_pin,
+)
 
 
 def default_registry(*, use_fixture: bool = True) -> dict[str, SourceProvider]:
@@ -61,4 +71,12 @@ __all__ = [
     "FirecrawlProvider",
     "MetaAdLibraryProvider",
     "default_registry",
+    "assert_safe_url",
+    "assert_official_endpoint",
+    "assert_resolved_ips_safe",
+    "resolve_and_pin",
+    "SSRFError",
+    "RateLimiter",
+    "RateLimitError",
+    "OFFICIAL_API_HOSTS",
 ]

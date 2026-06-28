@@ -67,6 +67,25 @@ N on-voice examples pulled from `examples_uri` / the KB). See
 `verify/resolve_brand_voice.py` for the reference resolver and the exact assembly
 order.
 
+## Emitted VoiceDimensions (a9m.3 / KNOW-02)
+
+The skill also **emits typed `VoiceDimensions`** (the machine-readable view of the
+DNA) that the Phase-3 `build_voice_grounding` (a9m.3) and Draft cell (a9m.5)
+consume — per `pmm`'s `positioning/voice-grounding-contract.md` §1/§2. Each tenant
+bundle ships `tenants/<tenant>/voice-dimensions.json`:
+
+```
+dimensions = { tone: [...], structure: [...],
+               vocabulary: { prefer, ban, approved_claims, emoji_policy, hashtag_policy } }
+```
+
+The resolver returns it on `BrandVoiceContext.dimensions`. The mapping from DNA
+sections → dimensions is fixed (Voice & tone → `tone`/`structure`/emoji+hashtag
+policy; Do → `prefer`; Do-not → `ban`; Approved claims → `approved_claims`), so at
+onboarding you swap `brand-dna.md` + `voice-dimensions.json` together and the
+dimensions regenerate with **zero rework**. The emission is verified == the
+reference fill in `verify/demo_brand_grounding.py`.
+
 ## The brand-DNA contract
 
 Every tenant DNA file (`tenants/<tenant>/brand-dna.md`, schema in

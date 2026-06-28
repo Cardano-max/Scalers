@@ -211,7 +211,26 @@ class GateDisposition(str, Enum): REGENERATE = "regenerate"; ESCALATE = "escalat
 # Gate gains: on_fail: GateDisposition = REGENERATE   # default preserves current 2kp routing
 ```
 
-Two distinct content gates read the `VoiceDimensions.vocabulary` lists: `claim`/`banned_phrase` (allowlist miss / `ban`) → **REGENERATE**-then-escalate (bounded); `sensitive_ban` (matches the `sensitive_ban` pattern set) → **ESCALATE** immediately (straight to human-review, skip regenerate). Router order becomes: **(1) any ESCALATE-gate failed → review** · (2) any REGENERATE-gate failed → regenerate · (3) confidence < threshold → review · (4) dial REVIEW → review · (5) auto.
+Two distinct content gates read the `VoiceDimensions.vocabulary` lists: `claim`/`banned_phrase` (allowlist miss / `ban`) → **REGENERATE**-then-escalate (bounded); `sensitive_ban` (matches the `sensitive_ban` pattern set) → **ESCALATE** immediately (straight to human-review, skip regenerate).
+
+### The unified `router.route` precedence (one ordering for 2kp + b3f + a9m.10)
+
+**THREE beads modify the single pure function `router.route`** — `2kp` (merged: pack dial as source of truth), `b3f` (P0: `AutonomyMode.HOLD` forces review for held tenants), `a9m.10` (escalate-gate). To prevent collision they share **one** documented ordering (first match wins), arch-pinned and operator-approved:
+
+| # | Condition | → | Owner |
+|---|-----------|---|-------|
+| 1 | any **ESCALATE**-gate failed (`sensitive_ban`) | review | a9m.10 |
+| 2 | any **REGENERATE**-gate failed (banned/claim/media) | regenerate | existing |
+| 3 | tenant **HELD** (`AutonomyMode.HOLD`) | review | b3f |
+| 4 | confidence < threshold | review | 2kp |
+| 5 | dial = REVIEW | review | 2kp |
+| 6 | (else) | auto | — |
+
+**Why HOLD at rule 3 (below regenerate):** a held tenant still **never reaches rule 6 (auto)** — escalate→review (1); a regenerate (2) re-drafts, re-enters `route()`, and a clean draft then hits HELD→review (3); a clean draft hits HELD→review (3) directly. Putting HOLD below regenerate avoids handing a human a broken draft we could auto-fix, and matches the operator's own "route to review OR regenerate" wording. HOLD sits **above** confidence/dial/auto so it is unconditional (held ⇒ never auto regardless of confidence).
+
+> **Safety invariant — regenerate-cap-exceeded must terminate to REVIEW, never auto (operator-flagged).** When the bounded-recovery loop (`harness/recovery.py`) exhausts the regenerate budget, the action routes to **REVIEW** — it must **never fall through to auto**, and for a held tenant this is doubly enforced (rule 3). **This is an explicit required test** (eng3 impl + qa2): *regenerate loop exhausts → review, not auto*, and *held tenant + cap exceeded → review*.
+
+**2kp conformance (verified):** the merged `route()` is `gate-fail→regenerate · conf<thr→review · dial REVIEW→review · auto` — a strict **subset** of the order above (rules 2,4,5,6), in the same relative sequence. b3f inserts rule 3 and a9m.10 splits rule-2 gates into 1+2; neither reorders an existing rule, so 2kp routing keeps conforming. **eng3 implements rules 1+3 in `route()`; qa2 verifies the final function against this exact table.**
 
 **Scoping (safety surface):** `on_fail` on `Gate` + the new router branch is a small change to the **2kp-reviewed** `harness/router.py` + `harness/state.py:Gate`. It is **additive — `on_fail` defaults to `REGENERATE`, so all existing routing is byte-for-byte unchanged** — but because it touches the vvi surface it lands as its **own bead (gate-disposition / `sensitive_ban` wiring), with pmm owning the pattern content and eng3 + qa owning the wiring + review**, NOT inside the slice. **Phase-3 ships regenerate-then-escalate now** (the safe current behavior); pmm has authored the patterns (`positioning/sensitive-ban-patterns.json`) so the data lands early (harmless until the gate reads it), and the new bead flips the disposition to escalate-immediately under review.
 

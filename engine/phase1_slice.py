@@ -41,6 +41,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from harness.graph import END, START, Harness
 from harness.nodes import ResearchNode
+from harness.hold import DEFAULT_HOLD_REGISTRY, HoldRegistry
 from harness.router import DEFAULT_THRESHOLD, route
 from harness.state import AssembleOutput, AutonomyMode, Gate, GraphState, RouteDecision
 from sideeffects import Channel, idempotency_key
@@ -197,6 +198,8 @@ def slice_route(
     channel: PackChannel,
     confidence: float,
     gates: Sequence[Gate] | None = None,
+    *,
+    held: bool = False,
 ) -> RouteDecision:
     """Route an action using the tenant PACK's autonomy dial (CustomerAcq-2kp).
 
@@ -206,8 +209,12 @@ def slice_route(
     review-mode channel (e.g. the seed pack's gmail at mode=review/0.9) routes to
     ``review`` even at high confidence, and an auto channel (instagram/facebook at
     0.85) auto-fires once confidence clears its bar. An unmapped channel is
-    fail-closed to ``review`` — never AUTO (CustomerAcq-epq).
+    fail-closed to ``review`` — never AUTO (CustomerAcq-epq). When ``held`` is set
+    (bead-439 / CustomerAcq-b3f), HOLD overrides the pack dial entirely — the
+    action routes to ``review`` (never AUTO) regardless of confidence or mode.
     """
+    if held:
+        return route(confidence, DEFAULT_THRESHOLD, gates, AutonomyMode.HOLD)
     threshold, autonomy = _resolve_routing(pack, channel)
     return route(confidence, threshold, gates, autonomy)
 
@@ -270,6 +277,7 @@ async def run_slice(
     gates: Sequence[Gate] | None = None,
     target: str = "feed",
     checkpointer=None,
+    hold_registry: HoldRegistry = DEFAULT_HOLD_REGISTRY,
 ) -> SliceResult:
     """Run the deterministic Phase-1 slice end to end and return what happened.
 
@@ -287,6 +295,12 @@ async def run_slice(
     # The pack autonomy dial drives routing (fail-closed: an unmapped channel can
     # never AUTO); map the platform channel to its side-effect bucket for the outbox.
     threshold, autonomy = _resolve_routing(pack, channel)
+    # bead-439 (CustomerAcq-b3f): a held tenant/channel never auto-fires. The
+    # registry is FAIL-SAFE (held unless explicitly lifted), so HOLD overrides the
+    # pack dial in both the graph edge and the final decision below.
+    held = hold_registry.is_held(tenant_id, channel.value)
+    if held:
+        autonomy = AutonomyMode.HOLD
     side_channel = _SIDE_EFFECT_CHANNEL[channel]
     # CustomerAcq-4hj / ADR #38 Decision 5: IG and FB both map to side_channel
     # POSTING, so without the platform the idempotency key would collide and
@@ -310,7 +324,7 @@ async def run_slice(
         run_id, GraphState(tenant_id=tenant_id, run_id=run_id, topic=topic)
     )
 
-    decision = slice_route(pack, channel, state.confidence or 0.0, gates)
+    decision = slice_route(pack, channel, state.confidence or 0.0, gates, held=held)
     result = SliceResult(
         pack=pack, state=state, decision=decision, steps=list(state.step_log)
     )

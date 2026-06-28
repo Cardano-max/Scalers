@@ -17,6 +17,12 @@ from typing import Annotated, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
+# Phase-3 content-engine channels (a9m.4): the research result the Ideate cell
+# consumes, the candidate angles it proposes, and the angle SelectAngle picked.
+from cells.ideate import AngleSet
+from cells.select_angle import AngleSelection
+from research.content.items import ResearchResult
+
 
 class RouteDecision(str, Enum):
     """What the harness does with a produced action (systemdesign §6.2).
@@ -36,10 +42,14 @@ class AutonomyMode(str, Enum):
 
     ``AUTO`` permits auto actions when confidence clears the bar; ``REVIEW``
     forces a human to sign off on anything that would otherwise auto-fire.
+    ``HOLD`` is the bead-439 safety hold: it forces human review unconditionally
+    — overriding confidence, gates, and the dial — so a held tenant/channel can
+    never auto-fire (CustomerAcq-b3f). It is the strongest, fail-safe mode.
     """
 
     AUTO = "auto"
     REVIEW = "review"
+    HOLD = "hold"
 
 
 class Gate(BaseModel):
@@ -118,6 +128,12 @@ class GraphState(BaseModel):
 
     research: ResearchOutput | None = None
     assembled: AssembleOutput | None = None
+
+    # Phase-3 content engine (a9m.4): research -> ideate -> select-angle. Each is
+    # last-value (the current run's working artifact, not an accumulation).
+    research_result: ResearchResult | None = None
+    angles: AngleSet | None = None
+    angle: AngleSelection | None = None
 
     confidence: float | None = None
     gates: Annotated[list[Gate], _last_value] = Field(default_factory=list)
