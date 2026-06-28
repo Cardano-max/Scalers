@@ -18,6 +18,7 @@ Exits non-zero if any grounding assertion fails.
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 import tempfile
@@ -30,7 +31,7 @@ except (AttributeError, ValueError):
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from resolve_brand_voice import (  # noqa: E402
-    REPO_ROOT, resolve, BrandVoiceContext, BrandVoiceError,
+    REPO_ROOT, SKILL_DIR, resolve, BrandVoiceContext, BrandVoiceError,
 )
 
 CELL = REPO_ROOT / "engine" / "cells" / "content_brief.py"
@@ -129,6 +130,18 @@ def main() -> int:
             print("  PASS — skill_ref artist '../../../../secrets' rejected")
         else:
             raise AssertionError("malicious skill_ref artist was NOT rejected")
+
+    banner("VOICE DIMENSIONS — skill emits the a9m.3 VoiceDimensions from the DNA")
+    dims = ctx.dimensions
+    assert dims is not None, "skill emitted no VoiceDimensions"
+    assert set(dims) >= {"tone", "vocabulary", "structure"}, f"missing dims: {set(dims)}"
+    assert {"prefer", "ban", "approved_claims", "emoji_policy", "hashtag_policy"} <= set(dims["vocabulary"])
+    ref = json.loads((SKILL_DIR / "tenants" / "ink-studio" / "voice-dimensions.json")
+                     .read_text(encoding="utf-8"))["dimensions"]
+    assert dims == ref, "emitted dimensions != reference fill"
+    print(f"  PASS — dimensions emitted (tone[{len(dims['tone'])}], structure[{len(dims['structure'])}], "
+          f"ban[{len(dims['vocabulary']['ban'])}], approved_claims[{len(dims['vocabulary']['approved_claims'])}])")
+    print("  PASS — emission matches the voice-dimensions.json reference fill (contract §1/§2)")
 
     banner("RESULT")
     print("All grounding + edge-case assertions passed.")

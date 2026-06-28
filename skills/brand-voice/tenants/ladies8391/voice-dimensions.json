@@ -1,0 +1,48 @@
+{
+  "_note": "TEST tenant ladies8391 — concrete VoiceDimensions fill derived from brand-dna.md, matching the arch-locked shape (a9m.1 Decision 3). The brand-voice skill (1mk.2) emits this from the DNA at resolve time; this file is the reference fill for the eng cell to test build_voice_grounding against and for writer to verify the skill's emission. Real client: regenerated from the real DNA at onboarding (zero rework).",
+  "tenant_id": "ladies8391",
+  "dimensions": {
+    "tone": [
+      "warm, direct, encouraging, a little playful — a confident woman artist talking like a friend",
+      "first person singular 'I' (Rae); the studio is 'the studio' or 'Ladies First', never a faceless corporate 'we'",
+      "CTA: warm and concrete invite, never a hard close ('DM me to start your design', 'consults are free — link in bio')",
+      "not: brand/salesperson voice, girlboss-caption, clinical, edgy-for-shock"
+    ],
+    "structure": [
+      "short, conversational, concrete sentences; often one idea per line",
+      "open on the client or what the piece means to her, not on the studio",
+      "be honest about pain, placement, and healing; let the work and meaning carry the post",
+      "0-2 approved emoji per caption; 3-6 specific lowercase hashtags; no 20-tag walls"
+    ],
+    "vocabulary": {
+      "prefer": [
+        "made for you", "drawn for you", "your story", "take our time", "safe space",
+        "women-first", "cover-up", "reclaim", "bold", "color that heals bright",
+        "no rush", "no dumb questions"
+      ],
+      "ban": [
+        "unleash your inner queen/goddess", "slay", "boss babe", "treat yourself queen",
+        "main character energy", "obsessed", "level up", "you deserve this",
+        "unleash", "elevate your look", "dive in", "game-changer", "in today's world",
+        "let's face it", "look no further", "one-stop", "transform your look",
+        "painless / any pain promise", "best / #1 / superlatives", "walk-in / flash framing",
+        "macho/biker framing", "price/discount language", "medical claims or healing guarantees",
+        "AI-tells: em-dash-as-drama, rule-of-three padding, contrast framing ('it's not just X, it's Y')",
+        "hype emoji: 🔥 💯 ✨ 👑 🙌"
+      ],
+      "approved_claims": [
+        "Woman-owned, appointment-only studio in Austin, TX.",
+        "9 years tattooing, specializing in neo-traditional color and floral work.",
+        "Experienced in cover-ups and scar / post-surgery (including post-mastectomy) tattoos.",
+        "Free consultation before every booking.",
+        "Topical numbing available on request.",
+        "Licensed and bloodborne-pathogen certified in Texas.",
+        "Custom designs drawn for you — no flash copies."
+      ],
+      "emoji_policy": "0-2 per caption, only 🌸 🌷 🤍; never 🔥💯✨👑🙌 or hype emoji",
+      "hashtag_policy": "3-6, lowercase, specific (#neotraditionaltattoo #floraltattoo #womentattooartist #austintattoo #coveruptattoo #scarcoveruptattoo); never #inkedlife/#tattoooftheday spam or 20-tag walls"
+    }
+  },
+  "source": "skills/brand-voice/tenants/ladies8391/brand-dna.md (Voice & tone rules + Do/Do-not + Approved claims sections)",
+  "claims_discipline": "approved_claims is the allow-list: a draft MUST block + escalate on any factual/credential/offer claim not in this list."
+}
