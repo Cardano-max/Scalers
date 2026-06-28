@@ -8,11 +8,19 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.egg-info/
 # Env / secrets
 .env
 .env.*
-!.env.example
 *.local
+# ...but keep committed example templates
+!.env.example
+!*.env.example
 # Data / infra
 *.db
 *.sqlite

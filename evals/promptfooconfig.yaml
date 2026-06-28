@@ -1,0 +1,37 @@
+# promptfoo eval-gate config — STUB (Phase 1).
+#
+# Per the stack decision, promptfoo (and/or DeepEval) provides CI-style eval
+# gating per release, layered on top of self-hosted Langfuse for traces/evals.
+#
+# This is a non-blocking placeholder: the real gold set + assertions land in
+# Phase 2 ("Eval spine & gold set"). It is wired into scripts/done_gate.py but is
+# OPT-IN — it only runs when EVAL_GATE=1, so Phase-1 CI stays green without model
+# keys. When Phase 2 lands, replace the echo provider with the real engine cell
+# and point `tests` at the gold set.
+#
+# Run manually:  EVAL_GATE=1 python scripts/done_gate.py
+#           or:  npx promptfoo eval -c evals/promptfooconfig.yaml
+
+description: "Scalers eval gate (stub — real gold set arrives in Phase 2)"
+
+prompts:
+  - "Echo the brand-safe slogan: {{slogan}}"
+
+# Deterministic echo provider — no network/model keys needed for the stub.
+providers:
+  - id: echo
+
+defaultTest:
+  options:
+    # Promotion gate: fail the build if the pass rate drops below this.
+    # STUB threshold; calibrate against the gold set in Phase 2.
+    threshold: 1.0
+
+tests:
+  - vars:
+      slogan: "ink that lasts"
+    assert:
+      - type: contains
+        value: "ink that lasts"
+      - type: not-contains
+        value: "guaranteed"   # placeholder banned-phrase check
