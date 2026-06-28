@@ -31,9 +31,12 @@ connector, which dedupes, so the effect still happens exactly once.
 
 from __future__ import annotations
 
+import json
 from typing import Protocol, runtime_checkable
 
 import psycopg
+
+from sideeffects.provider import ProviderResult, as_provider_result
 
 # Must be >= 2: a crash-after-send is recovered by a SUBSEQUENT drain, which
 # consumes one attempt. With max_attempts=1 a single crash-after-effect would be
@@ -52,8 +55,12 @@ class Connector(Protocol):
     implement it with an idempotency token derived from ``key``.
     """
 
-    async def send(self, key: str, channel: str, payload: dict) -> str:
-        """Perform the effect (idempotently) and return the provider id."""
+    async def send(self, key: str, channel: str, payload: dict) -> "ProviderResult | str":
+        """Perform the effect (idempotently) and return its provider result.
+
+        Returns a :class:`ProviderResult` (provider id + deep_link/external id/
+        thread_ref captured for OBS-03), or a bare provider-id ``str`` (coerced).
+        """
         ...
 
 
@@ -146,17 +153,22 @@ class Dispatcher:
     ) -> bool:
         """Phase B (send, unless already SENT) + Phase C (settle). Returns True if
         the row reached SENT. Catches per-row failures and re-queues/FAILs them."""
+        result: ProviderResult | None = None
         if ledger_status != "SENT":
             try:
-                provider_id = await self._connector.send(key, channel, payload)
+                result = as_provider_result(await self._connector.send(key, channel, payload))
             except Exception as exc:  # noqa: BLE001 - isolate one row from the drain
                 await self._record_failure(conn, outbox_id, exc)
                 return False
+            provider_id = result.provider_id
 
         # Phase C: settle (own committed tx). Lock outbox BEFORE ledger to match
         # the claim phase's order (outbox -> ledger), so concurrent dispatchers
-        # on the same key can never form a lock cycle. COALESCE keeps a provider
-        # id that a prior attempt already recorded.
+        # on the same key can never form a lock cycle. COALESCE keeps the values a
+        # prior attempt already recorded — so capture is idempotent under retry
+        # (OBS-03: provider_result + deep_link captured once, keyed to idem).
+        result_json = json.dumps(result.to_jsonb()) if result is not None else None
+        deep_link = result.deep_link if result is not None else None
         async with conn.transaction():
             await conn.execute(
                 "UPDATE outbox SET status = 'SENT', updated_at = now() WHERE id = %s",
@@ -164,9 +176,13 @@ class Dispatcher:
             )
             await conn.execute(
                 "UPDATE side_effect_ledger"
-                " SET status = 'SENT', provider_id = COALESCE(provider_id, %s)"
+                " SET status = 'SENT',"
+                "     provider_id = COALESCE(provider_id, %s),"
+                "     provider_result = COALESCE(provider_result, %s),"
+                "     deep_link = COALESCE(deep_link, %s),"
+                "     updated_at = now()"
                 " WHERE idempotency_key = %s",
-                (provider_id, key),
+                (provider_id, result_json, deep_link, key),
             )
         return True
 

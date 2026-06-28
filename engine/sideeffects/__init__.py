@@ -14,6 +14,16 @@ double-fire — the boundary minimizes that window and the redundant call, but
 cannot abolish it.
 """
 
+from sideeffects.capture import capture_engagement, capture_provider_result, redact_pii
 from sideeffects.keys import Channel, idempotency_key
+from sideeffects.provider import ProviderResult, as_provider_result
 
-__all__ = ["Channel", "idempotency_key"]
+__all__ = [
+    "Channel",
+    "idempotency_key",
+    "ProviderResult",
+    "as_provider_result",
+    "capture_engagement",
+    "capture_provider_result",
+    "redact_pii",
+]
