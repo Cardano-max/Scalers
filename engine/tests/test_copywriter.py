@@ -25,7 +25,6 @@ from cells.copywriter import (
     build_copywriter_instructions,
     copywriter_validators,
 )
-from cells.validators import Severity
 
 
 # --------------------------------------------------------------------------- #
