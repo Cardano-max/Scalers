@@ -1,0 +1,26 @@
+competitor-pr-finder skill
+==========================
+
+This skill is a PATTERN-ONLY re-authoring. It reproduces NONE of any upstream
+skill's text, scripts, or assets — only the high-level idea ("find where
+competitors win attention + extract the angle as a ready seed"), retargeted from
+press/journalist mining to tattoo ad-creative mining and re-written as original
+methodology grounded in docs/skills/winning-strategies-kb.md.
+
+Upstream pattern : "competitor-pr-finder" (r/ClaudeAI 20-skills list; family:
+                   coreyhaines31/marketingskills, MIT)
+Pinned commit    : 8bfcdffb655f16e713940cd04fb08891899c47db   # sec resolves/verifies the real 40-hex SHA
+                   at fetch; non-loadable until filled (vetting-protocol.md).
+
+STRIPPED (never vendored)
+-------------------------
+- Any bundled network/fetch script (the family ships TLS-disabled `fetch.py` +
+  `GITHUB_TOKEN`/`.env` reads) — not vendored. Competitor-ad access runs through
+  the vetted Meta-Ad-Library/Foreplay adapter, official API, TLS on.
+- The 67 bundled live-API CLIs from the parent marketingskills repo — not vendored.
+
+WHAT SURVIVES
+-------------
+SKILL.md (original methodology) + references/*.md only. Prompt-only; no network,
+file, exec, or credential surface. IP posture: we extract angles/patterns, never
+reproduce a competitor's creative.
