@@ -17,6 +17,9 @@ from typing import Annotated, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
+# Phase-3 content engine: the typed post draft the media/format validators (a9m.6)
+# check (produced by the draft cell, a9m.5).
+from cells.post_draft import PostDraft
 # Phase-3 content-engine channels (a9m.4): the research result the Ideate cell
 # consumes, the candidate angles it proposes, and the angle SelectAngle picked.
 from cells.ideate import AngleSet
@@ -129,6 +132,8 @@ class GraphState(BaseModel):
     research: ResearchOutput | None = None
     assembled: AssembleOutput | None = None
 
+    # Phase-3 posting: the draft cell's output (a9m.5), validated by a9m.6.
+    draft: PostDraft | None = None
     # Phase-3 content engine (a9m.4): research -> ideate -> select-angle. Each is
     # last-value (the current run's working artifact, not an accumulation).
     research_result: ResearchResult | None = None
