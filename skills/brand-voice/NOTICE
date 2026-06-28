@@ -1,0 +1,44 @@
+brand-voice skill
+=================
+
+This skill is a DERIVATIVE WORK. Its structure (a conditionally-loaded skill that
+carries a brand's specific assets and the rules for applying them) is adapted from
+Anthropic's first-party "brand-guidelines" skill.
+
+Upstream source : https://github.com/anthropics/skills (skills/brand-guidelines)
+Pinned commit   : b9e19e6f44773509fbdd7001d77ff41a49a486c1  (2026-04-20)
+Upstream license: Apache License 2.0 (skills/brand-guidelines/LICENSE.txt)
+
+Redistribution terms (Apache-2.0), confirmed at the pinned commit:
+  - Reproduction, modification, and distribution of the Work and Derivative Works
+    are permitted, royalty-free, in source or object form.
+  - This file is provided to satisfy the Apache-2.0 conditions: a copy of the
+    license accompanies this distribution, modified files carry prominent
+    modification notices, and attribution is retained.
+  - TRADEMARKS ARE NOT GRANTED. This work does not use Anthropic trade names,
+    trademarks, service marks, or product names except to describe the origin of
+    the adapted structure (this NOTICE).
+
+What we took and what we changed
+--------------------------------
+TAKEN (structure / pattern only):
+  - The skill shape: Overview + applicable-contexts keyword line + a "brand
+    guidelines" block carrying the brand's specific assets + a "features"/how-to
+    application section + technical/integration details.
+  - The convention of a `license:` field in the SKILL.md frontmatter.
+
+CHANGED (100% original content — none of Anthropic's brand content is reproduced):
+  - The upstream skill applies Anthropic's OWN visual brand (colors #141413 /
+    #d97757 etc., Poppins/Lora typography, pptx styling). NONE of that content is
+    copied here.
+  - This skill applies a per-ARTIST textual VOICE: positioning, personas,
+    messaging pillars, approved claims, do/do-not lexicon, and on-voice example
+    captions, loaded from the per-tenant pack + the winning-strategies KB.
+  - All substance is original and grounded in docs/skills/winning-strategies-kb.md.
+
+A full copy of the Apache License 2.0 is available at:
+  https://www.apache.org/licenses/LICENSE-2.0
+and at the pinned commit in skills/brand-guidelines/LICENSE.txt.
+
+Copyright notice retained per Apache-2.0 §4(c):
+  Portions of the structure (c) Anthropic, PBC, licensed under Apache-2.0.
