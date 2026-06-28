@@ -90,7 +90,7 @@ class ResearchItem:
     url: str | None
     score: float         # 0..1 single relevance/quality float — the MVP ranking key
     evidence: tuple[str, ...]
-    scores: ScoreBreakdown | None = None  # RESERVED (Decision 1a); None in a9m.2
+    breakdown: ScoreBreakdown | None = None  # RESERVED (Decision 1a); None in a9m.2
 
 @dataclass(frozen=True)
 class ResearchResult:
