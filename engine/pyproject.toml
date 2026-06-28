@@ -16,16 +16,19 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
     # Exactly-once side-effect boundary (HARN-04): Postgres outbox/ledger. Used
-    # unconditionally by engine/sideeffects, so it is a core dependency.
-    "psycopg[binary]>=3.2",
+    # unconditionally by engine/sideeffects, so it is a core dependency. This is
+    # the single source of truth for psycopg: `pool` is included here for the
+    # durable checkpointer/run-store (the [postgres] extra), so the extra does
+    # not re-declare psycopg.
+    "psycopg[binary,pool]>=3.2",
 ]
 
 [project.optional-dependencies]
 # Durable Postgres checkpointer + run-state store (HARN-03). Imported lazily;
-# not required for the in-memory demo or the test suite.
+# not required for the in-memory demo or the test suite. psycopg (incl. the
+# `pool` extra) comes from the core dependency above — not re-declared here.
 postgres = [
     "langgraph-checkpoint-postgres>=2.0",
-    "psycopg[binary,pool]>=3.1",
 ]
 # Self-hosted Langfuse traces/evals. Imported lazily by engine/observability.py;
 # the engine no-ops when it is absent or unconfigured, so it is not needed for
