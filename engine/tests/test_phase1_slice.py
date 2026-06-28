@@ -18,7 +18,8 @@ import uuid
 
 import pytest
 
-from harness.state import AutonomyMode, Gate, GraphState, RouteDecision
+from config.schema import Channel as PackChannel
+from harness.state import Gate, GraphState, RouteDecision
 from phase1_slice import EnqueueNode, build_slice_graph, run_slice
 from sideeffects import Channel
 from sideeffects.dispatcher import Dispatcher
@@ -73,20 +74,24 @@ async def test_slice_runs_research_then_typed_cell_deterministically(db, dsn):
 
 
 async def test_router_auto_fires_side_effect(db, dsn):
+    # Seed pack: instagram is auto/0.85; the assemble confidence (0.9) clears it.
     connector = MockConnector()
     result = await run_slice(
         tenant_id=TENANT, topic="auto", dsn=dsn, connector=connector,
-        assemble_model=_model(), autonomy=AutonomyMode.AUTO, threshold=0.85,
+        assemble_model=_model(), channel=PackChannel.INSTAGRAM,
     )
     assert result.decision is RouteDecision.AUTO
     assert connector.call_count == 1
 
 
-async def test_router_review_does_not_fire(db, dsn):
+async def test_pack_review_channel_does_not_fire(db, dsn):
+    # CustomerAcq-2kp on real PG: the gmail dial (mode=review/0.9) must force
+    # REVIEW even at confidence 0.9 — the slice routes on the pack, not a caller
+    # default. The OLD slice returned AUTO here and would have fired.
     connector = MockConnector()
     result = await run_slice(
         tenant_id=TENANT, topic="review", dsn=dsn, connector=connector,
-        assemble_model=_model(), autonomy=AutonomyMode.REVIEW,
+        assemble_model=_model(), channel=PackChannel.GMAIL,
     )
     assert result.decision is RouteDecision.REVIEW
     assert connector.call_count == 0

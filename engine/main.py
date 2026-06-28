@@ -17,15 +17,27 @@ import json
 from collections.abc import AsyncIterator
 
 from fastapi import FastAPI, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+import metrics
 from harness.config import get_settings
 from harness.graph import get_graph
 from harness.router import route
-from harness.state import AutonomyMode, GraphState
+from harness.state import AutonomyMode, GraphState, RouteDecision
 
 app = FastAPI(title="Scalers Growth Engine — portal", version="0.1.0")
+
+
+@app.get("/metrics")
+def metrics_endpoint() -> Response:
+    """Prometheus scrape endpoint (13u) — the 3bu stack scrapes /metrics on :8000.
+
+    Served at the exact path (a direct route, not a mounted sub-app) so there is
+    no trailing-slash redirect for Prometheus to choke on.
+    """
+    data, content_type = metrics.render()
+    return Response(content=data, media_type=content_type)
 
 
 class HealthResponse(BaseModel):
@@ -83,17 +95,24 @@ async def _run_event_stream(
     graph = await get_graph()
     init = GraphState(tenant_id=tenant_id, run_id=thread_id, topic=topic)
 
-    async for update in graph.astream(thread_id, init):
-        for node, channels in update.items():
-            yield _sse(
-                "node",
-                {"node": node, "step_log": channels.get("step_log", [])},
-            )
+    # Time the whole run for scalers_run_latency_seconds (p50/p95/p99 panel).
+    with metrics.time_run(tenant=tenant_id):
+        async for update in graph.astream(thread_id, init):
+            for node, channels in update.items():
+                yield _sse(
+                    "node",
+                    {"node": node, "step_log": channels.get("step_log", [])},
+                )
 
-    snapshot = await graph.get_state(thread_id)
-    values = snapshot.values
-    confidence = values.get("confidence") or 0.0
-    decision = route(confidence, autonomy=autonomy)
+        snapshot = await graph.get_state(thread_id)
+        values = snapshot.values
+        confidence = values.get("confidence") or 0.0
+        decision = route(confidence, autonomy=autonomy)
+
+    # Record the run + its autonomy outcome (auto vs review) for the dashboard.
+    metrics.record_run(tenant=tenant_id, status="completed")
+    outcome = "auto" if decision is RouteDecision.AUTO else "review"
+    metrics.record_decision(outcome, tenant=tenant_id, channel="posting")
     assembled = values["assembled"]
     yield _sse(
         "decision",

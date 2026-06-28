@@ -2,6 +2,8 @@
 name: brand-voice
 description: Use when any cell drafts, rewrites, or revises tenant-facing copy (captions, comment/DM replies, cold outreach, hooks/CTAs, ad copy) and the output must read as the specific artist's voice rather than generic AI. Loads that tenant's brand DNA (positioning, personas, messaging pillars, approved claims, do/do-not) and on-voice example captions before a single word is written. Trigger words: brand voice, on-voice, tone, positioning, persona, caption, copy, draft, rewrite, humanize, off-brand.
 license: Apache-2.0 (derivative — see NOTICE)
+upstream: anthropics/skills — skills/brand-guidelines (Apache-2.0)
+pinned: b9e19e6f44773509fbdd7001d77ff41a49a486c1
 ---
 
 # Brand Voice (per-artist)

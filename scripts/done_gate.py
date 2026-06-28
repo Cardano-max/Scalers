@@ -128,6 +128,19 @@ def gate_evals() -> Result:
     return _run(name, _engine_argv(["python", "-m", "evals.run_gate"]), ENGINE_DIR)
 
 
+def gate_skill_registry() -> Result:
+    """Hard gate: skill-registry consistency (1mk.10 / sec supply-chain guardrail).
+
+    Enforces the 1mk.1 HARD RULE — no registry row -> no skill use — plus
+    provenance (a vendored skill's pin must match the registry pin). Pure-Python,
+    no deps, so it runs everywhere the done-gate does.
+    """
+    script = REPO_ROOT / "scripts" / "check_skill_registry.py"
+    if not script.exists():
+        return Result("skill-registry", SKIP, "checker not present")
+    return _run("skill-registry", [sys.executable, str(script)], REPO_ROOT)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Scalers done-gate")
     parser.add_argument("--python-only", action="store_true", help="run only engine gates")
@@ -138,6 +151,7 @@ def main() -> int:
         gate_engine_lint(),
         gate_engine_format(),
         gate_engine_tests(use_coverage=not args.no_coverage),
+        gate_skill_registry(),
     ]
     if not args.python_only:
         results += [

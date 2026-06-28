@@ -20,6 +20,8 @@ dependencies = [
     # Thin portal (HARN-01): FastAPI /healthz + webhook ingress + SSE out.
     "fastapi>=0.110",
     "uvicorn>=0.29",
+    # Prometheus /metrics endpoint (13u) — feeds the 3bu Grafana dashboard.
+    "prometheus-client>=0.20",
     # Exactly-once side-effect boundary (HARN-04): Postgres outbox/ledger. Used
     # unconditionally by engine/sideeffects, so it is a core dependency. This is
     # the single source of truth for psycopg: `pool` is included here for the
@@ -40,6 +42,15 @@ postgres = [
 # the demo or the test suite.
 observability = [
     "langfuse>=2.0",
+]
+# DeepEval — OPTIONAL, NON-GATING (EVAL-03 / rvy.8). The per-commit calibration/
+# accuracy gates compute ECE/P-R/F1/kappa hermetically in-repo (evals/metrics.py)
+# so the gate stays deterministic + offline within rvy.7's CI budget, and the
+# eval_metric store is the authoritative gating source per the rvy.1 ADR. DeepEval
+# is for the periodic/trend lane (recompute the same metrics, richer reports); it
+# is never imported on the gating path, so CI runs without it installed.
+eval = [
+    "deepeval>=1.0",
 ]
 
 [dependency-groups]

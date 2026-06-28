@@ -1,0 +1,31 @@
+map-your-market skill
+=====================
+
+This skill is a PATTERN-ONLY re-authoring. It reproduces NONE of any upstream
+skill's text, scripts, or assets — only the high-level idea ("mine where demand
+surfaces, output ICP + messaging angles"), retargeted to tattoo-native sources
+and re-written as original methodology grounded in
+docs/skills/winning-strategies-kb.md.
+
+Upstream pattern : "map-your-market" (r/ClaudeAI 20-skills list; family:
+                   coreyhaines31/marketingskills, MIT)
+Pinned commit    : 8bfcdffb655f16e713940cd04fb08891899c47db   # sec resolves + verifies the real 40-hex
+                   SHA at fetch time. The alias name is NOT provenance; this row
+                   is non-loadable until the SHA is filled (vetting-protocol.md).
+
+STRIPPED (never vendored)
+-------------------------
+- `fetch.py` — disabled TLS verification (`ssl._create_unverified_context()` /
+  `CERT_NONE`) for outbound network. Removed in full; all fetching now runs
+  through the vetted research adapter with TLS verification restored.
+- `.env.example` + `GITHUB_TOKEN` read — removed; no credential harvesting. Keys
+  come from the tenant pack secrets, never a vendored env file.
+- The 67 bundled live-API CLIs from the parent marketingskills repo
+  (apollo/zoominfo/clearbit/hunter data-brokers; resend/sendgrid/postmark email
+  senders; semrush/ahrefs/firecrawl) — NOT vendored.
+
+WHAT SURVIVES
+-------------
+SKILL.md (original methodology) + references/*.md only. Prompt-only. No network,
+file, exec, or credential surface ships with this skill. Network is the research
+adapter's job (official APIs, TLS on).

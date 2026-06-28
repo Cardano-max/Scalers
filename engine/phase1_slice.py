@@ -32,8 +32,10 @@ from dataclasses import dataclass, field
 import psycopg
 from pydantic_ai.models import KnownModelName, Model
 
+from autonomy.produce import resolve_channel_policy
 from cells.content_brief import ContentBrief, build_content_brief_cell
 from config.loader import load_pack
+from config.schema import Channel as PackChannel
 from config.schema import TenantPack
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -44,6 +46,52 @@ from harness.state import AssembleOutput, AutonomyMode, Gate, GraphState, RouteD
 from sideeffects import Channel, idempotency_key
 from sideeffects.boundary import EnqueueStatus, SideEffectBoundary
 from sideeffects.dispatcher import Connector, Dispatcher
+
+# Pack/platform channel (config.Channel) -> side-effect channel (sideeffects.Channel).
+# Two different axes: the per-tenant pack dial is keyed by platform (instagram /
+# facebook / gmail) while the outbox is keyed by effect type (posting / outreach /
+# engagement). The slice's input is the pack channel — the autonomy source of
+# truth (CustomerAcq-2kp) — and this map gives the outbox the right effect bucket.
+_SIDE_EFFECT_CHANNEL: dict[PackChannel, Channel] = {
+    PackChannel.INSTAGRAM: Channel.POSTING,
+    PackChannel.FACEBOOK: Channel.POSTING,
+    PackChannel.GMAIL: Channel.OUTREACH,
+}
+
+
+def _assert_channel_map_total(mapping: dict[PackChannel, Channel]) -> None:
+    """Fail fast if any ``config.Channel`` lacks a side-effect mapping (CustomerAcq-epq).
+
+    Structural totality on the vvi safety surface: a future-added channel must
+    never silently fall through to AUTO. This runs at **import**, so adding a new
+    enum value without mapping it breaks the build/test immediately — the totality
+    guarantee is structural, not just test-guarded.
+    """
+    missing = set(PackChannel) - set(mapping)
+    if missing:
+        raise RuntimeError(
+            "config.Channel -> side-effect channel mapping is not total; unmapped: "
+            f"{sorted(c.value for c in missing)}. Add them to _SIDE_EFFECT_CHANNEL "
+            "(an unmapped channel cannot be auto-delivered and must never route AUTO)."
+        )
+
+
+# Enforce totality at import: a new channel without a mapping fails fast here.
+_assert_channel_map_total(_SIDE_EFFECT_CHANNEL)
+
+
+def _resolve_routing(pack: TenantPack, channel: PackChannel) -> tuple[float, AutonomyMode]:
+    """Resolve ``(threshold, autonomy)`` from the pack dial, **fail-closed**.
+
+    A channel with no side-effect target cannot be auto-delivered, so it is forced
+    to ``REVIEW`` regardless of the pack dial — it must never route AUTO
+    (CustomerAcq-epq, defense-in-depth behind the import-time totality guard). The
+    guard makes this unreachable for real channels; this is the belt to its braces.
+    """
+    threshold, autonomy = resolve_channel_policy(pack, channel)
+    if channel not in _SIDE_EFFECT_CHANNEL:
+        autonomy = AutonomyMode.REVIEW
+    return threshold, autonomy
 
 # Deterministic placeholder confidence for the Phase-1 assemble cell. A real
 # self-consistency confidence computer lands in Phase 5; here the slice exercises
@@ -144,6 +192,26 @@ def _make_route_edge(threshold: float, gates: Sequence[Gate] | None, autonomy: A
     return choose
 
 
+def slice_route(
+    pack: TenantPack,
+    channel: PackChannel,
+    confidence: float,
+    gates: Sequence[Gate] | None = None,
+) -> RouteDecision:
+    """Route an action using the tenant PACK's autonomy dial (CustomerAcq-2kp).
+
+    The per-tenant ``pack.autonomy_for(channel)`` (mode + threshold) is the source
+    of truth — NOT a caller-supplied default. ``resolve_channel_policy`` maps the
+    pack's autonomy mode onto the router's and yields the channel threshold, so a
+    review-mode channel (e.g. the seed pack's gmail at mode=review/0.9) routes to
+    ``review`` even at high confidence, and an auto channel (instagram/facebook at
+    0.85) auto-fires once confidence clears its bar. An unmapped channel is
+    fail-closed to ``review`` — never AUTO (CustomerAcq-epq).
+    """
+    threshold, autonomy = _resolve_routing(pack, channel)
+    return route(confidence, threshold, gates, autonomy)
+
+
 def build_slice_graph(
     *,
     dsn: str,
@@ -198,21 +266,28 @@ async def run_slice(
     connector: Connector,
     assemble_model: Model | KnownModelName | None = None,
     run_id: str | None = None,
-    autonomy: AutonomyMode = AutonomyMode.AUTO,
-    threshold: float = DEFAULT_THRESHOLD,
+    channel: PackChannel = PackChannel.INSTAGRAM,
     gates: Sequence[Gate] | None = None,
-    channel: Channel = Channel.POSTING,
     target: str = "feed",
     checkpointer=None,
 ) -> SliceResult:
     """Run the deterministic Phase-1 slice end to end and return what happened.
 
-    The enqueue happens INSIDE the graph (durably coupled to the state advance);
-    only an ``auto`` decision reaches it. Re-running with the same content derives
-    the same idempotency key, so a replay never produces a second effect.
+    Routing uses the per-tenant PACK autonomy dial for ``channel``
+    (``pack.autonomy_for(channel)``) as the source of truth — NOT a caller default
+    (CustomerAcq-2kp). ``channel`` is a pack/platform channel (instagram / facebook
+    / gmail); it is mapped to the side-effect channel for the outbox. The enqueue
+    happens INSIDE the graph (durably coupled to the state advance); only an
+    ``auto`` decision reaches it. Re-running with the same content derives the same
+    idempotency key, so a replay never produces a second effect.
     """
     run_id = run_id or f"slice-{tenant_id}-{topic}"
     pack = load_pack(tenant_id)  # INFRA-04: per-tenant config at run start
+
+    # The pack autonomy dial drives routing (fail-closed: an unmapped channel can
+    # never AUTO); map the platform channel to its side-effect bucket for the outbox.
+    threshold, autonomy = _resolve_routing(pack, channel)
+    side_channel = _SIDE_EFFECT_CHANNEL[channel]
 
     graph = build_slice_graph(
         dsn=dsn,
@@ -221,7 +296,7 @@ async def run_slice(
         autonomy=autonomy,
         threshold=threshold,
         gates=gates,
-        channel=channel,
+        channel=side_channel,
         target=target,
         checkpointer=checkpointer,
     )
@@ -229,7 +304,7 @@ async def run_slice(
         run_id, GraphState(tenant_id=tenant_id, run_id=run_id, topic=topic)
     )
 
-    decision = route(state.confidence or 0.0, threshold, gates, autonomy)
+    decision = slice_route(pack, channel, state.confidence or 0.0, gates)
     result = SliceResult(
         pack=pack, state=state, decision=decision, steps=list(state.step_log)
     )
@@ -238,7 +313,7 @@ async def run_slice(
 
     # The intent was enqueued by the in-graph Enqueue node; drain it now.
     draft = state.assembled.draft if state.assembled else ""
-    result.idempotency_key = idempotency_key(tenant_id, channel, target, draft)
+    result.idempotency_key = idempotency_key(tenant_id, side_channel, target, draft)
     result.enqueue_status = EnqueueStatus.ENQUEUED
     result.dispatched = await Dispatcher(dsn, connector).dispatch_pending()
     return result
