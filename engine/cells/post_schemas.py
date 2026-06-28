@@ -6,32 +6,26 @@ flows downstream (HARN-02). Kept in a leaf module (only pydantic + the existing
 ``cells.content_brief.Platform``) so both the harness and the cells can import it
 with no cycle.
 
-RECONCILE-ON-MERGE: ``MediaKind`` is also declared on the a9m.4 branch
-(``cells/ideate.py``, for ``Angle.format_hint``). Both branches are pre-merge; on
-reconcile, ideate should import ``MediaKind`` from here (one definition, ADR
-"one schema" rule). ``Angle`` itself stays a9m.4-owned — the Draft cell consumes
-its *fields* (hook/rationale/format_hint), not the class, so a9m.5 does not
-duplicate it.
+``MediaKind`` is imported from the canonical ``cells.ideate`` (a9m.4, merged —
+super-confirmed) and re-exported here; a9m.5 does not duplicate it. ``Angle`` stays
+a9m.4-owned — the Draft cell consumes its *fields* (hook/rationale/format_hint),
+not the class.
+
+FOLLOW-UP (growth, post-merge): ``PostDraft`` + ``MediaSpec`` are also defined in
+``cells/post_draft.py`` (a9m.6, PR #71). To avoid a cross-PR rebase conflict now,
+the consolidation to ONE pair lands as a single fresh commit after whichever of
+a9m.5 / a9m.6 merges first (growth owns it); both definitions are field-identical
+to the ADR shape meanwhile.
 """
 
 from __future__ import annotations
 
-from enum import Enum
-
 from pydantic import BaseModel, ConfigDict, Field
 
 from cells.content_brief import Platform  # instagram | facebook (re-exported)
+from cells.ideate import MediaKind  # canonical MediaKind (a9m.4, super-confirmed) — re-exported
 
 __all__ = ["Platform", "MediaKind", "MediaSpec", "PostDraft"]
-
-
-class MediaKind(str, Enum):
-    """The creative type a post carries (drives a9m.6 per-kind validation)."""
-
-    IMAGE = "image"
-    REEL = "reel"
-    CAROUSEL = "carousel"
-    TEXT = "text"  # text-only post; no media asset
 
 
 class MediaSpec(BaseModel):
