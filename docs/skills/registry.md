@@ -23,6 +23,7 @@ This document is **governance + worked examples**, not the adopt-list. The opera
 
 | Skill (our name) | Upstream source + pinned commit | sec sign-off | What was stripped / sandboxed | Our-format path | Eval-gate (rvy) | Agent | Status |
 |---|---|---|---|---|---|---|---|
+| **human-tone** *(1mk.3, first real sign-off)* | `Varnan-Tech/opendirectory` — "human-tone" @ `9c30f79eb975c50a97bed10b47e14f18116a3e3b` (MIT; `main` HEAD at vetting 2026-06-28) | **APPROVED — ELIGIBLE** (sec, see §Sign-off) | **Nothing stripped** — upstream is pure markdown (no scripts/network/file/exec); read in full for prompt-injection/off-policy, none found. Enforcement re-authored as our own pure-code validator + temp-0 cell. | `engine/skills/human-tone/SKILL.md` + `engine/cells/ai_flagger.py` (validator) + `engine/cells/humanize.py` (temp-0 rewrite) — PR #26 | **PASS** — `test_ai_flagger.py::test_labeled_set_separates_slop_from_human` (recall 1.0, FP 0.0); 173 unit pass, ruff clean | *(eligible for: AI-flagger validator / voice-QA; assigned at adoption)* | **ELIGIBLE** — gate green; **operator adopt-approval pending** (not yet IN USE) |
 | brand-alchemy *(worked example)* | `<org>/brand-alchemy` @ `<PIN-AT-ADOPTION>` | **APPROVED-AS-STRIPPED** (sec, see §Demo) — conditional on eval-gate + operator approval | `domain_checker.py` **stripped in full** (TLS-disabled DNS/RDAP network). See itemized list in §Demo. | `engine/skills/brand-alchemy/` *(prompt-only after strip; to be authored at adoption)* | **PENDING** (gold-set not yet run) | *(intended: brand-voice / strategist)* | **HELD** — eval-gate PENDING + operator approval pending |
 | map-your-market | `<org>/map-your-market` @ `<PIN-AT-ADOPTION>` | **HELD** — strip required before sign-off | `fetch.py` (TLS disabled, `CERT_NONE`) → **strip**; reads `GITHUB_TOKEN` + ships `.env.example` → **strip** credential read; re-route through Firecrawl/Meta Ad Library adapter with TLS restored | *(to be authored after strip)* | PENDING | *(intended: research)* | **HELD** |
 | where-your-customer-lives | `<org>/where-your-customer-lives` @ `<PIN-AT-ADOPTION>` | **HELD** — same family as map-your-market | `fetch.py` (TLS disabled) + `GITHUB_TOKEN`/`.env` read → **strip**; route via vetted adapter | *(to be authored)* | PENDING | *(intended: research)* | **HELD** |
@@ -30,6 +31,37 @@ This document is **governance + worked examples**, not the adopt-list. The opera
 | coldoutboundskills | `growthenginenowoslawski/coldoutboundskills` @ `<PIN-AT-ADOPTION>` | **REJECTED** (sec) | `.ts` scripts **SPEND REAL MONEY** (Dynadot bulk domain purchase) + create live Instantly/Smartlead campaigns. Money/destructive class. | — | — | none | **REJECTED** — mine patterns only |
 | coreyhaines31/marketingskills (67 Node CLIs) | `coreyhaines31/marketingskills` @ `<PIN-AT-ADOPTION>` | **REJECTED by default** (sec) | 67 bundled CLIs read env API tokens, hit data brokers (apollo/zoominfo/clearbit/hunter) + **send real email** (resend/sendgrid/postmark). | — | — | none | **REJECTED** — opt-in only later, scoped creds + `--dry-run`, never default |
 | Nuwa Skill Distiller | skillhub.club / lobehub (off-GitHub) | **REJECTED** (sec) | Unclear/no OSS license; auto-generates executable `SKILL.md` (generation + injection surface). | — | — | none | **REJECTED** — use first-party skill-creator |
+
+---
+
+## §Sign-off — human-tone (1mk.3, real sec sign-off through all 4 steps)
+
+The first real entry. eng3 re-authored the skill and recorded its 4-step record at `engine/skills/human-tone/VETTING.md` (PR #26); sec independently re-ran the gate below.
+
+```
+Skill:              human-tone  (upstream: Varnan-Tech/opendirectory — "human-tone")
+Pinned commit:      9c30f79eb975c50a97bed10b47e14f18116a3e3b   # main HEAD, resolved via ls-remote at vetting
+License:            MIT
+Reviewed by:        sec        Date: 2026-06-28
+```
+
+**Step 1 — READ.** `SKILL.md` + both enforcement modules read in full. Upstream ships **pure markdown, no scripts**. Re-authored enforcement read line-by-line: `engine/cells/ai_flagger.py` imports only `re` / `dataclasses` / `enum` / `cells.validators`; `engine/cells/humanize.py` imports only `pydantic` / `cells.*`. **No** `socket`/`requests`/`urllib`/`httpx`/`subprocess`/`os`/`sys`/`open`/`Path`/`eval`/`exec`/`pickle`/`getenv`/`environ`/`ssl` in either. No obfuscation. SKILL.md read for prompt-injection / off-policy — none found.
+
+**Step 2 — STRIP.** **Nothing to strip** — confirmed independently, not taken on report. No network/file/exec/credential surface in upstream (markdown-only) or in the re-authored code. The detector is pure regex with no I/O; the only model call is the temp-0 `humanize` rewrite cell, which is gated behind the deterministic flagger and re-checks its own output (AI-flagger ERROR validator + `claims_preserved` ERROR validator, so it cannot silently add/drop claims).
+
+**Step 3 — RE-AUTHOR + PIN.** Re-authored into our Agent Skills format with determinism rules (detection is pure code/reproducible; rewrite is temp-0 against a pinned model per HARN-06). Pinned to upstream `9c30f79…` (re-vet required on any bump).
+
+**Step 4 — EVAL-GATE.** Independently re-ran: `test_labeled_set_separates_slop_from_human` asserts **recall == 1.0** and **false-positive rate == 0.0** on the seed labeled set → **PASS**. Full engine unit suite: **173 passed**, ruff clean. Importing the cells requires no API key and performs no I/O at import.
+
+```
+SEC VERDICT:    APPROVED — ELIGIBLE. Gate steps 1–4 green; provenance pinned.
+                Status ELIGIBLE, NOT "IN USE": operator approves adoption + agent
+                assignment separately. The deterministic validator (ai_flagger) is
+                pure code and safe to wire into the bank on adoption; the rewrite
+                cell ships behind the same autonomy/eval gates as any other cell.
+Residual risk (for arch/operator): LOW. No net/file/exec/credential surface.
+                Pre-strip severity: n/a (nothing to strip). Re-vet on upstream bump.
+```
 
 ---
 
