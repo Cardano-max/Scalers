@@ -48,11 +48,14 @@ class AngleSet(BaseModel):
     angles: list[Angle]         # N candidates; SelectAngle picks one
 
 # --- Copywriter cell: selected angle + grounding -> the post draft ------------
-class MediaKind(str, Enum): REEL="reel"; IMAGE="image"; CAROUSEL="carousel"
+class MediaKind(str, Enum): IMAGE="image"; REEL="reel"; CAROUSEL="carousel"; TEXT="text"
 class MediaSpec(BaseModel):
     kind: MediaKind
-    aspect_ratio: str           # "9:16" | "1:1" | "4:5"
-    duration_s: float | None    # reels only
+    aspect_ratio: str | None    # None for TEXT; "9:16" reel, "1:1"/"4:5" image/carousel
+    duration_s: float | None    # REEL only
+    brief: str                  # creative brief for the asset — Phase-3 mock generates no
+                                # real media; the brief + spec are what a9m.6 validates / the
+                                # console shows. (writer's a9m.5 `brief` adopted.)
 class PostDraft(BaseModel):
     platform: Platform          # instagram | facebook  (cells/content_brief.Platform)
     caption: str
@@ -139,9 +142,10 @@ class Vocabulary(BaseModel):
     prefer: list[str]              # lexicon/phrases to lean on
     ban: list[str]                 # words/phrases that must not appear (regenerate-on-fail)
     approved_claims: list[str]     # the ALLOWLIST — see enforcement note below
-    sensitive_ban: list[str] = []  # ESCALATE-on-fail patterns: health/outcome guarantees,
-                                   # licensure, pricing, medical framing (e.g. "post-mastectomy").
-                                   # Distinct gate from ban/claim — skips regenerate, see Decision 4.
+    sensitive_ban: list[str] = []  # ESCALATE-on-fail patterns (authored: positioning/
+                                   # sensitive-ban-patterns.json — global:tattoo, 7 categories,
+                                   # per-tenant ADD-only). Distinct gate from ban/claim — skips
+                                   # regenerate, see Decision 4.
     emoji_policy: str              # e.g. "none" | "sparse, max 1"
     hashtag_policy: str            # e.g. "3-5, lowercase, no banned tags"
 
@@ -192,7 +196,7 @@ The Copywriter prompt is assembled in code from: **selected angle + research ite
 `Check&Score` is a **pure-code node** that assembles the routing signals; it calls **no new router**:
 
 1. **Deterministic gates** (POST-02) from an extended `ValidatorBank` — media/format + content gates → `list[Gate]`:
-   - Reels **9:16, 5–90s**; image aspect/size; caption length; hashtag count/limits (`vocabulary.hashtag_policy`); emoji policy (`vocabulary.emoji_policy`); **banned phrases (reads `VoiceDimensions.vocabulary.ban`)**; **claim allowlist (reads `vocabulary.approved_claims` — any claim not on it is a HARD gate fail → block + regenerate/escalate)**; placeholder check; voice-similarity (vs KB).
+   - **Per `media.kind`:** `REEL` → **9:16, 5–90s**; `IMAGE`/`CAROUSEL` → aspect/size (`1:1`/`4:5`); `TEXT` → no media gate. Plus caption length; hashtag count/limits (`vocabulary.hashtag_policy`); emoji policy (`vocabulary.emoji_policy`); **banned phrases (reads `VoiceDimensions.vocabulary.ban`)**; **claim allowlist (reads `vocabulary.approved_claims` — any claim not on it is a HARD gate fail → block + regenerate/escalate)**; **`sensitive_ban` (escalate-on-fail, see below)**; placeholder check; voice-similarity (vs KB).
    - The per-tenant `ban`/`approved_claims`/policies are **injected from `VoiceGrounding.dimensions`** (Decision 3), not hardcoded — the gate and the writer share one list.
 2. **AI-flagger** → an `ai_authenticity` `Gate` (fails if `authentic=False`) **and** its `safety: SafetyVerdict` feeds the decision.
 3. **Confidence** — Phase-3 deterministic placeholder (as `nodes.py:_confidence_for` does today); Phase-5 swaps in the self-consistency computer behind the same `state.confidence` field.
@@ -209,7 +213,9 @@ class GateDisposition(str, Enum): REGENERATE = "regenerate"; ESCALATE = "escalat
 
 Two distinct content gates read the `VoiceDimensions.vocabulary` lists: `claim`/`banned_phrase` (allowlist miss / `ban`) → **REGENERATE**-then-escalate (bounded); `sensitive_ban` (matches the `sensitive_ban` pattern set) → **ESCALATE** immediately (straight to human-review, skip regenerate). Router order becomes: **(1) any ESCALATE-gate failed → review** · (2) any REGENERATE-gate failed → regenerate · (3) confidence < threshold → review · (4) dial REVIEW → review · (5) auto.
 
-**Scoping (safety surface):** `on_fail` on `Gate` + the new router branch is a small change to the **2kp-reviewed** `harness/router.py` + `harness/state.py:Gate`. It is **additive — `on_fail` defaults to `REGENERATE`, so all existing routing is byte-for-byte unchanged** — but because it touches the vvi surface it lands as its **own bead (the 439-lift), with eng3 + qa review**, NOT inside the slice. **Phase-3 ships regenerate-then-escalate now** (the safe current behavior); pmm authors the `sensitive_ban` patterns into `brand-dna`/`VoiceDimensions` now (harmless until the gate reads them), and 439 flips the disposition. So the data lands early, the safety-surface code change is reviewed separately.
+**Scoping (safety surface):** `on_fail` on `Gate` + the new router branch is a small change to the **2kp-reviewed** `harness/router.py` + `harness/state.py:Gate`. It is **additive — `on_fail` defaults to `REGENERATE`, so all existing routing is byte-for-byte unchanged** — but because it touches the vvi surface it lands as its **own bead (gate-disposition / `sensitive_ban` wiring), with pmm owning the pattern content and eng3 + qa owning the wiring + review**, NOT inside the slice. **Phase-3 ships regenerate-then-escalate now** (the safe current behavior); pmm has authored the patterns (`positioning/sensitive-ban-patterns.json`) so the data lands early (harmless until the gate reads it), and the new bead flips the disposition to escalate-immediately under review.
+
+> **Not to be confused with `CustomerAcq-439`** (the global *autonomy hold* — all actions ESCALATE/manual until rvy.7 eval + rvy.8 calibration pass). The gate-disposition bead is **independent of 439**: it is meaningful both *under* the hold (skip a wasteful/risky re-draft loop on a sensitive violation — go straight to a human) and *after* it lifts (a sensitive violation must not be silently regenerated into an auto-fire). It can land on either side of the 439 lift; default `REGENERATE` keeps it safe until then.
 
 > **Honor `pack.is_enabled(channel)` (addresses a finding from the 2kp review):** the posting engine **produces nothing** for an `OFF`/disabled channel — it short-circuits before Ideate, rather than running the pipeline and queuing a REVIEW action for a channel the operator turned off. (`OFF → REVIEW` keeps the no-auto-fire safety property even if this is missed, but the engine should not do work for a disabled channel — the `config.schema` OFF contract is "produces nothing".)
 
