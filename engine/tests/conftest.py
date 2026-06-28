@@ -95,8 +95,8 @@ DB_DSN = (
 
 _INITDB = Path(__file__).resolve().parents[2] / "infra" / "initdb"
 # The side-effect schema chain: the exactly-once boundary (02) + the OBS-03
-# deep-link/engagement capture columns (04). Applied in order.
-_SCHEMA_SQLS = [_INITDB / "02-side-effect-boundary.sql", _INITDB / "04-side-effect-capture.sql"]
+# deep-link/engagement capture columns (05). Applied in order.
+_SCHEMA_SQLS = [_INITDB / "02-side-effect-boundary.sql", _INITDB / "05-side-effect-capture.sql"]
 _SCHEMA_SQL = _SCHEMA_SQLS[0]  # back-compat alias
 
 
