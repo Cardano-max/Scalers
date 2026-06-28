@@ -92,11 +92,20 @@ class AssembleOutput(BaseModel):
     draft: str
 
 
+def _last_value(_existing: list, new: list) -> list:
+    """Reducer: replace the channel with the latest write (non-accumulating)."""
+
+    return new
+
+
 class GraphState(BaseModel):
     """The state threaded through the fixed topology (systemdesign §6.2).
 
-    ``step_log``, ``gates``, and ``jury`` use append reducers so a node returns
-    only its own increment; the rest are last-value channels.
+    ``step_log`` uses an append reducer (it is the run's trajectory). ``gates``
+    and ``jury`` feed the router, so they are **last-value** — the router must
+    see the current run's signal set, never an accumulation. (Cross-run
+    accumulation on a reused ``run_id`` is separately prevented by the replay
+    guard in ``CompiledGraph.run`` — CustomerAcq-fk5.)
     """
 
     # Extra keys (e.g. LangGraph's ``__interrupt__`` marker) are ignored on
@@ -111,8 +120,8 @@ class GraphState(BaseModel):
     assembled: AssembleOutput | None = None
 
     confidence: float | None = None
-    gates: Annotated[list[Gate], operator.add] = Field(default_factory=list)
-    jury: Annotated[list[JurySignal], operator.add] = Field(default_factory=list)
+    gates: Annotated[list[Gate], _last_value] = Field(default_factory=list)
+    jury: Annotated[list[JurySignal], _last_value] = Field(default_factory=list)
     step_log: Annotated[list[str], operator.add] = Field(default_factory=list)
 
     decision: str | None = None
