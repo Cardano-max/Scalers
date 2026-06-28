@@ -17,6 +17,10 @@ from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from cells.base import Cell
+from cells.ideate import AngleSet, build_ideate_prompt
+from cells.select_angle import NoViableAngleError, select_angle
+
 from .spans import span
 from .state import AssembleOutput, GraphState, ResearchOutput
 
@@ -84,4 +88,71 @@ class AssembleNode:
             "assembled": assembled,
             "confidence": _confidence_for(research.findings),
             "step_log": ["assemble"],
+        }
+
+
+class IdeateNode:
+    """Ideate cell node (a9m.4): research_result -> candidate angles (AngleSet).
+
+    Holds a typed Ideate ``Cell`` (temp-0, pinned model; tests inject a scripted
+    model). Assembles the grounding prompt from ``state.research_result`` + optional
+    practitioner-wisdom snippets and records the candidate angles to the trajectory.
+    """
+
+    name = "ideate"
+
+    def __init__(
+        self,
+        cell: Cell[AngleSet],
+        *,
+        wisdom_fn=None,  # optional: (state) -> tuple[str, ...] from the 1mk.9 KB
+    ) -> None:
+        self._cell = cell
+        self._wisdom_fn = wisdom_fn
+
+    async def __call__(self, state: GraphState) -> GraphState:
+        research = state.research_result
+        if research is None:
+            raise CellError("ideate ran before a research result was produced")
+        wisdom = tuple(self._wisdom_fn(state)) if self._wisdom_fn else ()
+        prompt, _low = build_ideate_prompt(research, topic=state.topic, wisdom=wisdom)
+        with span("cell:ideate", kind="cell"):
+            angle_set = await self._cell.run(prompt)
+        return {  # type: ignore[return-value]
+            "angles": angle_set,
+            "step_log": [f"ideate:{len(angle_set.angles)}_candidates"],
+        }
+
+
+class SelectAngleNode:
+    """SelectAngle node (a9m.4): pure-code deterministic pick of one angle.
+
+    The model proposes (IdeateNode); code decides here. On no viable candidate it
+    routes to review (regenerate) instead of crashing — the harness recovery layer
+    never sees a raw error.
+    """
+
+    name = "select_angle"
+
+    async def __call__(self, state: GraphState) -> GraphState:
+        if state.angles is None:
+            raise CellError("select_angle ran before ideate produced candidates")
+        research = state.research_result
+        low_grounding = research is None or not research.items
+        try:
+            selection = select_angle(
+                state.angles,
+                research,
+                low_grounding=low_grounding,
+            )
+        except NoViableAngleError as exc:
+            # Defined abort path: route to human review, no crash.
+            return {  # type: ignore[return-value]
+                "decision": "review",
+                "step_log": [f"select_angle:no_viable_angle({exc})->review"],
+            }
+        flag = "low_grounding" if selection.low_grounding else f"score={selection.score:.2f}"
+        return {  # type: ignore[return-value]
+            "angle": selection,
+            "step_log": [f"select_angle:{flag}"],
         }
