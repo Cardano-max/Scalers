@@ -24,10 +24,30 @@ from kb.grounding import (
     WisdomSnippet,
 )
 from kb.store import KbStore, content_hash
+from kb.voice import (
+    Exemplar,
+    GroundingCoverage,
+    Vocabulary,
+    VoiceDimensions,
+    VoiceDimensionsError,
+    VoiceExemplarSource,
+    VoiceGrounding,
+    build_voice_grounding,
+    load_voice_dimensions,
+)
 
 __all__ = [
     "KbStore",
     "content_hash",
+    "Exemplar",
+    "Vocabulary",
+    "VoiceDimensions",
+    "VoiceDimensionsError",
+    "GroundingCoverage",
+    "VoiceGrounding",
+    "VoiceExemplarSource",
+    "build_voice_grounding",
+    "load_voice_dimensions",
     "GroundingStore",
     "WisdomSnippet",
     "PARTITION",
