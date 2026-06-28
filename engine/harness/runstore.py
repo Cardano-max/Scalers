@@ -15,7 +15,6 @@ the other half).
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable

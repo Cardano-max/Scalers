@@ -7,8 +7,15 @@ can exercise valid output, repair-on-retry, persistent failure, and messy text.
 
 from __future__ import annotations
 
+import asyncio
+import os
+import sys
+from pathlib import Path
 from typing import Any
 
+import psycopg
+import pytest
+import pytest_asyncio
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
@@ -75,14 +82,6 @@ VALID_BRIEF: dict[str, Any] = {
 # genuinely exercised. DSN resolves from ENGINE_DATABASE_URL (the value CI sets,
 # and what the harness checkpointer reads) first, then SCALERS_TEST_DSN, then a
 # local default. Bring the stack up:  cd infra && docker compose up -d
-import asyncio
-import os
-import sys
-from pathlib import Path
-
-import psycopg
-import pytest
-import pytest_asyncio
 
 # psycopg's async mode cannot run on Windows' default ProactorEventLoop.
 if sys.platform == "win32":
