@@ -4,7 +4,7 @@
 
 A skill is usable by an agent **only** when it has a row here with: a pinned upstream commit, a green **sec sign-off**, a complete **stripped/sandboxed** list, a re-authored **our-format path**, a **PASS** eval-gate, **and** operator adopt-approval. Eligibility (gate green) and adoption (operator-approved + agent assigned) are separate — a skill that is eligible but not yet operator-approved is **not** in use.
 
-This document is **governance + worked examples**, not the adopt-list. The operator approves the adopt-list separately; the rows below demonstrate the gate. Nothing here is `IN USE` yet.
+This document is **governance + the adopt-list**. The operator approves adoption; sec maintains the rows. **First Tier-1 adoptions (operator-approved 2026-06-28, ref `docs/skills-and-plugins.md` §54):** `human-tone` (1mk.3) and `brand-voice` (1mk.2) are now **REGISTERED — IN USE**. Their full eval-proof (harness-conditional composition + gold-set) is **PENDING-on-eval-pipeline** — finalized when `rvy.7`/`rvy.8` eval-gate them on the smoke gold set (`rvy.10`); adoption is operator-approved now. All other rows remain ELIGIBLE/HELD/REJECTED as marked.
 
 ## Status legend
 
@@ -23,15 +23,75 @@ This document is **governance + worked examples**, not the adopt-list. The opera
 
 | Skill (our name) | Upstream source + pinned commit | sec sign-off | What was stripped / sandboxed | Our-format path | Eval-gate (rvy) | Agent | Status |
 |---|---|---|---|---|---|---|---|
-| **human-tone** *(1mk.3, first real sign-off)* | `Varnan-Tech/opendirectory` — "human-tone" @ `9c30f79eb975c50a97bed10b47e14f18116a3e3b` (MIT; `main` HEAD at vetting 2026-06-28) | **APPROVED — ELIGIBLE** (sec, see §Sign-off) | **Nothing stripped** — upstream is pure markdown (no scripts/network/file/exec); read in full for prompt-injection/off-policy, none found. Enforcement re-authored as our own pure-code validator + temp-0 cell. | `engine/skills/human-tone/SKILL.md` + `engine/cells/ai_flagger.py` (validator) + `engine/cells/humanize.py` (temp-0 rewrite) — PR #26 | **PASS** — `test_ai_flagger.py::test_labeled_set_separates_slop_from_human` (recall 1.0, FP 0.0); 173 unit pass, ruff clean | *(eligible for: AI-flagger validator / voice-QA; assigned at adoption)* | **ELIGIBLE** — gate green; **operator adopt-approval pending** (not yet IN USE) |
-| **brand-voice** *(1mk.2, per-artist)* | `anthropics/skills` — `skills/brand-guidelines` @ `b9e19e6f44773509fbdd7001d77ff41a49a486c1` (Apache-2.0; 2026-04-20) | **APPROVED — ELIGIBLE (conditional)** (sec, see §Sign-off) | **Nothing stripped** — upstream is prompt-only markdown; **structure-only** derivative, none of Anthropic's brand content (colors/type/marks) reproduced; NOTICE satisfies Apache-2.0 §4, trademarks excluded. Shipped `verify/*.py` are **our own** stdlib-only resolver+demo (no net/exec/env; read-only repo config + temp writes). | `skills/brand-voice/` (SKILL.md + per-tenant DNA + examples) — PR #29 | **PENDING-on-gold-set** — brand-voice ≥90% gate runs once the eval gold set (rvy.10 smoke) exists; **not a blocker for ELIGIBLE** (operator-authorized) | *(intended: posting/reply/outreach writing cells; assigned at adoption)* | **ELIGIBLE (conditional)** — steps 1–3 green; eval-gate deferred-by-dependency; operator adopt-approval pending; **must clear ≥90% gate before production writing use** |
+| **human-tone** *(1mk.3, first real sign-off)* | `Varnan-Tech/opendirectory` — "human-tone" @ `9c30f79eb975c50a97bed10b47e14f18116a3e3b` (MIT; `main` HEAD at vetting 2026-06-28) | **APPROVED** (sec) · **ADOPTED** (operator 2026-06-28, Tier-1, see §Sign-off) | **Nothing stripped** — upstream is pure markdown (no scripts/network/file/exec); read in full for prompt-injection/off-policy, none found. Enforcement re-authored as our own pure-code validator + temp-0 cell. | `engine/skills/human-tone/SKILL.md` + `engine/cells/ai_flagger.py` (validator) + `engine/cells/humanize.py` (temp-0 rewrite) — PR #26 | **PASS** (seed labeled set: recall 1.0, FP 0.0; 173 unit, ruff clean) · full eval-proof **PENDING-on-eval-pipeline** (rvy.7/.8 @ rvy.10) | AI-flagger **validator bank** (all writing cells) + voice-QA **humanize** cell | **REGISTERED — IN USE** (Tier-1; operator-approved 2026-06-28) |
+| **brand-voice** *(1mk.2, per-artist)* | `anthropics/skills` — `skills/brand-guidelines` @ `b9e19e6f44773509fbdd7001d77ff41a49a486c1` (Apache-2.0; 2026-04-20) | **APPROVED** (sec) · **ADOPTED** (operator 2026-06-28, Tier-1, see §Sign-off) | **Nothing stripped** — upstream is prompt-only markdown; **structure-only** derivative, none of Anthropic's brand content (colors/type/marks) reproduced; NOTICE satisfies Apache-2.0 §4, trademarks excluded. Shipped `verify/*.py` are **our own** stdlib-only resolver+demo (no net/exec/env; read-only repo config + temp writes). Path-traversal residual RESOLVED (PR #29 cbd3b43, sec-verified). | `skills/brand-voice/` (SKILL.md + per-tenant DNA + examples) — PR #29 | **PENDING-on-eval-pipeline** — brand-voice ≥90% gate runs via rvy.7/.8 once the eval gold set (rvy.10 smoke) exists; adoption operator-approved now | posting / reply / outreach **writing cells** (conditionally loaded by cell type) | **REGISTERED — IN USE** (Tier-1; operator-approved 2026-06-28) |
 | brand-alchemy *(worked example)* | `<org>/brand-alchemy` @ `<PIN-AT-ADOPTION>` | **APPROVED-AS-STRIPPED** (sec, see §Demo) — conditional on eval-gate + operator approval | `domain_checker.py` **stripped in full** (TLS-disabled DNS/RDAP network). See itemized list in §Demo. | `engine/skills/brand-alchemy/` *(prompt-only after strip; to be authored at adoption)* | **PENDING** (gold-set not yet run) | *(intended: brand-voice / strategist)* | **HELD** — eval-gate PENDING + operator approval pending |
-| map-your-market | `<org>/map-your-market` @ `<PIN-AT-ADOPTION>` | **HELD** — strip required before sign-off | `fetch.py` (TLS disabled, `CERT_NONE`) → **strip**; reads `GITHUB_TOKEN` + ships `.env.example` → **strip** credential read; re-route through Firecrawl/Meta Ad Library adapter with TLS restored | *(to be authored after strip)* | PENDING | *(intended: research)* | **HELD** |
-| where-your-customer-lives | `<org>/where-your-customer-lives` @ `<PIN-AT-ADOPTION>` | **HELD** — same family as map-your-market | `fetch.py` (TLS disabled) + `GITHUB_TOKEN`/`.env` read → **strip**; route via vetted adapter | *(to be authored)* | PENDING | *(intended: research)* | **HELD** |
+| map-your-market *(1mk.4)* | "map-your-market" (r/ClaudeAI 20-skills; family `coreyhaines31/marketingskills`, MIT) @ `8bfcdffb655f16e713940cd04fb08891899c47db` (**ORIGINAL / pattern-only** — alias NOT verbatim upstream; reviewed family-ref commit, nothing copied) | **APPROVED — ELIGIBLE** (sec S1 2026-06-28, see §Sign-off) | `fetch.py` (TLS disabled, `CERT_NONE`) **stripped in full**; `GITHUB_TOKEN` + `.env.example` credential read **stripped**; 67 parent-repo live-API CLIs **not vendored**. Network re-routed through `engine/research/` adapter (Firecrawl/Meta-Ad-Library, TLS restored). See `skills/map-your-market/VETTING.md`. | `skills/map-your-market/` + `engine/research/` (pattern-only, prompt-only after strip) | **PENDING-on-gold-set** (`evals/gold/research-niche-smoke.jsonl`; holdout = `rvy`) | *(intended: research — `map_market`)* | **ELIGIBLE (conditional)** — strip verified by sec (zero live network; prompt-only; allowlist seam); eval-gate PENDING-on-gold-set; operator adoption pending; **live Firecrawl/Meta provider impl (currently stubs) MUST be re-vetted by sec before going live** |
+| where-your-customer-lives *(1mk.4)* | "where-your-customer-lives" (r/ClaudeAI 20-skills; family `coreyhaines31/marketingskills`, MIT) @ `8bfcdffb655f16e713940cd04fb08891899c47db` (**ORIGINAL / pattern-only** — alias NOT verbatim upstream; reviewed family-ref commit, nothing copied) | **APPROVED — ELIGIBLE** (sec S1 2026-06-28, see §Sign-off) | `fetch.py` (TLS disabled) **stripped**; `GITHUB_TOKEN`/`.env` read **stripped**; 67 parent-repo CLIs **not vendored**. Network via `engine/research/` adapter, TLS restored. See `skills/where-your-customer-lives/VETTING.md`. | `skills/where-your-customer-lives/` + `engine/research/` | **PENDING-on-gold-set** | *(intended: research — `find_communities`)* | **ELIGIBLE (conditional)** — strip verified by sec (zero live network; prompt-only; allowlist seam); eval-gate PENDING-on-gold-set; operator adoption pending; **live Firecrawl/Meta provider impl (currently stubs) MUST be re-vetted by sec before going live** |
+| competitor-pr-finder *(1mk.4)* | "competitor-pr-finder" (r/ClaudeAI 20-skills; family `coreyhaines31/marketingskills`, MIT) @ `8bfcdffb655f16e713940cd04fb08891899c47db` (**ORIGINAL / pattern-only** — alias NOT verbatim upstream; reviewed family-ref commit, nothing copied) | **APPROVED — ELIGIBLE** (sec S1 2026-06-28, see §Sign-off) | Bundled TLS-disabled fetch script(s) + `GITHUB_TOKEN`/`.env` reads **not vendored**; 67 parent-repo CLIs **not vendored**. Competitor-ad access via `engine/research/` Meta-Ad-Library/Foreplay adapter (official API, TLS on). See `skills/competitor-pr-finder/VETTING.md`. | `skills/competitor-pr-finder/` + `engine/research/` | **PENDING-on-gold-set** | *(intended: research — `competitor_creatives`)* | **ELIGIBLE (conditional)** — strip verified by sec (zero live network; prompt-only; allowlist seam); eval-gate PENDING-on-gold-set; operator adoption pending; **live Firecrawl/Meta provider impl (currently stubs) MUST be re-vetted by sec before going live** |
+| **copywriter** *(1mk.5)* | content-repurposing / hook+CTA **patterns** (R&D threads: emilyxhug, tenegoacademy) @ `ORIGINAL` (no upstream code vendored — pattern adoption only) | **APPROVED — ELIGIBLE** (sec S1 2026-06-28, see §Sign-off) | **Nothing to strip** — no third-party code adopted; `engine/cells/copywriter.py` is **our own** typed cell + pure-Python deterministic validators (no net/file/exec); one temp-0 model call behind the bank + harness gates. Composes brand-voice (1mk.2) + AI-flagger (1mk.3). | `engine/skills/copywriter/` + `engine/cells/copywriter.py` — PR #39 | **PENDING-on-gold-set** (rvy.7/.8) | *(intended: posting copywriter cell — hooks/CTAs/variants)* | **ELIGIBLE** — gate green; eval-gate PENDING-on-gold-set; operator adoption pending (not yet IN USE) |
+| **reply** *(1mk.6)* | louisblythe/Sales-Skills (discovery + objection-handling) **patterns** @ `ORIGINAL` (no upstream code vendored — pattern adoption only) | **APPROVED — ELIGIBLE** (sec S1 2026-06-28, see §Sign-off) | **Nothing to strip** — no third-party code adopted; `engine/cells/reply.py` is **our own** typed cell + pure-Python validators (no net/file/exec) with incoming-comment safety screening + DM/expertise escalation; one temp-0 model call behind the bank + harness gates. Upstream fork ships no LICENSE — we vendor nothing, so not gated (flagged). | `engine/skills/reply/` + `engine/cells/reply.py` — PR #44 | **PENDING-on-gold-set** (rvy.7/.8) | *(intended: comment/DM reply cell, gated; DM/expertise → escalate)* | **ELIGIBLE** — gate green; eval-gate PENDING-on-gold-set; operator adoption pending (not yet IN USE) |
 | ads / ad-creative (`google-ads.js`) | `coreyhaines31/marketingskills` (`ads`/`ad-creative`) @ `<PIN-AT-ADOPTION>` | **REJECTED** (sec) | `tools/clis/google-ads.js` claims **direct ad-account WRITE**. Money/destructive class → executor never vendored. | — | — | none | **REJECTED** — mine patterns only |
 | coldoutboundskills | `growthenginenowoslawski/coldoutboundskills` @ `<PIN-AT-ADOPTION>` | **REJECTED** (sec) | `.ts` scripts **SPEND REAL MONEY** (Dynadot bulk domain purchase) + create live Instantly/Smartlead campaigns. Money/destructive class. | — | — | none | **REJECTED** — mine patterns only |
 | coreyhaines31/marketingskills (67 Node CLIs) | `coreyhaines31/marketingskills` @ `<PIN-AT-ADOPTION>` | **REJECTED by default** (sec) | 67 bundled CLIs read env API tokens, hit data brokers (apollo/zoominfo/clearbit/hunter) + **send real email** (resend/sendgrid/postmark). | — | — | none | **REJECTED** — opt-in only later, scoped creds + `--dry-run`, never default |
 | Nuwa Skill Distiller | skillhub.club / lobehub (off-GitHub) | **REJECTED** (sec) | Unclear/no OSS license; auto-generates executable `SKILL.md` (generation + injection surface). | — | — | none | **REJECTED** — use first-party skill-creator |
+
+---
+
+## §Sign-off — copywriter (1mk.5) + reply (1mk.6) — writer cells, ORIGINAL provenance
+
+```
+Skills:       copywriter (PR #39), reply (PR #44)
+Provenance:   ORIGINAL / pattern adoption — NO third-party code vendored, no repo to pin.
+              copywriter ← content-repurposing / hook+CTA patterns (R&D threads).
+              reply ← louisblythe/Sales-Skills discovery+objection-handling patterns
+              (upstream fork ships no LICENSE; we vendor nothing, so not gated — flagged).
+Reviewed by:  sec    Date: 2026-06-28
+```
+
+**Read + strip (verified, not on report).** Danger sweep across both PRs' new files is clean: no network/file/exec/`subprocess`/`eval`/`getenv`/`GITHUB_TOKEN`/send. The only executable content is **our own** typed cells — `engine/cells/copywriter.py` and `engine/cells/reply.py` — built from `re`/`pydantic`/`cells.*`/`autonomy`/`harness`; pure-Python deterministic validators + one temp-0 model call behind the validator bank + harness gates. **Nothing to strip** (no third-party code adopted). reply additionally screens incoming comments and escalates DMs / expertise claims. SKILL.md + references read for prompt-injection/off-policy — none found.
+
+```
+SEC VERDICT:  APPROVED — ELIGIBLE (both). Pure-code + gated model call; compose the
+              already-in-use brand-voice + AI-flagger. Provenance = ORIGINAL (no upstream
+              code). NOT IN USE: eval-gate PENDING-on-gold-set (rvy.7/.8) + operator
+              adoption are the release gates. Re-vet trigger: any later vendoring of
+              verbatim upstream text → pin its source/commit/license first.
+```
+
+---
+
+## §Sign-off — research skills (1mk.4: map-your-market, where-your-customer-lives, competitor-pr-finder)
+
+Heavy vet (operator-flagged TLS-disabled-fetch concern). sec verified PR #37 independently.
+
+```
+Skills:       map-your-market, where-your-customer-lives, competitor-pr-finder
+Provenance:   ORIGINAL / pattern-only — reproduce NO upstream text. The alias names do
+              NOT exist verbatim upstream (verified: coreyhaines31/marketingskills @
+              8bfcdff has "competitor-profiling", not these three). Pinned the reviewed
+              family-ref commit; nothing was copied.
+Pinned:       coreyhaines31/marketingskills @ 8bfcdffb655f16e713940cd04fb08891899c47db (MIT)
+Reviewed by:  sec    Date: 2026-06-28
+```
+
+**Step 1 READ + Step 2 STRIP (verified, not on report).** Across the whole PR: **no `fetch.py`**; **no TLS-disable in code** (every `ssl._create_unverified_context`/`CERT_NONE` hit is documentation of the strip); **no `GITHUB_TOKEN`/`.env`/`os.environ` harvesting code**; **no `.js`/`.ts`/67 CLIs**; **no `subprocess`/`exec`/`eval`**. The 3 skills are prompt-only methodology; references encode safe-fetch guardrails.
+
+**Network seam.** All network is centralized in `engine/research/` behind a `SourceProvider` protocol. Live providers (`FirecrawlProvider`, `MetaAdLibraryProvider`) are **contract-only stubs that raise `NotImplementedError`** → **zero live network today**. `Document.tls_verified=True`; keys are constructor-injected from the tenant pack secret (never `.env`/`GITHUB_TOKEN`). `ResearchRouter` does no network and enforces a **vetted-provider allowlist** (a pack cannot conjure an un-vetted provider). `FixtureProvider` is offline/deterministic.
+
+**Step 4 EVAL-GATE.** PENDING-on-gold-set (`evals/gold/research-niche-smoke.jsonl` smoke + `rvy` holdout).
+
+```
+SEC VERDICT:  APPROVED (strip/security) — ELIGIBLE (CONDITIONAL). Steps 1–3 green;
+              prompt-only; zero live network; allowlist seam. NOT "IN USE": operator
+              adoption + agent assignment separate.
+HARD RE-VET GATE (blocking before research can run): the live Firecrawl/Meta provider
+              implementation is unwritten. Before eng wires it, sec MUST re-vet:
+              (1) verified TLS actually used in code, (2) key from tenant pack secret only,
+              (3) official-API-only (no scraping), (4) SSRF guard on provider.fetch(url)
+              (arbitrary-URL fetch is an SSRF surface), (5) rate-limit/ToS.
+Re-vet triggers: live-provider implementation; OR upstream family bump; OR eval-gate result.
+```
 
 ---
 
@@ -61,8 +121,12 @@ Reviewed by:        sec        Date: 2026-06-28
 SEC VERDICT:    APPROVED — ELIGIBLE (CONDITIONAL). Steps 1–3 green; provenance +
                 Apache-2.0 redistribution verified; secret/PII scan = 0 hits.
                 Eval-gate deferred by dependency (gold set not built) — operator-
-                authorized. NOT "IN USE": operator approves adoption + agent
-                assignment separately, AND the ≥90% gate must pass first.
+                authorized.
+OPERATOR SIGN-OFF: ADOPTED — Tier-1, 2026-06-28 (ref docs/skills-and-plugins.md §54).
+                Status REGISTERED — IN USE. Operator risk-acceptance: full
+                eval-proof (harness-conditional composition + ≥90% gold-set) is
+                PENDING-on-eval-pipeline — finalized when rvy.7/.8 gate it on the
+                rvy.10 smoke gold set. Re-confirm here when that result lands.
 Residual (for arch/operator, non-blocking):
   - [RESOLVED — PR #29 @ cbd3b43, sec-verified] path-traversal hardening on
     tenant_id/skill_ref. resolve_brand_voice.py now allowlists each segment
@@ -97,10 +161,14 @@ Reviewed by:        sec        Date: 2026-06-28
 
 ```
 SEC VERDICT:    APPROVED — ELIGIBLE. Gate steps 1–4 green; provenance pinned.
-                Status ELIGIBLE, NOT "IN USE": operator approves adoption + agent
-                assignment separately. The deterministic validator (ai_flagger) is
-                pure code and safe to wire into the bank on adoption; the rewrite
-                cell ships behind the same autonomy/eval gates as any other cell.
+                The deterministic validator (ai_flagger) is pure code and safe in
+                the bank; the rewrite cell ships behind the same autonomy/eval
+                gates as any other cell.
+OPERATOR SIGN-OFF: ADOPTED — Tier-1, 2026-06-28 (ref docs/skills-and-plugins.md §54).
+                Status REGISTERED — IN USE. The seed-labeled-set PASS holds; the
+                full eval-proof (harness-conditional composition + gold-set) is
+                PENDING-on-eval-pipeline — finalized when rvy.7/.8 gate it on the
+                rvy.10 smoke gold set. Re-confirm here when that result lands.
 Residual risk (for arch/operator): LOW. No net/file/exec/credential surface.
                 Pre-strip severity: n/a (nothing to strip). Re-vet on upstream bump.
 ```
