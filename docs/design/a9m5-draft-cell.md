@@ -135,10 +135,14 @@ the copywriter rule block; `approved_claims`, `ban`, `emoji/hashtag_policy` come
 | **voice-similarity** | `voice_similarity(grounding.exemplars)` via `Exemplar.similarity`; lexical proxy when SPARSE | WARN→ERROR (knob) |
 | media coherence | `media_valid()` — reel ⇒ 9:16 + 5–90s; image/carousel ⇒ aspect_ratio; text ⇒ none | ERROR |
 
-- **Claim-gate disposition (pmm §3.1):** Phase-3 = **regenerate-then-escalate** (safe —
-  439 holds all output to review). The **escalate-immediately** subset (`sensitive_ban`
-  via `positioning/sensitive-ban-patterns.json`) is the **separate 439-lift bead — NOT
-  Phase-3**; a9m.5 does not wire it.
+- **Claim-gate disposition (pmm §3.1):** Phase-3 = **regenerate-then-escalate** for all
+  claim violations (safe — the global autonomy hold routes all output to review anyway).
+  The **escalate-immediately** subset (`sensitive_ban` via
+  `positioning/sensitive-ban-patterns.json`) is a **separate, independent
+  gate-disposition bead — NOT CustomerAcq-439** (439 is the *global autonomy hold*, a
+  different thing; the gate-disposition matters both under it and after it lifts). pmm
+  owns the pattern content; eng3/qa own the gate wiring. **a9m.5 does not wire it** —
+  Phase-3 stays regenerate-then-escalate.
 - **Persistently off-voice/banned** → `CellError` after the retry budget → review;
   banned draft never emitted (a9m.5 AC). Over-length / hashtag-wall → repaired or failed,
   never silently truncated.
@@ -176,7 +180,7 @@ confidence field).
 | Over-length caption / hashtag-wall | validator ERROR → repair or fail; no silent truncation. |
 | reel / image / carousel / text | `media.kind` + `media_valid()`; a9m.6 does the full per-kind gate. |
 | SPARSE grounding (empty KB / new tenant) | dimensions-only; `low_grounding` → Check&Score lowers confidence → review. |
-| claim not in approved set | Phase-3: regenerate-then-escalate (439 review). (sensitive-ban escalate-immediately = 439-lift bead, not here.) |
+| claim not in approved set | Phase-3: regenerate-then-escalate. (sensitive-ban escalate-immediately = separate gate-disposition bead, NOT 439, not wired here.) |
 | No viable angle upstream | the `angle` node's empty/abort path (a9m.1); draft not entered. |
 | PII / secrets | pack uses `SecretRef`; never echo input verbatim. |
 
