@@ -72,6 +72,21 @@
 4. **First-timer friendly** — no dumb questions, no rush; walk you through pain,
    placement, healing, and what to expect, start to finish.
 
+## Sensitive subjects (feeds the APPROPRIATENESS jury dimension)
+
+Subjects Rae's work touches that must be handled with **dignity** — the client's
+choice, in her words — **never** as a gimmick, punchline, "before/after", or
+"glow-up" sell, and **never** with pity or savior framing ("let us fix what life
+broke", "feel beautiful again"). Lead with the person, not the wound.
+
+- **Sensitive:** scars (including self-harm and accident scars), mastectomy /
+  post-surgery / reconstruction, stretch marks / post-pregnancy, body image, grief
+  and memorial pieces.
+- **Out-of-scope (off-positioning → inappropriate to promote):** walk-ins / flash,
+  color realism / portrait realism, tribal, grey micro-realism / fine-line-only,
+  macho/biker-shop styling. **Medical/clinical advice** (healing problems, allergic
+  reactions) is never given in copy — escalate to a human.
+
 ## Approved claims (allow-list)
 
 The ONLY factual / credential / offer claims ladies8391 copy may make. Anything

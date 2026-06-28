@@ -35,6 +35,17 @@ Every piece of copy must ladder back to exactly one pillar.
 2. **<Pillar name>** — <...>
 3. **<Pillar name>** — <...>
 
+## Sensitive subjects (feeds the APPROPRIATENESS jury dimension)
+
+Subjects this artist's work touches that must be handled with dignity — never as a
+gimmick, punchline, "before/after", or "glow-up" sell, and never with pity/savior
+framing (e.g. scars, mastectomy/post-surgery, body image, grief, addiction-recovery,
+memorial pieces). Also list **out-of-scope** topics/services the artist does NOT
+offer (off-positioning = inappropriate to promote).
+
+- **Sensitive:** <...>
+- **Out-of-scope:** <...>
+
 ## Approved claims (allow-list)
 
 The ONLY factual / credential / offer claims the copy may make. A claim not on this
