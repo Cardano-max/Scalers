@@ -75,13 +75,22 @@ class Mode(Enum): MOCK = "mock"; LIVE = "live"
 
 ```python
 @dataclass(frozen=True)
+class ScoreBreakdown:
+    """RESERVED (arch Decision 1a) — Phase-7 weightable dimensions. Optional now
+    so adding it later is NOT a breaking contract change. a9m.2 leaves it None."""
+    relevance: float | None = None
+    recency: float | None = None
+    authority: float | None = None
+
+@dataclass(frozen=True)
 class ResearchItem:
     source: str          # backend name
     kind: str            # "signal" | "angle" | "competitor_creative"
     text: str
     url: str | None
-    score: float         # 0..1 relevance/quality (for ranking)
+    score: float         # 0..1 single relevance/quality float — the MVP ranking key
     evidence: tuple[str, ...]
+    scores: ScoreBreakdown | None = None  # RESERVED (Decision 1a); None in a9m.2
 
 @dataclass(frozen=True)
 class ResearchResult:
@@ -123,7 +132,11 @@ class ResearchResult:
 
 ---
 
+**Scoring — RESOLVED (arch Decision 1a, a9m.1 ADR).** a9m.2 ships the **single
+`score` float** as the ranking key; the optional `ScoreBreakdown` sub-object
+(`scores`) is **reserved now and left `None`**, so Phase-7 can add weightable
+dimensions with **no breaking contract change**. Nothing in a9m.2 is blocked on
+per-dimension. This doc is referenced from the a9m.1 ADR as the source contract.
+
 **Hand-off:** growth holds this contract for super to dispatch once a9m.1 ADR
-signs off. Not claiming a9m.2. Open question for arch: should `score` be a single
-relevance float (above) or per-dimension (relevance + recency + authority)? — I
-recommend a single float for the MVP, with the per-dimension breakdown deferred.
+signs off. Not claiming a9m.2.
