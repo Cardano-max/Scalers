@@ -37,6 +37,7 @@ from pydantic_ai.models import KnownModelName, Model
 from cells.metrics import ValidRateReport
 from cells.repair import RepairError, extract_json
 from cells.validators import ValidationCtx, ValidationResult, ValidatorBank
+from metrics import time_cell  # Prometheus cell-latency histogram (13u)
 
 TOut = TypeVar("TOut", bound=BaseModel)
 
@@ -243,16 +244,17 @@ class Cell(Generic[TOut]):
         message_history: Sequence[ModelMessage] | None = None,
     ) -> CellResult[TOut]:
         """Like :meth:`run` but returns the full :class:`CellResult` (value + metrics)."""
-        try:
-            result = await self._agent.run(prompt, model=model, message_history=message_history)
-        except CellError:
-            raise  # already typed (e.g. raised from a validator) — don't double-wrap
-        except UnexpectedModelBehavior as exc:
-            raise self._on_validation_failure(exc) from exc
-        except Exception as exc:
-            # network/timeout/connector/anything else — never let it propagate raw.
-            raise self._on_execution_failure(exc) from exc
-        return self._result_from(result.output, result.all_messages())
+        with time_cell(cell=self.name):
+            try:
+                result = await self._agent.run(prompt, model=model, message_history=message_history)
+            except CellError:
+                raise  # already typed (e.g. raised from a validator) — don't double-wrap
+            except UnexpectedModelBehavior as exc:
+                raise self._on_validation_failure(exc) from exc
+            except Exception as exc:
+                # network/timeout/connector/anything else — never let it propagate raw.
+                raise self._on_execution_failure(exc) from exc
+            return self._result_from(result.output, result.all_messages())
 
     def run_detailed_sync(
         self,
@@ -262,16 +264,17 @@ class Cell(Generic[TOut]):
         message_history: Sequence[ModelMessage] | None = None,
     ) -> CellResult[TOut]:
         """Synchronous :meth:`run_detailed`."""
-        try:
-            result = self._agent.run_sync(prompt, model=model, message_history=message_history)
-        except CellError:
-            raise  # already typed (e.g. raised from a validator) — don't double-wrap
-        except UnexpectedModelBehavior as exc:
-            raise self._on_validation_failure(exc) from exc
-        except Exception as exc:
-            # network/timeout/connector/anything else — never let it propagate raw.
-            raise self._on_execution_failure(exc) from exc
-        return self._result_from(result.output, result.all_messages())
+        with time_cell(cell=self.name):
+            try:
+                result = self._agent.run_sync(prompt, model=model, message_history=message_history)
+            except CellError:
+                raise  # already typed (e.g. raised from a validator) — don't double-wrap
+            except UnexpectedModelBehavior as exc:
+                raise self._on_validation_failure(exc) from exc
+            except Exception as exc:
+                # network/timeout/connector/anything else — never let it propagate raw.
+                raise self._on_execution_failure(exc) from exc
+            return self._result_from(result.output, result.all_messages())
 
 
 # Back-compat / descriptive alias.

@@ -13,5 +13,4 @@ cases** (absolute ≥10).
 **Smoke ≠ holdout.** Smoke sets prove deterministic behavior; the real
 relevance/recall + calibration holdouts land with the Phase-2 `rvy` gold-set beads
 (rvy.7 Inspect suite + rvy.8 calibration). Registry eval-gate for these skills
-stays `PENDING-on-gold-set` until those run. The `research-niche-smoke.jsonl` row
-references the file delivered on the 1mk.4 branch (PR #37).
+stays `PENDING-on-gold-set` until those run.

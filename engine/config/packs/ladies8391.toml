@@ -1,0 +1,59 @@
+# TEST / SYNTHETIC tenant pack (brand-voice 1mk.2 + eval set rvy.10).
+# A DIFFERENT artist from ink-studio on purpose (woman-owned Austin neo-traditional
+# color vs Brooklyn fine-line) so resolving brand-voice/ladies8391 vs
+# brand-voice/ink-studio proves PER-TENANT grounding, not a shared voice.
+# Not a real client; the real artist pack replaces this in place at onboarding.
+
+tenant_id = "ladies8391"
+display_name = "Ladies First"
+sending_domain = "outreach.ladiesfirst.example"
+
+[voice]
+skill = "brand-voice/ladies8391"
+examples_uri = "minio://voice/ladies8391/examples.jsonl"
+
+# --- Channels -------------------------------------------------------------- #
+[channels.instagram]
+enabled = true
+[channels.instagram.autonomy]
+mode = "auto"
+threshold = 0.85
+[channels.instagram.limits]
+per_day = 25
+per_hour = 5
+
+[channels.facebook]
+enabled = true
+[channels.facebook.autonomy]
+mode = "auto"
+threshold = 0.85
+[channels.facebook.limits]
+per_day = 25
+
+# Cold outreach: approve-first until deliverability is proven.
+[channels.gmail]
+enabled = true
+[channels.gmail.autonomy]
+mode = "review"
+threshold = 0.9
+[channels.gmail.limits]
+per_day = 40
+per_hour = 10
+
+[suppression]
+source = "minio://suppression/ladies8391.csv"
+
+[schedule]
+timezone = "America/Chicago"
+posts_per_day = 2
+quiet_hours = [22, 7]
+
+[research]
+sources = ["firecrawl", "meta_ad_library"]
+
+# Secret references (resolved from the environment at access; never stored here).
+[secrets.meta_access_token]
+env = "LADIES8391_META_ACCESS_TOKEN"
+
+[secrets.gmail_oauth_refresh]
+env = "LADIES8391_GMAIL_OAUTH_REFRESH"

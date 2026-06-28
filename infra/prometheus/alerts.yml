@@ -1,0 +1,102 @@
+# Scalers engine alert rules (CustomerAcq-13u metrics).
+# Loaded via prometheus.yml `rule_files`. Prometheus EVALUATES and surfaces these
+# under /alerts and /api/v1/rules with no extra component. Routing/notification
+# (Slack/email) needs Alertmanager — not wired here; add it if paging is wanted.
+#
+# Label-value note: `status` (scalers_runs_total) and `outcome`
+# (scalers_side_effects_total) are free-form strings emitted by the engine.
+# Canonical failure token (confirmed with eng3, 13u): **"failed"** in BOTH series
+# (runs: "completed"/"failed"; side-effects: "sent"/"deduped"/"failed"). The
+# regexes below match "failed" plus defensive extras (harmless if never emitted).
+#
+# NOT-YET-WIRED (expected, non-gating): the run-"failed" path and side-effect
+# outcomes land with the real publish loop in **Phase 6**; until then the SSE path
+# only records status="completed". So HighRunFailureRate and SideEffectFailureRate
+# read EMPTY until Phase 6 — that is correct, not a broken alert. eng3 keeps
+# "failed" canonical when wiring, so these fire unchanged.
+groups:
+  - name: scalers-engine-availability
+    rules:
+      - alert: EngineMetricsTargetDown
+        expr: up{job="scalers-engine"} == 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Engine /metrics target is down"
+          description: "Prometheus cannot scrape the engine at {{ $labels.instance }} for 5m. (Expected while 13u is not yet running; actionable once the engine is meant to be up.)"
+
+  - name: scalers-engine-runs
+    rules:
+      - alert: HighRunFailureRate
+        expr: |
+          100 * sum(rate(scalers_runs_total{status=~"failed|error|timeout|crashed|cancelled"}[5m]))
+          / clamp_min(sum(rate(scalers_runs_total[5m])), 1) > 10
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Run failure rate >10%"
+          description: "{{ $value | printf \"%.1f\" }}% of engine runs are failing over 5m (sustained 10m)."
+
+      - alert: RunLatencyP95High
+        expr: histogram_quantile(0.95, sum(rate(scalers_run_latency_seconds_bucket[5m])) by (le)) > 120
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Run latency p95 > 120s"
+          description: "p95 end-to-end run latency is {{ $value | printf \"%.0f\" }}s (sustained 10m)."
+
+  - name: scalers-engine-cells
+    rules:
+      - alert: CellLatencyP95High
+        expr: histogram_quantile(0.95, sum(rate(scalers_cell_latency_seconds_bucket[5m])) by (le, cell)) > 30
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Cell {{ $labels.cell }} p95 latency > 30s"
+          description: "Typed-cell {{ $labels.cell }} p95 latency is {{ $value | printf \"%.1f\" }}s (sustained 10m)."
+
+  - name: scalers-engine-gates
+    rules:
+      - alert: GateFailureSpike
+        expr: |
+          100 * sum(rate(scalers_gate_checks_total{result="fail"}[5m]))
+          / clamp_min(sum(rate(scalers_gate_checks_total[5m])), 1) > 30
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Deterministic gate failure rate >30%"
+          description: "{{ $value | printf \"%.1f\" }}% of gate checks are failing over 5m (sustained 10m) — quality gates rejecting heavily."
+
+  - name: scalers-engine-side-effects
+    rules:
+      - alert: SideEffectFailureRate
+        expr: |
+          100 * sum(rate(scalers_side_effects_total{outcome=~"failed|error|rejected|blocked"}[5m]))
+          / clamp_min(sum(rate(scalers_side_effects_total[5m])), 1) > 10
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Side-effect failure rate >10%"
+          description: "{{ $value | printf \"%.1f\" }}% of side-effect dispatches are failing over 5m (sustained 10m) — publish/comment/email delivery degraded."
+
+  - name: scalers-engine-product
+    rules:
+      - alert: ComplaintRateHigh
+        expr: |
+          100 * sum(rate(scalers_complaints_total[15m]))
+          / clamp_min(sum(rate(scalers_actions_published_total[15m])), 1) > 5
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: "Complaint rate > 5%"
+          description: "Complaints are {{ $value | printf \"%.2f\" }}% of published actions over 15m — back off autonomy / investigate."
+
+      - alert: PublishQuotaNearLimit
+        expr: |
+          100 * sum(scalers_publish_quota_used) by (tenant, channel)
+          / clamp_min(sum(scalers_publish_quota_limit) by (tenant, channel), 1) > 90
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Publish quota >90% used ({{ $labels.tenant }}/{{ $labels.channel }})"
+          description: "Tenant {{ $labels.tenant }} on {{ $labels.channel }} has used {{ $value | printf \"%.0f\" }}% of its publish quota — throttle to avoid hitting the IG cap."

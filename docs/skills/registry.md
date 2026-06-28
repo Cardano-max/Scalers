@@ -26,8 +26,9 @@ This document is **governance + the adopt-list**. The operator approves adoption
 | **human-tone** *(1mk.3, first real sign-off)* | `Varnan-Tech/opendirectory` — "human-tone" @ `9c30f79eb975c50a97bed10b47e14f18116a3e3b` (MIT; `main` HEAD at vetting 2026-06-28) | **APPROVED** (sec) · **ADOPTED** (operator 2026-06-28, Tier-1, see §Sign-off) | **Nothing stripped** — upstream is pure markdown (no scripts/network/file/exec); read in full for prompt-injection/off-policy, none found. Enforcement re-authored as our own pure-code validator + temp-0 cell. | `engine/skills/human-tone/SKILL.md` + `engine/cells/ai_flagger.py` (validator) + `engine/cells/humanize.py` (temp-0 rewrite) — PR #26 | **PASS** (seed labeled set: recall 1.0, FP 0.0; 173 unit, ruff clean) · full eval-proof **PENDING-on-eval-pipeline** (rvy.7/.8 @ rvy.10) | AI-flagger **validator bank** (all writing cells) + voice-QA **humanize** cell | **REGISTERED — IN USE** (Tier-1; operator-approved 2026-06-28) |
 | **brand-voice** *(1mk.2, per-artist)* | `anthropics/skills` — `skills/brand-guidelines` @ `b9e19e6f44773509fbdd7001d77ff41a49a486c1` (Apache-2.0; 2026-04-20) | **APPROVED** (sec) · **ADOPTED** (operator 2026-06-28, Tier-1, see §Sign-off) | **Nothing stripped** — upstream is prompt-only markdown; **structure-only** derivative, none of Anthropic's brand content (colors/type/marks) reproduced; NOTICE satisfies Apache-2.0 §4, trademarks excluded. Shipped `verify/*.py` are **our own** stdlib-only resolver+demo (no net/exec/env; read-only repo config + temp writes). Path-traversal residual RESOLVED (PR #29 cbd3b43, sec-verified). | `skills/brand-voice/` (SKILL.md + per-tenant DNA + examples) — PR #29 | **PENDING-on-eval-pipeline** — brand-voice ≥90% gate runs via rvy.7/.8 once the eval gold set (rvy.10 smoke) exists; adoption operator-approved now | posting / reply / outreach **writing cells** (conditionally loaded by cell type) | **REGISTERED — IN USE** (Tier-1; operator-approved 2026-06-28) |
 | brand-alchemy *(worked example)* | `<org>/brand-alchemy` @ `<PIN-AT-ADOPTION>` | **APPROVED-AS-STRIPPED** (sec, see §Demo) — conditional on eval-gate + operator approval | `domain_checker.py` **stripped in full** (TLS-disabled DNS/RDAP network). See itemized list in §Demo. | `engine/skills/brand-alchemy/` *(prompt-only after strip; to be authored at adoption)* | **PENDING** (gold-set not yet run) | *(intended: brand-voice / strategist)* | **HELD** — eval-gate PENDING + operator approval pending |
-| map-your-market | `<org>/map-your-market` @ `<PIN-AT-ADOPTION>` | **HELD** — strip required before sign-off | `fetch.py` (TLS disabled, `CERT_NONE`) → **strip**; reads `GITHUB_TOKEN` + ships `.env.example` → **strip** credential read; re-route through Firecrawl/Meta Ad Library adapter with TLS restored | *(to be authored after strip)* | PENDING | *(intended: research)* | **HELD** |
-| where-your-customer-lives | `<org>/where-your-customer-lives` @ `<PIN-AT-ADOPTION>` | **HELD** — same family as map-your-market | `fetch.py` (TLS disabled) + `GITHUB_TOKEN`/`.env` read → **strip**; route via vetted adapter | *(to be authored)* | PENDING | *(intended: research)* | **HELD** |
+| map-your-market *(1mk.4)* | "map-your-market" (r/ClaudeAI 20-skills; family `coreyhaines31/marketingskills`, MIT) @ `8bfcdffb655f16e713940cd04fb08891899c47db` (**ORIGINAL / pattern-only** — alias NOT verbatim upstream; reviewed family-ref commit, nothing copied) | **APPROVED — ELIGIBLE** (sec S1 2026-06-28, see §Sign-off) | `fetch.py` (TLS disabled, `CERT_NONE`) **stripped in full**; `GITHUB_TOKEN` + `.env.example` credential read **stripped**; 67 parent-repo live-API CLIs **not vendored**. Network re-routed through `engine/research/` adapter (Firecrawl/Meta-Ad-Library, TLS restored). See `skills/map-your-market/VETTING.md`. | `skills/map-your-market/` + `engine/research/` (pattern-only, prompt-only after strip) | **PENDING-on-gold-set** (`evals/gold/research-niche-smoke.jsonl`; holdout = `rvy`) | *(intended: research — `map_market`)* | **ELIGIBLE (conditional)** — strip verified by sec (zero live network; prompt-only; allowlist seam); eval-gate PENDING-on-gold-set; operator adoption pending; **live Firecrawl/Meta provider impl (currently stubs) MUST be re-vetted by sec before going live** |
+| where-your-customer-lives *(1mk.4)* | "where-your-customer-lives" (r/ClaudeAI 20-skills; family `coreyhaines31/marketingskills`, MIT) @ `8bfcdffb655f16e713940cd04fb08891899c47db` (**ORIGINAL / pattern-only** — alias NOT verbatim upstream; reviewed family-ref commit, nothing copied) | **APPROVED — ELIGIBLE** (sec S1 2026-06-28, see §Sign-off) | `fetch.py` (TLS disabled) **stripped**; `GITHUB_TOKEN`/`.env` read **stripped**; 67 parent-repo CLIs **not vendored**. Network via `engine/research/` adapter, TLS restored. See `skills/where-your-customer-lives/VETTING.md`. | `skills/where-your-customer-lives/` + `engine/research/` | **PENDING-on-gold-set** | *(intended: research — `find_communities`)* | **ELIGIBLE (conditional)** — strip verified by sec (zero live network; prompt-only; allowlist seam); eval-gate PENDING-on-gold-set; operator adoption pending; **live Firecrawl/Meta provider impl (currently stubs) MUST be re-vetted by sec before going live** |
+| competitor-pr-finder *(1mk.4)* | "competitor-pr-finder" (r/ClaudeAI 20-skills; family `coreyhaines31/marketingskills`, MIT) @ `8bfcdffb655f16e713940cd04fb08891899c47db` (**ORIGINAL / pattern-only** — alias NOT verbatim upstream; reviewed family-ref commit, nothing copied) | **APPROVED — ELIGIBLE** (sec S1 2026-06-28, see §Sign-off) | Bundled TLS-disabled fetch script(s) + `GITHUB_TOKEN`/`.env` reads **not vendored**; 67 parent-repo CLIs **not vendored**. Competitor-ad access via `engine/research/` Meta-Ad-Library/Foreplay adapter (official API, TLS on). See `skills/competitor-pr-finder/VETTING.md`. | `skills/competitor-pr-finder/` + `engine/research/` | **PENDING-on-gold-set** | *(intended: research — `competitor_creatives`)* | **ELIGIBLE (conditional)** — strip verified by sec (zero live network; prompt-only; allowlist seam); eval-gate PENDING-on-gold-set; operator adoption pending; **live Firecrawl/Meta provider impl (currently stubs) MUST be re-vetted by sec before going live** |
 | ads / ad-creative (`google-ads.js`) | `coreyhaines31/marketingskills` (`ads`/`ad-creative`) @ `<PIN-AT-ADOPTION>` | **REJECTED** (sec) | `tools/clis/google-ads.js` claims **direct ad-account WRITE**. Money/destructive class → executor never vendored. | — | — | none | **REJECTED** — mine patterns only |
 | coldoutboundskills | `growthenginenowoslawski/coldoutboundskills` @ `<PIN-AT-ADOPTION>` | **REJECTED** (sec) | `.ts` scripts **SPEND REAL MONEY** (Dynadot bulk domain purchase) + create live Instantly/Smartlead campaigns. Money/destructive class. | — | — | none | **REJECTED** — mine patterns only |
 | coreyhaines31/marketingskills (67 Node CLIs) | `coreyhaines31/marketingskills` @ `<PIN-AT-ADOPTION>` | **REJECTED by default** (sec) | 67 bundled CLIs read env API tokens, hit data brokers (apollo/zoominfo/clearbit/hunter) + **send real email** (resend/sendgrid/postmark). | — | — | none | **REJECTED** — opt-in only later, scoped creds + `--dry-run`, never default |
@@ -61,6 +62,40 @@ HARD CONDITIONS before any live send / live verify:
   - all sends stay behind the 439 harness side-effect boundary (approve-first);
   - the live MX-probe seam (cold-email-verifier) returns to sec (own resolver + TLS,
     no broker) before it is wired.
+```
+
+---
+
+## §Sign-off — research skills (1mk.4: map-your-market, where-your-customer-lives, competitor-pr-finder)
+
+Heavy vet (operator-flagged TLS-disabled-fetch concern). sec verified PR #37 independently.
+
+```
+Skills:       map-your-market, where-your-customer-lives, competitor-pr-finder
+Provenance:   ORIGINAL / pattern-only — reproduce NO upstream text. The alias names do
+              NOT exist verbatim upstream (verified: coreyhaines31/marketingskills @
+              8bfcdff has "competitor-profiling", not these three). Pinned the reviewed
+              family-ref commit; nothing was copied.
+Pinned:       coreyhaines31/marketingskills @ 8bfcdffb655f16e713940cd04fb08891899c47db (MIT)
+Reviewed by:  sec    Date: 2026-06-28
+```
+
+**Step 1 READ + Step 2 STRIP (verified, not on report).** Across the whole PR: **no `fetch.py`**; **no TLS-disable in code** (every `ssl._create_unverified_context`/`CERT_NONE` hit is documentation of the strip); **no `GITHUB_TOKEN`/`.env`/`os.environ` harvesting code**; **no `.js`/`.ts`/67 CLIs**; **no `subprocess`/`exec`/`eval`**. The 3 skills are prompt-only methodology; references encode safe-fetch guardrails.
+
+**Network seam.** All network is centralized in `engine/research/` behind a `SourceProvider` protocol. Live providers (`FirecrawlProvider`, `MetaAdLibraryProvider`) are **contract-only stubs that raise `NotImplementedError`** → **zero live network today**. `Document.tls_verified=True`; keys are constructor-injected from the tenant pack secret (never `.env`/`GITHUB_TOKEN`). `ResearchRouter` does no network and enforces a **vetted-provider allowlist** (a pack cannot conjure an un-vetted provider). `FixtureProvider` is offline/deterministic.
+
+**Step 4 EVAL-GATE.** PENDING-on-gold-set (`evals/gold/research-niche-smoke.jsonl` smoke + `rvy` holdout).
+
+```
+SEC VERDICT:  APPROVED (strip/security) — ELIGIBLE (CONDITIONAL). Steps 1–3 green;
+              prompt-only; zero live network; allowlist seam. NOT "IN USE": operator
+              adoption + agent assignment separate.
+HARD RE-VET GATE (blocking before research can run): the live Firecrawl/Meta provider
+              implementation is unwritten. Before eng wires it, sec MUST re-vet:
+              (1) verified TLS actually used in code, (2) key from tenant pack secret only,
+              (3) official-API-only (no scraping), (4) SSRF guard on provider.fetch(url)
+              (arbitrary-URL fetch is an SSRF surface), (5) rate-limit/ToS.
+Re-vet triggers: live-provider implementation; OR upstream family bump; OR eval-gate result.
 ```
 
 ---
