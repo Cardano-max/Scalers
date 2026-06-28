@@ -31,6 +31,7 @@ from research.safety import (
     RateLimitError,
     SSRFError,
     assert_official_endpoint,
+    assert_resolved_ips_safe,
     assert_safe_url,
 )
 
@@ -71,6 +72,7 @@ __all__ = [
     "default_registry",
     "assert_safe_url",
     "assert_official_endpoint",
+    "assert_resolved_ips_safe",
     "SSRFError",
     "RateLimiter",
     "RateLimitError",

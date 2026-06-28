@@ -55,12 +55,8 @@ def _host_is_blocked_name(host: str) -> bool:
     return any(h.endswith(suf) for suf in _BLOCKED_SUFFIXES)
 
 
-def _ip_is_unsafe(host: str) -> bool:
-    """True if ``host`` is an IP literal in a non-public range."""
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        return False  # not an IP literal; hostname checks handle it
+def _ip_obj_is_unsafe(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """True if an IP object is in a non-public range."""
     return (
         ip.is_private
         or ip.is_loopback
@@ -71,13 +67,43 @@ def _ip_is_unsafe(host: str) -> bool:
     )
 
 
+def _ip_is_unsafe(host: str) -> bool:
+    """True if ``host`` is a *canonical* IP literal in a non-public range."""
+    try:
+        return _ip_obj_is_unsafe(ipaddress.ip_address(host))
+    except ValueError:
+        return False  # not a canonical IP literal; other checks handle it
+
+
+def _looks_like_numeric_host(host: str) -> bool:
+    """True if ``host`` is a NON-canonical numeric IPv4 encoding — decimal int
+    (``2130706433``), hex (``0x7f000001``), octal (``0177.0.0.1``), or short-form
+    (``127.1``). These bypass ``ipaddress.ip_address`` but resolvers still treat
+    them as IPs, so we **fail closed** and reject them outright (sec F1).
+
+    Canonical dotted-quad / IPv6 literals never reach here — they are classified
+    as IPs first and range-checked; a legitimate caller uses a canonical form or a
+    DNS hostname, never an obfuscated integer.
+    """
+    h = host.strip().strip(".")
+    if not h:
+        return False
+    low = h.lower()
+    if low.startswith("0x") or ".0x" in low:  # any hex octet
+        return True
+    labels = h.split(".")
+    return bool(labels) and all(lbl.isdigit() for lbl in labels)
+
+
 def assert_safe_url(url: str) -> str:
     """Validate a URL we intend to fetch (or ask a provider to fetch). Raises
     :class:`SSRFError` on anything unsafe; returns the URL on success.
 
     Blocks: non-https schemes, embedded credentials, private/loopback/link-local/
-    reserved/metadata targets. This is the SSRF guard the live ``fetch(url)`` and
-    any 'fetch this page' provider call MUST pass first.
+    reserved/metadata targets, and **obfuscated numeric hosts** (decimal/hex/octal/
+    short-form IPv4 — sec F1). This is the static SSRF guard the live ``fetch(url)``
+    MUST pass first; the live provider MUST ALSO call :func:`assert_resolved_ips_safe`
+    on the DNS result (sec F2) — a hostname can still resolve to a private IP.
     """
     parts = urlsplit(url)
     if parts.scheme != "https":
@@ -89,9 +115,42 @@ def assert_safe_url(url: str) -> str:
         raise SSRFError(f"missing host: {url!r}")
     if _host_is_blocked_name(host):
         raise SSRFError(f"internal/metadata host rejected: {host}")
-    if _ip_is_unsafe(host):
-        raise SSRFError(f"non-public IP target rejected: {host}")
-    return url
+    # Canonical IP literal -> range-check it directly.
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None:
+        if _ip_obj_is_unsafe(ip):
+            raise SSRFError(f"non-public IP target rejected: {host}")
+        return url  # canonical public IP literal
+    # Not a canonical IP literal: reject obfuscated numeric encodings (fail closed).
+    if _looks_like_numeric_host(host):
+        raise SSRFError(f"obfuscated/numeric host rejected (possible SSRF): {host!r}")
+    return url  # ordinary DNS hostname — live provider MUST recheck resolved IPs
+
+
+def assert_resolved_ips_safe(addresses) -> None:
+    """MANDATORY live-provider recheck (sec F2). After ``getaddrinfo(host)``, pass
+    EVERY resolved address here: each must be a public IP or this raises
+    :class:`SSRFError`. A DNS name like ``127.0.0.1.nip.io`` passes the static
+    guard but resolves to loopback — only this catches it.
+
+    The caller MUST then **pin the connection to a vetted resolved IP** (connect by
+    IP, send the hostname via SNI/Host) so a rebind between check and connect
+    cannot swap in a private address.
+    """
+    checked = False
+    for addr in addresses:
+        checked = True
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError as exc:
+            raise SSRFError(f"unparseable resolved address: {addr!r}") from exc
+        if _ip_obj_is_unsafe(ip):
+            raise SSRFError(f"host resolves to non-public IP: {addr}")
+    if not checked:
+        raise SSRFError("no resolved addresses to validate")
 
 
 def assert_official_endpoint(url: str, provider_name: str) -> str:

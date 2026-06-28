@@ -15,6 +15,7 @@ from research import (
     RateLimitError,
     SSRFError,
     assert_official_endpoint,
+    assert_resolved_ips_safe,
     assert_safe_url,
 )
 
@@ -52,6 +53,51 @@ def test_ssrf_guard_blocks_unsafe(bad):
 )
 def test_ssrf_guard_allows_public_https(ok):
     assert assert_safe_url(ok) == ok
+
+
+# ── F1: obfuscated IPv4 encodings (sec re-vet finding) ───────────────────────
+
+
+@pytest.mark.parametrize(
+    "obfuscated",
+    [
+        "https://2130706433/",        # decimal 127.0.0.1
+        "https://0x7f000001/",        # hex
+        "https://0177.0.0.1/",        # octal
+        "https://127.1/",             # short form
+        "https://0x7f.0.0.1/",        # mixed hex octet
+        "https://3232235521/",        # decimal 192.168.0.1
+    ],
+)
+def test_f1_obfuscated_numeric_hosts_blocked(obfuscated):
+    with pytest.raises(SSRFError):
+        assert_safe_url(obfuscated)
+
+
+def test_canonical_public_ip_still_allowed():
+    # a normal public dotted-quad is fine (not obfuscated, not private)
+    assert assert_safe_url("https://93.184.216.34/") == "https://93.184.216.34/"
+
+
+# ── F2: resolved-IP-after-DNS recheck (sec re-vet finding) ───────────────────
+
+
+def test_f2_resolved_private_ip_blocked():
+    # e.g. 127.0.0.1.nip.io passes the static guard but resolves to loopback
+    assert assert_safe_url("https://127.0.0.1.nip.io/") == "https://127.0.0.1.nip.io/"
+    with pytest.raises(SSRFError):
+        assert_resolved_ips_safe(["127.0.0.1"])
+    with pytest.raises(SSRFError):
+        assert_resolved_ips_safe(["93.184.216.34", "10.0.0.5"])  # any private fails
+
+
+def test_f2_resolved_public_ips_ok():
+    assert_resolved_ips_safe(["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"]) is None
+
+
+def test_f2_empty_resolution_fails_closed():
+    with pytest.raises(SSRFError):
+        assert_resolved_ips_safe([])
 
 
 def test_firecrawl_fetch_runs_ssrf_guard_before_notimplemented():

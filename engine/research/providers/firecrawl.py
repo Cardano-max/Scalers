@@ -68,10 +68,14 @@ class FirecrawlProvider:
 
     def fetch(self, url: str) -> Document:
         # SSRF guard FIRST: never ask Firecrawl to fetch a private/loopback/
-        # metadata/non-https target (replaces the stripped TLS-disabled fetch.py).
+        # metadata/obfuscated-numeric/non-https target (replaces the stripped
+        # TLS-disabled fetch.py). Static check only — see the MANDATORY runtime
+        # step below.
         assert_safe_url(url)
         raise NotImplementedError(
             "FirecrawlProvider.fetch: eng to wire official Firecrawl fetch (TLS on, "
-            "key-from-pack, rate-limited). The SSRF guard above already gates the "
-            "target; the live call must also re-check the resolved IP after DNS."
+            "key-from-pack, rate-limited). MANDATORY before connect (sec F2): "
+            "getaddrinfo(host) -> safety.assert_resolved_ips_safe(addrs) -> pin the "
+            "connection to a vetted resolved IP (defeats DNS-rebinding; a hostname "
+            "can resolve to a private IP and pass the static guard)."
         )
