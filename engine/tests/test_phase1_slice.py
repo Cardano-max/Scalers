@@ -19,7 +19,9 @@ import uuid
 import pytest
 
 from harness.state import AutonomyMode, Gate, GraphState, RouteDecision
-from phase1_slice import run_slice
+from phase1_slice import EnqueueNode, build_slice_graph, run_slice
+from sideeffects import Channel
+from sideeffects.dispatcher import Dispatcher
 from tests.conftest import VALID_BRIEF, tool_model
 from tests.mock_connector import MockConnector
 
@@ -54,8 +56,9 @@ async def test_slice_runs_research_then_typed_cell_deterministically(db, dsn):
     )
     # load_pack ran.
     assert result.pack.tenant_id == TENANT
-    # Research -> Assemble executed in order; the typed cell produced the draft.
-    assert result.steps == ["research", "assemble"]
+    # Research -> Assemble -> (auto) Enqueue executed in order; the typed cell
+    # produced the draft, and the enqueue node ran inside the graph.
+    assert result.steps == ["research", "assemble", "enqueue"]
     assert result.state.assembled is not None
     assert result.state.assembled.draft == VALID_BRIEF["caption"]
     # Same inputs -> same trajectory (determinism).
@@ -127,6 +130,77 @@ async def test_replay_same_content_fires_effect_once(db, dsn):
         )
     ).fetchone()
     assert rows[0] == 1
+
+
+# ── Durability: crash in the state-advance -> enqueue window (CustomerAcq-jmu) ─
+
+
+async def test_crash_between_state_advance_and_enqueue_does_not_lose_effect(db, dsn):
+    """The enqueue lives INSIDE the graph, so a crash after the assemble
+    checkpoint but before the enqueue commits leaves the run UNFINISHED (no
+    durable 'done' without the outbox intent). On resume the enqueue node runs
+    and the effect is present — never lost — and the connector still fires once.
+
+    This is the regression for the at-most-once loss window jmu flagged: with the
+    old post-graph enqueue (separate tx) a crash here left a durably-completed run
+    with an empty outbox = lost side effect.
+    """
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+    class CrashOnceEnqueue(EnqueueNode):
+        """Crashes on the first attempt BEFORE enqueuing (models a process death
+        in the state-advance -> enqueue window), then enqueues normally."""
+
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            self._crashed = False
+
+        async def __call__(self, state):
+            if not self._crashed:
+                self._crashed = True
+                raise RuntimeError("crash after state-advance, before enqueue commit")
+            return await super().__call__(state)
+
+    enqueue_node = CrashOnceEnqueue(
+        dsn=dsn, tenant_id=TENANT, channel=Channel.POSTING, target="feed"
+    )
+    key = enqueue_node.key_for(VALID_BRIEF["caption"])
+
+    async with AsyncPostgresSaver.from_conn_string(dsn) as checkpointer:
+        await checkpointer.setup()
+        graph = build_slice_graph(
+            dsn=dsn,
+            tenant_id=TENANT,
+            assemble_model=_model(),
+            checkpointer=checkpointer,
+            enqueue_node=enqueue_node,
+        )
+        run_id = f"jmu-{uuid.uuid4().hex[:12]}"
+        init = GraphState(tenant_id=TENANT, run_id=run_id, topic="durability")
+        config = {"configurable": {"thread_id": run_id}}
+
+        # Crash in the enqueue window: the assemble checkpoint is committed, but
+        # the outbox intent is NOT yet written.
+        with pytest.raises(RuntimeError):
+            await graph.run(run_id, init)
+        cur = await db.execute(
+            "SELECT count(*) FROM outbox WHERE idempotency_key = %s", (key,)
+        )
+        assert (await cur.fetchone())[0] == 0  # not enqueued yet — but run isn't 'done'
+
+        # Resume: the enqueue node runs and the intent lands. Effect NOT lost.
+        await graph._graph.ainvoke(None, config)
+        cur = await db.execute(
+            "SELECT count(*) FROM outbox WHERE idempotency_key = %s", (key,)
+        )
+        assert (await cur.fetchone())[0] == 1, (
+            "crash in the state-advance -> enqueue window must NOT lose the effect"
+        )
+
+    # The recovered intent fires exactly once through the dispatcher.
+    connector = MockConnector()
+    await Dispatcher(dsn, connector).dispatch_pending()
+    assert connector.call_count == 1
 
 
 # ── Criterion 3b: forced crash resumes exactly once (checkpointer) ───────────
