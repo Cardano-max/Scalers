@@ -16,6 +16,14 @@ In-repo **canonical** project documents. The engine code and `CLAUDE.md` cite th
 
 Source files cite `systemdesign.md` by section number (e.g. `§6.2` = the Phase-1 control-core interfaces, `§3` = the exactly-once side-effect boundary, `§2.2` = the LangGraph checkpointer durability note). Those section numbers are stable in `systemdesign.md`.
 
+## Architecture decisions (ADRs)
+
+Decision records — the fixed shape a phase's work is built to. Each is the dependency-root for its phase.
+
+| ADR | Decides |
+|-----|---------|
+| [`adr/phase-2-eval-spine.md`](./adr/phase-2-eval-spine.md) | Eval spine: gold-set schema, pgvector KB store, Inspect AI task interface, threshold→CI-gate wiring (per-commit vs per-promotion), self-consistency confidence, Langfuse-canonical observability vs the authoritative `eval_metric` gate |
+
 ## Engineering docs
 
 | Document | Contains |
