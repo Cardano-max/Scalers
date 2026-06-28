@@ -24,6 +24,7 @@ Decision records — the fixed shape a phase's work is built to. Each is the dep
 |-----|---------|
 | [`adr/phase-2-eval-spine.md`](./adr/phase-2-eval-spine.md) | Eval spine: gold-set schema, pgvector KB store, Inspect AI task interface, threshold→CI-gate wiring (per-commit vs per-promotion), self-consistency confidence, Langfuse-canonical observability vs the authoritative `eval_metric` gate |
 | [`adr/phase-3-content-engine-slice.md`](./adr/phase-3-content-engine-slice.md) | Content-engine slice: research→ideate→angle→draft→validator/jury→publish(mock) on the shared spine; typed cell I/O, brand-voice + AI-flagger skill composition, KB voice grounding, media/format gates, routing on the pack autonomy dial, mock publish via the exactly-once boundary; build split for pm |
+| [`adr/phase-5-autonomy.md`](./adr/phase-5-autonomy.md) | Autonomy engine: cross-family jury (per-dimension, hard-fail floor, reliability-weighted aggregation, real agreement), self-consistency confidence + gold-set calibration, deterministic gates + independent safety classifier, the decision precedence (monotonic-toward-review; HOLD always wins), and the per-channel 439-lift state machine (evidence-gated, backend-enforced, auto-revert on regression) on b3f's HOLD |
 
 ## Engineering docs
 
