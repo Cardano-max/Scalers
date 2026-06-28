@@ -12,7 +12,7 @@ import copy
 
 import pytest
 
-from cells.base import Cell, CellError
+from cells.base import CellError
 from cells.content_brief import ContentBrief, Platform, build_content_brief_cell
 from tests.conftest import VALID_BRIEF, text_model, tool_model
 

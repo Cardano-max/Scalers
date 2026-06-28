@@ -63,6 +63,20 @@ Data lives in named volumes (`scalers_pgdata`, `scalers_redisdata`,
 `scalers_miniodata`) and survives `down`/`up`. The pgvector init SQL only runs on
 a **fresh** cluster, so it re-runs only after `down -v`.
 
+## Observability — Langfuse (self-hosted, optional)
+
+A separate stack for traces + evals lives in
+[`docker-compose.langfuse.yml`](docker-compose.langfuse.yml) (Langfuse v3,
+ClickHouse-backed):
+
+```bash
+docker compose --env-file .env -f docker-compose.langfuse.yml up -d   # http://localhost:3000
+```
+
+The engine reads `LANGFUSE_*` from the environment via
+`observability.get_langfuse()` and no-ops when unconfigured. See
+[`../docs/ci.md`](../docs/ci.md) for the full wiring.
+
 ## Windows notes
 
 - Named volumes are used for all data (not host bind mounts) to avoid Windows

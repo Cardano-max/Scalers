@@ -24,6 +24,12 @@ postgres = [
     "langgraph-checkpoint-postgres>=2.0",
     "psycopg[binary,pool]>=3.1",
 ]
+# Self-hosted Langfuse traces/evals. Imported lazily by engine/observability.py;
+# the engine no-ops when it is absent or unconfigured, so it is not needed for
+# the demo or the test suite.
+observability = [
+    "langfuse>=2.0",
+]
 
 [dependency-groups]
 dev = [
@@ -31,6 +37,9 @@ dev = [
     "pytest-asyncio>=0.23",
     # FastAPI TestClient transport.
     "httpx>=0.27",
+    # Lint + format + coverage (test/CI scaffold, dhv.5). Mirrors requirements-dev.txt.
+    "ruff>=0.6",
+    "pytest-cov>=5.0",
 ]
 
 [tool.pytest.ini_options]
@@ -38,6 +47,44 @@ pythonpath = ["."]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 filterwarnings = ["ignore::DeprecationWarning"]
+# Integration tests need a live Postgres (set ENGINE_DATABASE_URL). They are
+# selected by marker so the unit job runs DB-free (`-m "not integration"`) and a
+# dedicated CI job with a pgvector service runs them (`-m integration`). This is
+# what stops real-PG / async-checkpointer defects from hiding under InMemorySaver.
+markers = [
+    "integration: requires a live Postgres via ENGINE_DATABASE_URL (pgvector service in CI)",
+]
 
 [tool.uv]
 package = false
+
+# ---------------------------------------------------------------------------
+# Lint + format (ruff). `ruff format` is Black-compatible (same code style), so
+# a single tool covers both the "ruff" and "black" toolchain the stack calls for.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["harness", "cells", "config", "tests"]
+
+[tool.ruff.lint]
+# Starting baseline = ruff's DEFAULT rule set (pyflakes F + pycodestyle E4/E7/E9),
+# which the existing engine already satisfies. Adopting the linter must not force
+# a large reformat diff across the in-flight Phase-1 branches, so stricter rules
+# (isort I, pyupgrade UP, bugbear B) and `ruff format --check` are a documented
+# follow-up the team opts into. `ruff check` (real-bug rules) is the hard gate.
+
+[tool.ruff.format]
+quote-style = "double"
+
+# ---------------------------------------------------------------------------
+# Coverage threshold — STUB. A floor, not a target; raise `fail_under` as the
+# engine matures (Phase 2+).
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["harness", "cells", "main", "observability"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 50
+show_missing = true
