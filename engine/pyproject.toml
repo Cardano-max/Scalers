@@ -15,6 +15,9 @@ dependencies = [
     # Thin portal (HARN-01): FastAPI /healthz + webhook ingress + SSE out.
     "fastapi>=0.110",
     "uvicorn>=0.29",
+    # Exactly-once side-effect boundary (HARN-04): Postgres outbox/ledger. Used
+    # unconditionally by engine/sideeffects, so it is a core dependency.
+    "psycopg[binary]>=3.2",
 ]
 
 [project.optional-dependencies]
