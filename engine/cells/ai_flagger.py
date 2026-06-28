@@ -2,10 +2,13 @@
 (skill: human-tone, CustomerAcq-1mk.3).
 
 The operator's hard rule: no AI slop ships. This module enforces the human-tone
-bar in *code*, not by hope. It detects the machine-writing tells the "human-tone"
-skill targets — em-dashes, contrast framing ("it's not X, it's Y"), the rhetorical
-rule-of-three, and generic transitions ("Moreover", "In conclusion", …) — with
-**pure regex/string rules and no model call**, so it is fully reproducible and
+bar in *code*, not by hope. It detects the machine-writing tells from the
+ruleset spec (docs/skills/ai-flagger-validator-spec.md, AF-01..AF-08) — em-dashes,
+contrast framing ("it's not X, it's Y"), the rhetorical rule-of-three, generic
+transitions ("Moreover", "In conclusion", …), banned-slop lexicon ("unleash",
+"elevate your", …), hedging/weasel filler ("arguably", "it's worth noting"),
+listicle cadence ("Here are 5 …" / ≥3 bullet lines), and emoji-bullet lines — all
+with **pure regex/string rules and no model call**, so it is fully reproducible and
 feeds the validator-pass-rate metric.
 
 Two surfaces:
@@ -27,16 +30,20 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
-from cells.validators import FieldValidator, Severity, ValidationIssue, _get
+from cells.validators import DEFAULT_AI_TELLS, FieldValidator, Severity, ValidationIssue, _get
 
 
 class AiTellKind(str, Enum):
-    """Categories of machine-writing tell this flagger detects."""
+    """Categories of machine-writing tell this flagger detects (AF-01..AF-08)."""
 
-    EM_DASH = "em_dash"
-    CONTRAST_FRAMING = "contrast_framing"
-    RULE_OF_THREE = "rule_of_three"
-    GENERIC_TRANSITION = "generic_transition"
+    EM_DASH = "em_dash"                      # AF-01
+    CONTRAST_FRAMING = "contrast_framing"    # AF-02
+    RULE_OF_THREE = "rule_of_three"          # AF-03
+    GENERIC_TRANSITION = "generic_transition"  # AF-04
+    BANNED_SLOP = "banned_slop"              # AF-05
+    HEDGING = "hedging"                      # AF-06
+    LISTICLE = "listicle"                    # AF-07
+    EMOJI_BULLET = "emoji_bullet"            # AF-08
 
 
 @dataclass(frozen=True)
@@ -72,7 +79,9 @@ _TRIAD_RE = re.compile(
     r"\b[\w'-]+(?:\s+[\w'-]+){0,2},\s+[\w'-]+(?:\s+[\w'-]+){0,2},\s+(?:and\s+)?[\w'-]+(?:\s+[\w'-]+){0,2}\b"
 )
 
-# Generic AI transitions / openers (whole-phrase, case-insensitive).
+# AF-04 — Generic AI transitions / openers (whole-phrase, case-insensitive).
+# "worth noting" lives in the hedging detector (AF-06), not here, to avoid a
+# double-flag.
 _TRANSITIONS: tuple[str, ...] = (
     "moreover",
     "furthermore",
@@ -83,8 +92,6 @@ _TRANSITIONS: tuple[str, ...] = (
     "ultimately",
     "notably",
     "importantly",
-    "it's worth noting",
-    "it is worth noting",
     "when it comes to",
     "in today's",
     "let's dive in",
@@ -93,10 +100,68 @@ _TRANSITIONS: tuple[str, ...] = (
     "it's important to note",
     "at the end of the day",
     "needless to say",
+    # AF-04 wordlist additions (spec).
+    "to be fair",
+    "all in all",
+    "with that said",
+    "first and foremost",
+    "last but not least",
+    "rest assured",
+    "truth be told",
 )
 _TRANSITION_RE = re.compile(
     r"(?<!\w)(" + "|".join(re.escape(p) for p in _TRANSITIONS) + r")(?!\w)", re.IGNORECASE
 )
+
+# AF-05 — Banned-slop lexicon. Derived from the master DEFAULT_AI_TELLS list
+# (validators.py), minus any phrase the transition detector already owns, so a
+# slop term is never double-flagged as both BANNED_SLOP and GENERIC_TRANSITION.
+# Longer phrases first so the regex prefers the most specific match.
+_TRANSITION_SET = {p.lower() for p in _TRANSITIONS}
+
+
+def _owned_by_transition(phrase: str) -> bool:
+    """True if a transition phrase is a substring — that detector already owns it."""
+    low = phrase.lower()
+    return any(t in low for t in _TRANSITION_SET)
+
+
+# Longer phrases first so the regex prefers the most specific match.
+_BANNED_SLOP: tuple[str, ...] = tuple(
+    sorted(
+        (p for p in DEFAULT_AI_TELLS if not _owned_by_transition(p)),
+        key=len,
+        reverse=True,
+    )
+)
+_BANNED_SLOP_RE = re.compile(
+    r"(?<!\w)(" + "|".join(re.escape(p) for p in _BANNED_SLOP) + r")(?!\w)", re.IGNORECASE
+)
+
+# AF-06 — Hedging / weasel filler (whole-phrase, case-insensitive). Separate from
+# transitions; "worth noting" is owned here.
+_HEDGE_RE = re.compile(
+    r"(?<!\w)("
+    r"it'?s worth noting|worth noting|arguably|in many ways|to some extent|"
+    r"generally speaking|more often than not|for what it'?s worth|it could be argued|"
+    r"somewhat|kind of|sort of|perhaps"
+    r")(?!\w)",
+    re.IGNORECASE,
+)
+
+# AF-07 — Listicle cadence. Either signal trips: a "Here are N …" opener, or a
+# field with >= N bullet-style lines. Language-agnostic (structural).
+_LISTICLE_OPENER_RE = re.compile(r"\bhere(?:'?s| are)\s+\d+\s+\w+", re.IGNORECASE)
+# A bullet emoji range (decorative bullets), reused by AF-08.
+_BULLET_EMOJI = "\U0001f300-\U0001faff☀-➿•"
+_BULLET_LINE_RE = re.compile(
+    rf"^[ \t]*(?:[-*•]|\d+[.)]|[{_BULLET_EMOJI}])\s+\S", re.MULTILINE
+)
+
+# AF-08 — Emoji-bullet lines: a leading decorative emoji acting as a bullet.
+_EMOJI_BULLET_LINE_RE = re.compile(rf"^[ \t]*[{_BULLET_EMOJI}]\s+\S", re.MULTILINE)
+# Auto-fix: strip the leading bullet emoji + following whitespace (line preserved).
+_EMOJI_BULLET_STRIP_RE = re.compile(rf"(?m)^([ \t]*)[{_BULLET_EMOJI}]\s+")
 
 
 @dataclass(frozen=True)
@@ -113,13 +178,27 @@ class FlaggerConfig:
     max_triads: int = 1             # one rhetorical triad is fine; flag beyond
     flag_contrast: bool = True
     flag_transitions: bool = True
+    flag_banned_slop: bool = True
+    flag_hedging: bool = True
+    flag_listicle: bool = True
+    flag_emoji_bullet: bool = True
     allowlist: tuple[str, ...] = ()
     em_dash_severity: Severity = Severity.ERROR
     contrast_severity: Severity = Severity.ERROR
     transition_severity: Severity = Severity.ERROR
     triad_severity: Severity = Severity.WARN
-    # Wordlist-based detectors (contrast/transition) are English-specific; skip
-    # them on text that does not look like English to avoid foreign-language FPs.
+    banned_slop_severity: Severity = Severity.ERROR
+    # AF-06/07/08 default to WARN (observable without over-blocking until tuned on
+    # the gold set); per-cell config raises hedging to ERROR on hooks/headlines.
+    hedge_severity: Severity = Severity.WARN
+    listicle_severity: Severity = Severity.WARN
+    emoji_bullet_severity: Severity = Severity.WARN
+    # Structural thresholds (spec): >= these counts trip the rule.
+    listicle_min_bullets: int = 3
+    emoji_bullet_min_lines: int = 2
+    # Wordlist-based detectors (contrast/transition/banned-slop/hedging) are
+    # English-specific; skip them on non-English text to avoid foreign-language
+    # FPs. The structural rules (em-dash/listicle/emoji-bullet) are language-agnostic.
     english_only: bool = True
 
 
@@ -190,6 +269,67 @@ def detect_ai_tells(text: str, config: FlaggerConfig = FlaggerConfig()) -> list[
                 )
             )
 
+    # AF-05 — banned slop lexicon (English wordlist).
+    if config.flag_banned_slop and english:
+        for m in _BANNED_SLOP_RE.finditer(text):
+            if _allowlisted(m.group(0), config.allowlist):
+                continue
+            tells.append(
+                AiTell(
+                    AiTellKind.BANNED_SLOP,
+                    m.group(0),
+                    m.start(),
+                    m.end(),
+                    f"banned slop phrase ({m.group(0)!r})",
+                )
+            )
+
+    # AF-06 — hedging / weasel filler (English wordlist).
+    if config.flag_hedging and english:
+        for m in _HEDGE_RE.finditer(text):
+            if _allowlisted(m.group(0), config.allowlist):
+                continue
+            tells.append(
+                AiTell(
+                    AiTellKind.HEDGING,
+                    m.group(0),
+                    m.start(),
+                    m.end(),
+                    f"hedging filler ({m.group(0)!r})",
+                )
+            )
+
+    # AF-07 — listicle cadence (structural; language-agnostic). Either an opener
+    # "Here are N …" or >= listicle_min_bullets bullet-style lines trips it.
+    if config.flag_listicle:
+        opener = _LISTICLE_OPENER_RE.search(text)
+        bullet_lines = _BULLET_LINE_RE.findall(text)
+        if opener is not None:
+            tells.append(
+                AiTell(
+                    AiTellKind.LISTICLE, opener.group(0), opener.start(), opener.end(),
+                    "listicle opener ('Here are N …')",
+                )
+            )
+        elif len(bullet_lines) >= config.listicle_min_bullets:
+            tells.append(
+                AiTell(
+                    AiTellKind.LISTICLE, "", 0, 0,
+                    f"listicle cadence ({len(bullet_lines)} bullet lines)",
+                )
+            )
+
+    # AF-08 — emoji-bullet lines (structural; language-agnostic).
+    if config.flag_emoji_bullet:
+        emoji_lines = _EMOJI_BULLET_LINE_RE.findall(text)
+        if len(emoji_lines) >= config.emoji_bullet_min_lines:
+            tells.append(
+                AiTell(
+                    AiTellKind.EMOJI_BULLET, "", 0, 0,
+                    f"emoji-bullet lines ({len(emoji_lines)})",
+                )
+            )
+
     return sorted(tells, key=lambda t: t.start)
 
 
@@ -199,6 +339,10 @@ def _severity_for(kind: AiTellKind, config: FlaggerConfig) -> Severity:
         AiTellKind.CONTRAST_FRAMING: config.contrast_severity,
         AiTellKind.RULE_OF_THREE: config.triad_severity,
         AiTellKind.GENERIC_TRANSITION: config.transition_severity,
+        AiTellKind.BANNED_SLOP: config.banned_slop_severity,
+        AiTellKind.HEDGING: config.hedge_severity,
+        AiTellKind.LISTICLE: config.listicle_severity,
+        AiTellKind.EMOJI_BULLET: config.emoji_bullet_severity,
     }[kind]
 
 
@@ -234,14 +378,23 @@ def ai_flagger(field_name: str, config: FlaggerConfig = FlaggerConfig()) -> Fiel
 
 
 def normalize_ai_tells(text: str) -> str:
-    """Deterministically strip the SAFE tells (em-dash spacing) without a model.
+    """Deterministically strip the AUTO-FIX tells without a model (AF-01, AF-08).
 
-    Only transforms that cannot change meaning: an em/en dash (or double hyphen)
-    used as punctuation becomes a comma. Contrast framing, triads, and
-    transitions are left for the humanize rewrite cell — rewriting them in code
-    risks changing intent. Idempotent.
+    Only meaning-preserving transforms:
+
+    * **AF-01** — an em/en dash (or double hyphen) used as punctuation becomes a
+      comma.
+    * **AF-08** — a leading decorative bullet emoji (and its trailing whitespace)
+      is stripped from each line; the line text is preserved and inline emoji are
+      left untouched.
+
+    The semantic/structural tells (contrast, triad, transitions, banned slop,
+    hedging, listicle) are FLAG-FOR-REGEN — left for the humanize rewrite cell,
+    since rewriting them in code risks changing intent. Idempotent.
     """
-    # "word — word" / "word--word" -> "word, word"
-    out = re.sub(r"\s*(?:—|–|--)\s*", ", ", text)
-    out = re.sub(r"\s{2,}", " ", out)
+    # AF-08: strip a leading bullet emoji per line, keeping the line's indentation.
+    out = _EMOJI_BULLET_STRIP_RE.sub(r"\1", text)
+    # AF-01: "word — word" / "word--word" -> "word, word".
+    out = re.sub(r"\s*(?:—|–|--)\s*", ", ", out)
+    out = re.sub(r"[ \t]{2,}", " ", out)
     return out.strip()

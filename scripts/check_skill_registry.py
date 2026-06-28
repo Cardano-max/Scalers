@@ -14,10 +14,15 @@ HARD failures (fail the build):
   1. A skill bundle present in the repo has **no** registry row.        [no row -> no use]
   2. The matching row is **REJECTED** or **HELD** — a rejected/held skill must not
      be vendored as a loadable bundle.
-  3. The matching row has **no real 40-hex upstream pin** (e.g. a
-     ``<PIN-AT-ADOPTION>`` placeholder) — provenance must be auditable.
-  4. The bundle declares its own pin (``SKILL.md`` frontmatter ``pinned:``) that
-     does **not** match the registry pin (prefix-or-equal) — provenance DRIFT.
+  3. The matching row has **no real 40-hex upstream pin** AND is not marked
+     ``ORIGINAL`` (e.g. an unfilled ``<PIN-AT-ADOPTION>`` placeholder) — provenance
+     must be auditable. A genuinely original / pattern-only skill (no upstream code
+     vendored, no repo to pin) records a backtick-quoted ``ORIGINAL`` as its pin in
+     both the registry row and the ``SKILL.md`` ``pinned:`` field.
+  4. The bundle's declared pin (``SKILL.md`` ``pinned:``) does **not** match the
+     registry pin — provenance DRIFT. This includes ORIGINAL-vs-SHA mismatches in
+     either direction (registry says ORIGINAL but the bundle pins a SHA, or vice
+     versa).
   5. A row marked **REGISTERED -- IN USE** (a) points at a missing on-disk bundle,
      or (b) does not record operator adoption.
 
@@ -46,6 +51,11 @@ _SHA_FULL = re.compile(r"\b[0-9a-f]{40}\b")
 _SHA_ANY = re.compile(r"\b[0-9a-f]{7,40}\b")
 # Angle-bracket placeholder, e.g. <PIN-AT-ADOPTION> / <org>/<commit ...>.
 _PLACEHOLDER = re.compile(r"<[^>]*>")
+# Explicit "no upstream code vendored" provenance for original / pattern-only
+# skills (a cell + prompt re-authored from practitioner patterns, with no repo to
+# pin). Written as a backtick-quoted `ORIGINAL` in the registry pin column so it is
+# distinct from a real SHA and from an unfilled <PLACEHOLDER>.
+_ORIGINAL = re.compile(r"`\s*ORIGINAL\b", re.IGNORECASE)
 
 PASS, FAIL, WARN = "PASS", "FAIL", "WARN"
 
@@ -69,6 +79,10 @@ class Row:
         m = _SHA_FULL.search(cells[1])
         self.pin = m.group(0) if m else None
         self.has_placeholder_pin = self.pin is None and bool(_PLACEHOLDER.search(cells[1]))
+        # ORIGINAL provenance: no upstream code vendored (pattern-only). Only when
+        # there is no real SHA — a real-SHA row that merely says "ORIGINAL" in prose
+        # (e.g. the research family-ref rows) is pinned, not ORIGINAL.
+        self.is_original = self.pin is None and bool(_ORIGINAL.search(cells[1]))
 
     @property
     def status_norm(self) -> str:
@@ -142,8 +156,15 @@ def _bundle_declared_pin(bundle_path: str) -> str | None:
         return None
     for line in head:
         if line.lower().startswith("pinned:"):
+            # Prefer a real SHA even if the comment mentions "original" (e.g. a
+            # family-ref pin annotated "ORIGINAL/pattern-only"); only treat the
+            # declaration as ORIGINAL when there is no hex pin at all.
             m = _SHA_ANY.search(line)
-            return m.group(0) if m else None
+            if m:
+                return m.group(0)
+            if re.search(r"\boriginal\b", line, re.IGNORECASE):
+                return "ORIGINAL"
+            return None
     return None
 
 
@@ -186,12 +207,26 @@ def check(strict_pins: bool = False) -> list[Finding]:
                               f"{'REJECTED' if row.is_rejected else 'HELD'} — a "
                               f"non-eligible skill must not be vendored as a loadable bundle.")
             )
-        if row.pin is None:
+        if row.pin is None and not row.is_original:
             findings.append(
                 Finding(FAIL, f"{bundle}: registry row '{row.name}' has no real 40-hex "
                               f"upstream pin{' (placeholder)' if row.has_placeholder_pin else ''} "
-                              f"— provenance must be auditable before use.")
+                              f"and is not marked `ORIGINAL` — provenance must be auditable before use.")
             )
+        elif row.is_original:
+            # No upstream code vendored. The bundle should declare `pinned: ORIGINAL`
+            # (or nothing); a real SHA in the bundle would contradict the registry.
+            declared = _bundle_declared_pin(bundle)
+            if declared is None:
+                findings.append(Finding(
+                    FAIL if strict_pins else WARN,
+                    f"{bundle}: registry row is ORIGINAL (no upstream code) but SKILL.md "
+                    f"declares no `pinned:` field. Add `pinned: ORIGINAL` to frontmatter."))
+            elif declared.upper() != "ORIGINAL":
+                findings.append(Finding(
+                    FAIL,
+                    f"{bundle}: PROVENANCE DRIFT — registry marks this ORIGINAL (no upstream "
+                    f"code) but SKILL.md pins `{declared}`. Reconcile."))
         else:
             declared = _bundle_declared_pin(bundle)
             if declared is None:
@@ -199,6 +234,10 @@ def check(strict_pins: bool = False) -> list[Finding]:
                        f"(registry pin = {row.pin[:12]}…). Add `pinned: {row.pin}` to "
                        f"frontmatter so the loaded artifact carries its provenance.")
                 findings.append(Finding(FAIL if strict_pins else WARN, msg))
+            elif declared.upper() == "ORIGINAL":
+                findings.append(Finding(
+                    FAIL, f"{bundle}: PROVENANCE DRIFT — SKILL.md declares `ORIGINAL` but the "
+                          f"registry pins {row.pin[:12]}…. Reconcile."))
             elif not (row.pin == declared or row.pin.startswith(declared)):
                 findings.append(
                     Finding(FAIL, f"{bundle}: PROVENANCE DRIFT — SKILL.md pinned:{declared} "

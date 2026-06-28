@@ -114,17 +114,18 @@ def gate_frontend(subdir: str) -> Result:
 
 
 def gate_evals() -> Result:
-    name = "evals:promptfoo"
-    cfg = REPO_ROOT / "evals" / "promptfooconfig.yaml"
-    opt_in = os.environ.get("EVAL_GATE") == "1"
-    if not opt_in:
+    """Per-commit eval gate (ADR Decision 4) at the EVAL_GATE seam.
+
+    Opt-in (`EVAL_GATE=1`) and KB-gated: runs the registered PER_COMMIT metric
+    gates over the eval KB and fails on a regressed required metric. SKIP (neutral)
+    when not opted in or no KB is reachable — never a false build failure.
+    """
+    name = "evals:gate"
+    if os.environ.get("EVAL_GATE") != "1":
         return Result(name, SKIP, "opt-in (set EVAL_GATE=1 to enforce)")
-    if not cfg.exists():
-        return Result(name, SKIP, "no evals/promptfooconfig.yaml")
-    if not _have("promptfoo") and not _have("npx"):
-        return Result(name, FAIL, "promptfoo/npx not available")
-    runner = ["promptfoo", "eval", "-c", str(cfg)] if _have("promptfoo") else ["npx", "promptfoo", "eval", "-c", str(cfg)]
-    return _run(name, runner, REPO_ROOT)
+    if not os.environ.get("ENGINE_DATABASE_URL"):
+        return Result(name, SKIP, "no ENGINE_DATABASE_URL (eval KB unavailable)")
+    return _run(name, _engine_argv(["python", "-m", "evals.run_gate"]), ENGINE_DIR)
 
 
 def gate_skill_registry() -> Result:

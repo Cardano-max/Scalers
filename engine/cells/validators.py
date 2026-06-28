@@ -176,7 +176,9 @@ def word_count_between(
     return FieldValidator("word_count_between", _fn)
 
 
-# Phrases that read as machine-written boilerplate / AI tells.
+# Phrases that read as machine-written boilerplate / AI slop (AF-05 lexicon).
+# Curated + tenant-agnostic (per-tenant bans live in the brand-voice DNA). The
+# AI-flagger derives its BANNED_SLOP detector from this list (see cells.ai_flagger).
 DEFAULT_AI_TELLS: tuple[str, ...] = (
     "as an ai",
     "as a language model",
@@ -184,7 +186,23 @@ DEFAULT_AI_TELLS: tuple[str, ...] = (
     "in conclusion",
     "it is important to note",
     "delve into",
+    "delve",
     "tapestry",
+    # AF-05 marketing-slop additions (docs/skills/ai-flagger-validator-spec.md).
+    "unleash",
+    "elevate your",
+    "level up",
+    "game-changer",
+    "game changer",
+    "look no further",
+    "one-stop",
+    "transform your",
+    "supercharge",
+    "take it to the next level",
+    "in the realm of",
+    "navigating the",
+    "testament to",
+    "when it comes to your",
 )
 
 
