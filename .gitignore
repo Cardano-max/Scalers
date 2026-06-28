@@ -1,0 +1,24 @@
+# Node
+node_modules/
+.next/
+dist/
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+# Env / secrets
+.env
+.env.*
+*.local
+# Data / infra
+*.db
+*.sqlite
+.dbos/
+data/
+minio/
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
