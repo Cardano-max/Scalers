@@ -35,12 +35,9 @@ Research ─▶ Ideate ─▶ SelectAngle ─▶ Draft ─▶ Check&Score ─▶
 Every LLM step is a `Cell[TOut]` (temp-0, pinned model, validator bank, typed-or-raise — `cells/base.py`). Concrete schemas:
 
 ```python
-# --- Research (RSCH-01): NOT an LLM cell — a pluggable tool behind a budget ---
-class Finding(BaseModel):       # one grounded research result
-    source: str                 # "firecrawl" | "exa" | "meta_ad_library"
-    url: str | None
-    snippet: str
-    score: float                # source-provided relevance
+# --- Research (RSCH-01): NOT an LLM cell — the a9m.2 ResearchAdapter (below) ---
+# Canonical contract = Decision 1a (adopts growth's a9m.2 design + the on-main
+# 1mk.4 module). The cells consume ResearchResult.items (ResearchItem).
 
 # --- Ideate cell: research -> angle candidates (composes brand-voice skill) ---
 class Angle(BaseModel):
@@ -72,6 +69,34 @@ class AuthenticityVerdict(BaseModel):
 ```
 
 **Rationale.** Typed I/O keeps raw model text off the wire (HARN-02, §6.3) and makes each cell directly eval-able under the Phase-2 ADR (one Inspect `Task` per cell, gold `Engine=POSTING`). The AI-flagger is a **separate cell from the copywriter** — a writer must not grade its own authenticity; this is the independent-classifier principle (AUTON-04) applied early.
+
+---
+
+## Decision 1a — Research adapter (RSCH-01) — adopts the a9m.2 contract
+
+The research interface is **growth's a9m.2 `ResearchAdapter` contract** ([`docs/design/a9m2-research-adapter-contract.md`](../design/a9m2-research-adapter-contract.md), PR #52), folded here as canonical so the slice builds to one contract. It builds on the on-main 1mk.4 module (`engine/research/{adapter,router,providers/*}.py`): the `SourceProvider` protocol, `ResearchRouter` fan-out, and the `research/safety.py` gate (TLS-in-code, official-API-only, SSRF guard, rate/key checks).
+
+```python
+class ResearchAdapter:
+    def __init__(self, providers, *, budget: Budget, mode: Mode = Mode.MOCK): ...
+    def run(self, query: ResearchQuery) -> ResearchResult: ...   # the slice's Research node calls this
+
+class ResearchItem(BaseModel):      # replaces the earlier draft `Finding`
+    source: str; kind: str          # kind: "signal" | "angle" | "competitor_creative"
+    text: str; url: str | None
+    score: float                    # 0..1 canonical RANKING signal (see scoring decision)
+    signals: ScoreSignals | None = None   # RESERVED, optional (see below)
+    evidence: tuple[str, ...] = ()
+class ResearchResult(BaseModel):
+    items: tuple[ResearchItem, ...]; sources_used: tuple[str, ...]
+    over_budget: bool = False; degraded: tuple[str, ...] = (); notes: tuple[str, ...] = ()
+```
+
+Confirmed aligned to canonical `stack-decision.md` (verified against the live doc, June-28 correction): **Foreplay Competitor Advertising API is PRIMARY for competitor ads, Meta Ad Library is the FALLBACK** (the operator has Foreplay access; both behind the same pluggable adapter); Firecrawl primary web + Exa optional; **Reddit OUT** of the MVP brain. Hard **per-run `Budget`** (max calls/credits/wall-seconds) checked before each paid call — over-budget returns a **partial result + `over_budget=True`, never blocks**. **`Mode.MOCK` is the default** (auto-selected when secrets are absent, so CI/the slice run with zero live calls); `LIVE` requires keys-from-pack **and** passes the sec re-vet gate. A dead/over-budget backend is recorded in `degraded` and the run continues (one source never fails the run). Zero results is valid — the cells fall back to brand context only.
+
+**Scoring decision (the open question from growth): single canonical float, with per-dimension reserved.** `ResearchItem.score` is a **single 0..1 relevance/quality float** — the canonical ranking signal SelectAngle and the cells use (growth's MVP recommendation: ship simple). I add **one optional, reserved** field `signals: ScoreSignals | None` where `ScoreSignals = {relevance, recency, authority}` (each `float | None`), populated by backends that can (Exa→recency, Meta Ad Library/Foreplay→run-dates/authority) and otherwise left `None`. Rationale: **RSCH-02** (Phase-7 "competitor/winning-pattern mining + *deterministic scoring*") will need to weight recency/authority; reserving the optional sub-object now means a9m.2 ships a single float **and** Phase-7 adds dimensions **without a breaking contract change**. MVP populates only `score`; nothing is blocked on per-dimension.
+
+**Rationale.** Adopting growth's contract verbatim (one canonical home = this ADR, per the Scalers/docs decision) means a9m.2 has zero rework; the reserved `signals` field is the only arch addition, and it exists purely to keep the contract stable across the RSCH-01→RSCH-02 boundary.
 
 ---
 
@@ -110,14 +135,21 @@ The Copywriter cell consumes a **typed `VoiceGrounding` payload**, not raw exemp
 class Exemplar(BaseModel):
     content: str; metrics: dict; similarity: float
 
+class Vocabulary(BaseModel):
+    prefer: list[str]              # lexicon/phrases to lean on
+    ban: list[str]                 # words/phrases that must not appear
+    approved_claims: list[str]     # the ALLOWLIST — see enforcement note below
+    emoji_policy: str              # e.g. "none" | "sparse, max 1"
+    hashtag_policy: str            # e.g. "3-5, lowercase, no banned tags"
+
 class VoiceDimensions(BaseModel):
-    """The tenant's brand-voice rubric. SHAPE is arch-owned; SEMANTICS/content are
-    sourced from the brand-voice skill (authored from the per-tenant brand-dna.md
-    by the skill-creator pipeline — the engine loads the skill, it does not read
-    brand-dna.md directly). pmm/writer own what goes in each field."""
-    tone: str          # e.g. "dry, confident, anti-hype"
-    vocabulary: str    # preferred lexicon/phrasing (banned words are validator GATES, not here)
-    structure: str     # sentence/format patterns: length, emoji policy, CTA style
+    """The tenant's brand-voice rubric. SHAPE is arch-owned (locked with pmm,
+    2026-06-28); SEMANTICS/content are pmm/writer-owned, sourced from the
+    brand-voice skill (authored from the per-tenant brand-dna.md by the
+    skill-creator pipeline — the engine loads the skill, not brand-dna.md)."""
+    tone: list[str]                # e.g. ["dry", "confident", "anti-hype"]
+    structure: list[str]           # sentence/format patterns
+    vocabulary: Vocabulary
 
 class GroundingCoverage(str, Enum):
     FULL = "full"        # dimensions present AND >= k on-voice exemplars
@@ -142,7 +174,9 @@ def build_voice_grounding(pack, kb, *, query: str, k: int = 5) -> VoiceGrounding
 #   coverage/low_grounding computed from exemplar_count + dimension presence.
 ```
 
-The Copywriter prompt is assembled in code from: **selected angle + research findings + `VoiceGrounding` (dimensions + skill instructions + top-k exemplars)**. When `low_grounding` is true the cell grounds on **dimensions only** and the slice flags **lower confidence** (Decision 4 / edge cases) — it never fabricates a voice it has no evidence for. Grounding is retrieval, not fine-tuning (VOICE-01 LoRA is deferred v2).
+The Copywriter prompt is assembled in code from: **selected angle + research items + `VoiceGrounding` (dimensions + skill instructions + top-k exemplars)**. When `low_grounding` is true the cell grounds on **dimensions only** and the slice flags **lower confidence** (Decision 4 / edge cases) — it never fabricates a voice it has no evidence for. Grounding is retrieval, not fine-tuning (VOICE-01 LoRA is deferred v2).
+
+**`vocabulary.ban` + `vocabulary.approved_claims` are the canonical per-tenant lists feeding BOTH the writer (guidance) AND the deterministic gate (enforcement) — one definition, two consumers.** The Copywriter is *guided* by them (prefer/ban, claims allowlist); the validator bank (Decision 4 / stream F) *enforces* them as gates that read these same lists: a banned phrase → `banned_phrase` gate fails; **any claim not in `approved_claims` → the `claim` gate fails (HARD): the draft is blocked, routes to `regenerate`, and escalates to human-review if unresolved within the recovery budget — an unapproved claim never ships.** `approved_claims` is therefore a typed `list[str]` (not prose) precisely because a gate matches against it. This supersedes the earlier "banned words live only in the validator" note: the *list* is owned in `VoiceDimensions` (pmm/brand-dna), the *gate* lives in the validator bank and reads it.
 
 **`kb_chunks` ownership (the content/voice partition):** the table does **not** exist yet — the Phase-2 KB scaffold (rvy.2) created only the eval partition (`gold_example`/`gold_label`/`eval_metric`, `infra/initdb/03-eval-kb.sql`). The **column shape is arch-owned** (systemdesign §5.1: `kb_chunks(tenant_id, kind, content, embedding vector, metrics jsonb)` + tenant-scoped pgvector index); the **DDL/migration is a build bead** — `infra/initdb/04-kb-content.sql`, the KNOW-02/stream-B dependency that `a9m.3` builds on, mirroring how rvy.2 scaffolded the eval partition. ADRs decide the shape; they do not ship migrations.
 
@@ -155,7 +189,8 @@ The Copywriter prompt is assembled in code from: **selected angle + research fin
 `Check&Score` is a **pure-code node** that assembles the routing signals; it calls **no new router**:
 
 1. **Deterministic gates** (POST-02) from an extended `ValidatorBank` — media/format + content gates → `list[Gate]`:
-   - Reels **9:16, 5–90s**; image aspect/size; caption length; hashtag count/limits; banned phrases; pricing/claim checks; placeholder check; voice-similarity (vs KB).
+   - Reels **9:16, 5–90s**; image aspect/size; caption length; hashtag count/limits (`vocabulary.hashtag_policy`); emoji policy (`vocabulary.emoji_policy`); **banned phrases (reads `VoiceDimensions.vocabulary.ban`)**; **claim allowlist (reads `vocabulary.approved_claims` — any claim not on it is a HARD gate fail → block + regenerate/escalate)**; placeholder check; voice-similarity (vs KB).
+   - The per-tenant `ban`/`approved_claims`/policies are **injected from `VoiceGrounding.dimensions`** (Decision 3), not hardcoded — the gate and the writer share one list.
 2. **AI-flagger** → an `ai_authenticity` `Gate` (fails if `authentic=False`) **and** its `safety: SafetyVerdict` feeds the decision.
 3. **Confidence** — Phase-3 deterministic placeholder (as `nodes.py:_confidence_for` does today); Phase-5 swaps in the self-consistency computer behind the same `state.confidence` field.
 4. **Decision record** via the existing `autonomy/produce.py:produce_and_record_decision(...)` → stub jury (`autonomy/jury.py`) + `derive_decision` → persisted `DecisionRecord` (the console jury card binds to it). Phase-5 swaps the stub for the real jury — **no schema change**.
@@ -213,13 +248,13 @@ Parallelizable streams, each with the interface it owns. A–G can proceed concu
 
 | Stream | Owns | Interface | Req | Depends |
 |--------|------|-----------|-----|---------|
-| **A** | Research adapter + budget cap | `ResearchSource.search(query, budget) -> list[Finding]`; pluggable (Firecrawl/Exa), one failing source never blocks | RSCH-01 | — |
+| **A** | Research adapter (a9m.2) | `ResearchAdapter.run(query) -> ResearchResult` (Decision 1a); Budget + MOCK-default + Exa/Foreplay providers + degradation | RSCH-01 | 1mk.4 (on main) |
 | **B0** | `kb_chunks` content/voice partition DDL | `infra/initdb/04-kb-content.sql` (shape from systemdesign §5.1; arch-owned shape) | KNOW-01 | eval KB (exists) |
 | **B** | KB voice grounding | `KbStore.voice_exemplars(...)` + `build_voice_grounding(...) -> VoiceGrounding` (dimensions + exemplars + coverage) | KNOW-02 | B0, C |
 | **C** | Skill loader + composition | `SkillLoader.load(ref) -> Skill` | (enabler) | — |
 | **D** | Ideate cell + SelectAngle (pure code) | `build_ideate_cell`, `select_angle(AngleSet, kb_history) -> Angle` | POST-01 | C |
 | **E** | Copywriter cell (consumes `VoiceGrounding`) | `build_copywriter_cell` | POST-01, KNOW-02 | B, C |
-| **F** | Media/format validator bank | new `ValidatorBank` gates | POST-02 | validators (exists) |
+| **F** | Media/format + content validator bank (reads `VoiceDimensions.vocabulary` ban/approved_claims/policies) | new `ValidatorBank` gates | POST-02 | validators (exists), B |
 | **G** | AI-flagger cell | `build_ai_flagger_cell` | (safety) | C |
 | **H** | Posting subgraph wiring: Check&Score + route + mock publish + persist Action + `is_enabled` short-circuit | the spine; reuses `slice_route`, `produce_and_record_decision`, `SideEffectBoundary`, `MockPostingConnector` | POST-01(4) | all |
 
