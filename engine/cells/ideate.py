@@ -14,11 +14,11 @@ practitioner-wisdom KB + voice skill), and the validators.
 
 from __future__ import annotations
 
-from enum import Enum
 
 from pydantic import BaseModel, Field
 
 from cells.base import Cell
+from cells.post_schemas import MediaKind  # canonical single MediaKind (re-exported)
 from cells.skills import Skill, compose_instructions
 from cells.validators import (
     ValidatorBank,
@@ -26,15 +26,6 @@ from cells.validators import (
     non_empty,
 )
 from research.content.items import ResearchResult
-
-
-class MediaKind(str, Enum):
-    """The asset kind an angle implies (also used by the copywriter cell, a9m.5)."""
-
-    IMAGE = "image"
-    REEL = "reel"
-    CAROUSEL = "carousel"
-    TEXT = "text"
 
 
 class Angle(BaseModel):
