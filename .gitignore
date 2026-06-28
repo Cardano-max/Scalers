@@ -11,6 +11,7 @@ venv/
 # Env / secrets
 .env
 .env.*
+!.env.example
 *.local
 # Data / infra
 *.db
