@@ -44,7 +44,7 @@ Tool tension to resolve: backend-plan §3 names **Inspect AI** (harness) + **Dee
 | `input` | jsonb NOT NULL | the `CellInput` shape the cell consumes |
 | `expected` | jsonb NULL | consensus/canonical label payload (per-engine shape below); may be derived from `gold_label` rows or authored directly |
 | `rubric_dimensions` | text[] | e.g. `{voice,safety,appropriateness}` |
-| `split` | enum `CALIBRATION\|HOLDOUT\|SMOKE` | HOLDOUT = the blind set for brand-voice ≥90% (never used to tune) |
+| `split` | enum `CALIBRATION\|HOLDOUT\|SMOKE\|RUBRIC` | HOLDOUT = the blind set for brand-voice ≥90% (never used to tune); **RUBRIC** = the jury/human-rater **anchor corpus** that defines the 0–4 anchors (Phase-5 jury, bead 4jx.12) — see note below |
 | `label_version` | int NOT NULL | bumped on any rubric/relabel change (see edge cases) |
 | `embedding` | vector NULL | same embed model/dim as the KNOW-01 KB; nullable so labels can be authored before embeddings are backfilled |
 | `created_at` / `created_by` | timestamptz / text | provenance |
@@ -80,7 +80,20 @@ Store **per-rater rows, never a collapsed value** — agreement (κ / % agreemen
   "reply_appropriate": true }
 ```
 
-**Rationale.** Common envelope (id/tenant/engine/cell/input/rubric/version/raters/created_at) gives every engine one ingestion + query path; the per-engine bit is an opaque jsonb `label` so the schema is stable while engines differ. Engine-agnostic + jsonb labels satisfy the edge case "label engines that don't exist in code yet" (outreach/engagement land Phase 7). `split=HOLDOUT` + per-rater rows give the blind-holdout + κ machinery spec §5 demands.
+**RUBRIC-split rows (jury anchor corpus, Phase-5 / 4jx.2 / 4jx.12).** The `split` enum **admits `RUBRIC`** (added 2026-06-29, arch). RUBRIC rows are the canonical-anchor corpus that calibrates **both** the human raters and the LLM jurors to the same 0–4 anchors — they are **disjoint from grounding/CALIBRATION/HOLDOUT** and, like SMOKE, are **never scored as the holdout and never feed a gate** (`dataset_for(...)` and the rvy.7/rvy.8 gates filter to `CALIBRATION`/`HOLDOUT`; SMOKE and RUBRIC are excluded). A RUBRIC row's `expected` carries the jury-anchor payload — the **designed opaque-jsonb extension**, keyed by `split`:
+
+```jsonc
+// RUBRIC anchor row (POSTING) — expected.{anchors, hard_fail_codes, soft_cap_codes}
+{ "anchors": [ {"dimension":"voice","score":4,"exemplar":"..."}, {"dimension":"appropriateness","score":1,"exemplar":"..."} ],
+  "hard_fail_codes": ["MEDICAL_CLAIM","OUTCOME_GUARANTEE"],   // disqualifiers — Phase-5 D1 floor (force escalate; never averaged out)
+  "soft_cap_codes":  ["MILD_HYPE"] }                          // score CEILINGS — cap the dimension, do not disqualify
+```
+
+`hard_fail_codes` and `soft_cap_codes` are **machine-detectable code catalogs** (not prose): the jury cell emits which codes fired, the aggregator treats any `hard_fail_code` as a **disqualifier** (Phase-5 ADR Decision 1) and a `soft_cap_code` as a **deterministic score ceiling** on its dimension. Catalog ownership: voice/appropriateness = pmm; safety = sec.
+
+**Rationale.** Common envelope (id/tenant/engine/cell/input/rubric/version/raters/created_at) gives every engine one ingestion + query path; the per-engine bit is an opaque jsonb `label`/`expected` so the schema is stable while engines and *purposes* differ — RUBRIC rows reuse the same table with a split-keyed payload rather than needing a new table. Engine-agnostic + jsonb labels satisfy the edge case "label engines that don't exist in code yet" (outreach/engagement land Phase 7). `split=HOLDOUT` + per-rater rows give the blind-holdout + κ machinery spec §5 demands.
+
+> **Implementation note:** admitting `RUBRIC` is a one-value change in `kb/schema.py:Split` **and** the `03-eval-kb.sql` CHECK constraint (they must agree); fold it into the Phase-5 migration (4jx.10) so it lands before .2's loader reads the 4jx.12 corpus into PG.
 
 ---
 
