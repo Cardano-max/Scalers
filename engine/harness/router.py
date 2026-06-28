@@ -52,8 +52,20 @@ def route(
     if not 0.0 <= threshold <= 1.0:
         raise ValueError(f"threshold must be in [0.0, 1.0]; got {threshold!r}")
 
+    # A failed deterministic gate means the artifact is broken — re-draft it
+    # (checked first, so a HELD tenant's broken content still regenerates rather
+    # than going to a human as-is; the regenerate/escalate distinction is kept).
     if gates and any(not gate.passed for gate in gates):
         return RouteDecision.REGENERATE
+
+    # bead-439 (CustomerAcq-b3f): a HELD tenant/channel never auto-fires. HOLD
+    # forces human review, overriding confidence and the dial — so no signal
+    # (incl. the stubbed jury's hardcoded 0.9 confidence) can route it to AUTO.
+    # Ordering is safe either way: the only path to AUTO is the final return,
+    # which HOLD short-circuits.
+    if autonomy is AutonomyMode.HOLD:
+        return RouteDecision.REVIEW
+
     if confidence < threshold:
         return RouteDecision.REVIEW
     if autonomy is AutonomyMode.REVIEW:

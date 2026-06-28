@@ -1,82 +1,183 @@
-"""FirecrawlProvider — official-API web/social fetch (SEAM FOR ENG, not yet wired).
+"""FirecrawlProvider — official-API web fetch with a SECURE, GATED live client.
 
-This is the vetted replacement for the upstream skills' stripped ``fetch.py``
-(which disabled TLS and read ``GITHUB_TOKEN``/``.env`` — see
-docs/skills/vetting-protocol.md and the registry rows). It fetches the
-tattoo-native web/social surface via Firecrawl's **official API**, with **TLS
-verification ON**, respecting robots/ToS — official APIs only, no scraping bans,
-no credential harvesting.
+Live fetch (bead de6 / a9m.2 follow-up) behind the 1mk.4 safety boundary
+(#50/#64). It is **disabled by default** (mock-default): no live fetch happens
+unless ``enabled=True`` is explicitly passed AND the operator green-lights go-live;
+sec re-vets the live impl first (the 1mk.4 go-live conditions).
 
-STATUS: contract only. ``gather`` / ``fetch`` raise ``NotImplementedError`` until
-eng wires the live client. The router degrades cleanly (skips + notes) so the
-research engine keeps working on the fixture provider meanwhile.
+Security model (every live request):
+  1. ``assert_safe_url(target)`` — SSRF guard on the URL we ask Firecrawl to scrape
+     (https-only, no private/loopback/metadata/obfuscated host, no creds).
+  2. ``assert_official_endpoint(api_base, "firecrawl")`` — we only ever connect to
+     the official ``api.firecrawl.dev`` over TLS (official-API-only).
+  3. ``resolve_and_pin(api_host)`` — getaddrinfo → re-validate EVERY resolved IP →
+     return ONE vetted IP; we connect to THAT IP with TLS SNI/Host = the hostname
+     (the unskippable F2 recheck + pin-to-IP-before-connect — defeats rebinding).
+  4. rate-limited; key-from-pack (constructor), never a vendored ``.env``.
 
-eng contract — implement these against the Firecrawl API:
-  * ``fetch(url)`` -> Document(text=..., tls_verified=True, fetched_via="firecrawl").
-    MUST use a verified TLS context (never ``ssl._create_unverified_context`` /
-    ``CERT_NONE``). Read the key from the tenant pack secret / env, never from a
-    vendored ``.env``.
-  * ``gather(query)`` -> ProviderResult: for map_market/find_communities, pull
-    r/tattoos, Instagram-hashtag, Pinterest, TikTok public surfaces for the
-    query's niche/seed terms and shape them into Signal/Community objects.
-Keep determinism where it matters: any ranking/summarizing of fetched text runs
-in a temp-0 cell downstream, not here — this provider only retrieves.
+The byte-level I/O is behind the :class:`HttpFetcher` seam so tests assert the
+pinning/gating/SSRF wiring with a fake (no real network); :class:`PinnedHttpsFetcher`
+is the real stdlib client used at go-live.
 """
 
 from __future__ import annotations
 
-from research.adapter import (
-    Channel,
-    Document,
-    ProviderResult,
-    ResearchQuery,
+import json
+import socket
+import ssl
+from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
+
+from research.adapter import Channel, Document, ProviderResult, ResearchQuery
+from research.safety import (
+    RateLimiter,
+    assert_official_endpoint,
+    assert_safe_url,
+    resolve_and_pin,
 )
-from research.safety import RateLimiter, assert_safe_url
 
 _FIRECRAWL_CHANNELS = frozenset(
     {Channel.R_TATTOOS, Channel.INSTAGRAM_HASHTAG, Channel.PINTEREST, Channel.TIKTOK, Channel.WEB}
 )
-# Official Firecrawl API base — the ONLY host this provider may call (TLS).
 FIRECRAWL_API_BASE = "https://api.firecrawl.dev"
+_API_HOST = "api.firecrawl.dev"
+_SCRAPE_PATH = "/v1/scrape"
+
+
+class FirecrawlDisabledError(RuntimeError):
+    """A live fetch was attempted while the provider is disabled (mock-default /
+    not operator-green-lit). The safe default; never a silent live call."""
+
+
+@dataclass(frozen=True)
+class HttpResponse:
+    status: int
+    body: str
+    tls_verified: bool = True
+
+
+@runtime_checkable
+class HttpFetcher(Protocol):
+    """The byte-level seam. Implementations MUST connect to ``ip`` (already vetted
+    by resolve_and_pin) while presenting ``host`` for TLS SNI + the Host header."""
+
+    def request(self, *, method: str, ip: str, host: str, path: str,
+                headers: dict[str, str], body: bytes | None, timeout: float) -> HttpResponse: ...
+
+
+class PinnedHttpsFetcher:
+    """Real stdlib HTTPS client that connects to the PINNED IP with a verified TLS
+    context and SNI=host (used at go-live; exercised by sec/operator, not CI)."""
+
+    def request(self, *, method, ip, host, path, headers, body, timeout):  # pragma: no cover
+        ctx = ssl.create_default_context()  # verification ON (never CERT_NONE)
+        raw = socket.create_connection((ip, 443), timeout=timeout)
+        try:
+            with ctx.wrap_socket(raw, server_hostname=host) as tls:  # SNI = hostname
+                lines = [f"{method} {path} HTTP/1.1", f"Host: {host}", "Connection: close"]
+                lines += [f"{k}: {v}" for k, v in headers.items()]
+                if body is not None:
+                    lines.append(f"Content-Length: {len(body)}")
+                data = ("\r\n".join(lines) + "\r\n\r\n").encode() + (body or b"")
+                tls.sendall(data)
+                chunks = []
+                while True:
+                    b = tls.recv(65536)
+                    if not b:
+                        break
+                    chunks.append(b)
+        finally:
+            raw.close()
+        head, _, payload = b"".join(chunks).partition(b"\r\n\r\n")
+        status = int(head.split(b" ", 2)[1]) if b" " in head else 0
+        return HttpResponse(status=status, body=payload.decode("utf-8", "replace"))
 
 
 class FirecrawlProvider:
-    """Official-API web/social provider. Live client is eng-owned (see module doc).
-
-    The sec hardening (bead 1mk.4) is enforced HERE so the live client cannot skip
-    it: keys come from the pack secret (never a vendored .env), the API base is the
-    official https host, every ``fetch(url)`` target passes the SSRF guard, and a
-    token-bucket rate limiter gates calls.
-    """
+    """Official-API web provider. Live fetch is GATED (disabled by default)."""
 
     name = "firecrawl"
     channels: frozenset[Channel] = _FIRECRAWL_CHANNELS
 
-    def __init__(self, api_key: str | None = None, *, rate: float = 2.0, burst: int = 5) -> None:
-        # key-from-pack: the tenant pack secret / env at wiring time — never a
-        # vendored .env, never GITHUB_TOKEN harvesting.
-        self._api_key = api_key
+    def __init__(
+        self,
+        api_key: str | None = None,
+        *,
+        enabled: bool = False,
+        fetcher: HttpFetcher | None = None,
+        rate: float = 2.0,
+        burst: int = 5,
+        timeout: float = 15.0,
+        clock=None,
+        resolver=None,
+    ) -> None:
+        self._api_key = api_key            # key-from-pack; never a vendored .env
         self._api_base = FIRECRAWL_API_BASE
+        self._enabled = enabled            # mock-default: no live fetch unless True
+        self._fetcher = fetcher or PinnedHttpsFetcher()
         self._limiter = RateLimiter(rate=rate, burst=burst)
+        self._timeout = timeout
+        self._resolver = resolver          # injectable getaddrinfo (tests); None=real
+        import time
 
-    def gather(self, query: ResearchQuery) -> ProviderResult:
-        raise NotImplementedError(
-            "FirecrawlProvider.gather: eng to wire the official Firecrawl API at "
-            f"{self._api_base} (TLS, key-from-pack, rate-limited). Each target URL "
-            "must pass safety.assert_safe_url; the router uses the fixture until then."
-        )
+        self._clock = clock or time.monotonic
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
 
     def fetch(self, url: str) -> Document:
-        # SSRF guard FIRST: never ask Firecrawl to fetch a private/loopback/
-        # metadata/obfuscated-numeric/non-https target (replaces the stripped
-        # TLS-disabled fetch.py). Static check only — see the MANDATORY runtime
-        # step below.
+        """Scrape ``url`` via the official Firecrawl API — secure + gated."""
+        # 1. SSRF guard on the target we ask Firecrawl to scrape.
         assert_safe_url(url)
-        raise NotImplementedError(
-            "FirecrawlProvider.fetch: eng to wire official Firecrawl fetch (TLS on, "
-            "key-from-pack, rate-limited). MANDATORY before connect (sec F2): route "
-            "the live request through safety.resolve_and_pin(host) and connect to "
-            "the returned IP (host via SNI/Host). That single helper resolves + "
-            "re-validates every IP + returns the pinned address, so the recheck "
-            "cannot be skipped (defeats DNS-rebinding like 127.0.0.1.nip.io)."
+        # 2. Gate: never a live call unless explicitly enabled + operator-green-lit.
+        if not self._enabled:
+            raise FirecrawlDisabledError(
+                "Firecrawl live fetch is disabled (mock-default). Enable only after "
+                "sec re-vet + operator go-live (bead de6 / 1mk.4 conditions)."
+            )
+        if not self._api_key:
+            raise FirecrawlDisabledError("no Firecrawl API key (key-from-pack required)")
+        # 3. official-API-only + pin-to-IP (F2): we connect to api.firecrawl.dev.
+        assert_official_endpoint(self._api_base, "firecrawl")
+        pinned_ip = resolve_and_pin(_API_HOST, resolver=self._resolver)
+        # 4. rate-limit + the request.
+        self._limiter.acquire(self._clock())
+        body = json.dumps({"url": url, "formats": ["markdown"]}).encode("utf-8")
+        resp = self._fetcher.request(
+            method="POST", ip=pinned_ip, host=_API_HOST, path=_SCRAPE_PATH,
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+            body=body, timeout=self._timeout,
         )
+        if resp.status >= 400:
+            raise RuntimeError(f"Firecrawl returned HTTP {resp.status}")
+        return Document(
+            url=url, text=_extract_markdown(resp.body), title=None,
+            fetched_via="firecrawl", tls_verified=resp.tls_verified,
+        )
+
+    def gather(self, query: ResearchQuery) -> ProviderResult:
+        # The query -> Signal/Community normalization over Firecrawl search results
+        # is the next step (de6 follow-up); the secure fetch primitive above is the
+        # safety-critical core. Until then the router degrades to the fixture.
+        raise NotImplementedError(
+            "FirecrawlProvider.gather: query->Signal normalization pending (uses the "
+            "now-live fetch + Firecrawl search); router uses the fixture until then."
+        )
+
+
+def _extract_markdown(raw_json: str) -> str:
+    """Best-effort pull of the scraped text from a Firecrawl JSON response.
+    Defensive: never raises on an unexpected shape (returns '' instead)."""
+    try:
+        data = json.loads(raw_json)
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    if isinstance(data, dict):
+        inner = data.get("data", data)
+        if isinstance(inner, dict):
+            return str(inner.get("markdown") or inner.get("content") or "")
+    return ""

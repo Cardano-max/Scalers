@@ -138,13 +138,14 @@ def test_resolve_and_pin_dns_failure_is_ssrf_error():
         resolve_and_pin("nope.invalid", resolver=_boom)
 
 
-def test_firecrawl_fetch_runs_ssrf_guard_before_notimplemented():
-    # An unsafe target is rejected by the guard (SSRFError), not reached as a
-    # NotImplemented seam — proving the guard runs first.
+def test_firecrawl_fetch_runs_ssrf_guard_before_gate():
+    # An unsafe target is rejected by the SSRF guard, not reached as the disabled
+    # gate — proving the guard runs first.
     with pytest.raises(SSRFError):
         FirecrawlProvider().fetch("https://127.0.0.1/secret")
-    # A safe target passes the guard, then hits the (un-wired) live seam.
-    with pytest.raises(NotImplementedError):
+    # A safe target passes the guard, then hits the gate (disabled = mock-default).
+    from research.providers.firecrawl import FirecrawlDisabledError
+    with pytest.raises(FirecrawlDisabledError):
         FirecrawlProvider().fetch("https://www.reddit.com/r/tattoos/")
 
 
@@ -159,6 +160,23 @@ def test_official_endpoint_allowlist():
         assert_official_endpoint("https://evil.example.com/api", "firecrawl")
     with pytest.raises(SSRFError):
         assert_official_endpoint("http://api.firecrawl.dev/x", "firecrawl")  # non-https
+
+
+def test_exa_and_foreplay_official_endpoints_allowlisted():
+    """Regression (gy2): the live exa/foreplay clients must NOT be fail-closed
+    SSRF-rejected for lack of an allowlist entry. Before the fix, the 'exa' and
+    'foreplay' provider names mapped to an EMPTY allowlist, so their own official
+    bases raised SSRFError — blocking the provider the moment the live client wired.
+    The provider names match ExaProvider.name / ForeplayProvider.name."""
+    assert assert_official_endpoint("https://api.exa.ai/search", "exa")
+    assert assert_official_endpoint("https://api.foreplay.co/v1/ads", "foreplay")
+    # still fail-closed for a non-official host under each provider name
+    with pytest.raises(SSRFError):
+        assert_official_endpoint("https://evil.example.com/api", "exa")
+    with pytest.raises(SSRFError):
+        assert_official_endpoint("https://api.exa.ai/search", "foreplay")  # wrong host for foreplay
+    with pytest.raises(SSRFError):
+        assert_official_endpoint("http://api.exa.ai/search", "exa")  # non-https
 
 
 # ── rate limiter ─────────────────────────────────────────────────────────────
