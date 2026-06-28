@@ -100,6 +100,44 @@ def test_f2_empty_resolution_fails_closed():
         assert_resolved_ips_safe([])
 
 
+# ── resolve_and_pin: the unskippable recheck helper (sec suggestion) ─────────
+
+
+def _fake_getaddrinfo(*addrs):
+    """A getaddrinfo-shaped resolver returning the given addresses (for tests)."""
+    def _resolver(host, port, *a, **k):
+        return [(None, None, None, "", (addr, port)) for addr in addrs]
+    return _resolver
+
+
+def test_resolve_and_pin_returns_vetted_public_ip():
+    from research import resolve_and_pin
+
+    pinned = resolve_and_pin("example.com", resolver=_fake_getaddrinfo("93.184.216.34"))
+    assert pinned == "93.184.216.34"
+
+
+def test_resolve_and_pin_blocks_private_resolution():
+    from research import resolve_and_pin
+
+    # 127.0.0.1.nip.io-style: resolves to loopback -> must raise before connect
+    with pytest.raises(SSRFError):
+        resolve_and_pin("evil.nip.io", resolver=_fake_getaddrinfo("127.0.0.1"))
+    # any private address among the results fails closed
+    with pytest.raises(SSRFError):
+        resolve_and_pin("x.com", resolver=_fake_getaddrinfo("93.184.216.34", "10.0.0.5"))
+
+
+def test_resolve_and_pin_dns_failure_is_ssrf_error():
+    from research import resolve_and_pin
+
+    def _boom(*a, **k):
+        raise OSError("nxdomain")
+
+    with pytest.raises(SSRFError):
+        resolve_and_pin("nope.invalid", resolver=_boom)
+
+
 def test_firecrawl_fetch_runs_ssrf_guard_before_notimplemented():
     # An unsafe target is rejected by the guard (SSRFError), not reached as a
     # NotImplemented seam — proving the guard runs first.

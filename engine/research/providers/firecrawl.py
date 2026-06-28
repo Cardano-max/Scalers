@@ -74,8 +74,9 @@ class FirecrawlProvider:
         assert_safe_url(url)
         raise NotImplementedError(
             "FirecrawlProvider.fetch: eng to wire official Firecrawl fetch (TLS on, "
-            "key-from-pack, rate-limited). MANDATORY before connect (sec F2): "
-            "getaddrinfo(host) -> safety.assert_resolved_ips_safe(addrs) -> pin the "
-            "connection to a vetted resolved IP (defeats DNS-rebinding; a hostname "
-            "can resolve to a private IP and pass the static guard)."
+            "key-from-pack, rate-limited). MANDATORY before connect (sec F2): route "
+            "the live request through safety.resolve_and_pin(host) and connect to "
+            "the returned IP (host via SNI/Host). That single helper resolves + "
+            "re-validates every IP + returns the pinned address, so the recheck "
+            "cannot be skipped (defeats DNS-rebinding like 127.0.0.1.nip.io)."
         )

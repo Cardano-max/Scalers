@@ -23,6 +23,8 @@ static one; it does not replace it.
 from __future__ import annotations
 
 import ipaddress
+import socket
+from collections.abc import Callable
 from urllib.parse import urlsplit
 
 # Official API hosts per provider name (the only bases a provider may call).
@@ -151,6 +153,32 @@ def assert_resolved_ips_safe(addresses) -> None:
             raise SSRFError(f"host resolves to non-public IP: {addr}")
     if not checked:
         raise SSRFError("no resolved addresses to validate")
+
+
+def resolve_and_pin(
+    host: str,
+    *,
+    port: int = 443,
+    resolver: Callable[..., list] | None = None,
+) -> str:
+    """Resolve ``host``, validate EVERY resolved IP, and return ONE vetted IP to
+    pin the connection to (sec's go-live suggestion). Routing the live fetch
+    through this makes the F2 recheck impossible to skip: there is no path to a
+    connect IP that did not pass :func:`assert_resolved_ips_safe`.
+
+    The live client MUST connect to the returned IP (sending ``host`` via SNI /
+    the Host header) so a DNS rebind between resolve and connect cannot swap in a
+    private address. ``resolver`` is injectable for tests (defaults to
+    ``socket.getaddrinfo``); it must return ``getaddrinfo``-shaped tuples.
+    """
+    resolve = resolver or socket.getaddrinfo
+    try:
+        infos = resolve(host, port, 0, socket.SOCK_STREAM)
+    except OSError as exc:
+        raise SSRFError(f"DNS resolution failed for {host!r}: {exc}") from exc
+    addrs = [info[4][0] for info in infos]
+    assert_resolved_ips_safe(addrs)  # raises on any non-public / empty
+    return addrs[0]
 
 
 def assert_official_endpoint(url: str, provider_name: str) -> str:

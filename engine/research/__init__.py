@@ -33,6 +33,7 @@ from research.safety import (
     assert_official_endpoint,
     assert_resolved_ips_safe,
     assert_safe_url,
+    resolve_and_pin,
 )
 
 
@@ -73,6 +74,7 @@ __all__ = [
     "assert_safe_url",
     "assert_official_endpoint",
     "assert_resolved_ips_safe",
+    "resolve_and_pin",
     "SSRFError",
     "RateLimiter",
     "RateLimitError",
