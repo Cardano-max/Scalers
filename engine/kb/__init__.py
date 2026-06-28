@@ -16,11 +16,23 @@ from kb.schema import (
     Scope,
     Split,
 )
+from kb.grounding import (
+    CATEGORIES,
+    KINDS,
+    PARTITION,
+    GroundingStore,
+    WisdomSnippet,
+)
 from kb.store import KbStore, content_hash
 
 __all__ = [
     "KbStore",
     "content_hash",
+    "GroundingStore",
+    "WisdomSnippet",
+    "PARTITION",
+    "CATEGORIES",
+    "KINDS",
     "Embedder",
     "DeterministicEmbedder",
     "EMBED_DIM",
