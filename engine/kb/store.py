@@ -28,6 +28,7 @@ from kb.schema import (
     Scope,
     Split,
 )
+from kb.voice import Exemplar
 
 
 def content_hash(payload: dict[str, Any]) -> str:
@@ -260,5 +261,70 @@ class KbStore:
                 model_pins_hash=r[12], prompt_version=r[13], dataset_hash=r[14],
                 git_sha=r[15], langfuse_trace_id=r[16], created_at=r[17],
             )
+            for r in rows
+        ]
+
+    # ── kb_chunks (tenant content/voice partition — KNOW-02 voice grounding) ──
+
+    def upsert_kb_chunk(
+        self,
+        *,
+        tenant_id: str,
+        content: str,
+        kind: str = "post",
+        metrics: dict[str, Any] | None = None,
+        is_holdout: bool = False,
+    ) -> str:
+        """Insert (or refresh) one tenant content/voice chunk. Idempotent on the
+        natural key (tenant, kind, content_hash) — a re-load never dups. ``content``
+        is embedded for similarity retrieval. ``is_holdout`` tags a chunk that the
+        rvy.4 brand-voice holdout scores against; such chunks are EXCLUDED from
+        grounding reads (:meth:`voice_exemplars`) so the engine never grounds on the
+        content it is graded on (voice-grounding-contract §1)."""
+        if kind not in ("post", "voice"):
+            raise ValueError(f"kb_chunks.kind {kind!r} not in ('post', 'voice')")
+        chash = content_hash({"content": content})
+        vec = self._embedder.embed(content)
+        if len(vec) != 384:
+            raise ValueError(f"embedding dim {len(vec)} != 384 (column is vector(384))")
+
+        with self._conn(tenant_id) as conn:
+            row = conn.execute(
+                "INSERT INTO kb_chunks"
+                " (tenant_id, kind, content, metrics, is_holdout, content_hash, embedding)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s::vector)"
+                " ON CONFLICT (tenant_id, kind, content_hash)"
+                " DO UPDATE SET metrics = EXCLUDED.metrics,"
+                "   is_holdout = EXCLUDED.is_holdout, embedding = EXCLUDED.embedding"
+                " RETURNING id",
+                (
+                    tenant_id, kind, content, json.dumps(metrics or {}),
+                    is_holdout, chash, to_pgvector(vec),
+                ),
+            ).fetchone()
+            return str(row[0])
+
+    def voice_exemplars(
+        self, *, tenant_id: str, query: str, k: int = 5
+    ) -> list[Exemplar]:
+        """Top-``k`` of the tenant's own past content nearest to ``query`` by cosine
+        similarity — the KNOW-02 grounding retrieval the Copywriter consumes.
+
+        Always tenant-scoped (explicit filter + RLS); holdout-tagged rows are excluded
+        (§1 invariant). An empty / new-tenant KB returns ``[]`` (never raises), so the
+        assembly degrades to dimensions-only. ``similarity`` is ``1 - cosine_distance``
+        (higher = closer), per the contract."""
+        qvec = to_pgvector(self._embedder.embed(query))
+        with self._conn(tenant_id) as conn:
+            rows = conn.execute(
+                "SELECT content, metrics, 1 - (embedding <=> %s::vector) AS similarity"
+                " FROM kb_chunks"
+                " WHERE tenant_id = %s AND kind IN ('post', 'voice')"
+                "   AND is_holdout = false AND embedding IS NOT NULL"
+                " ORDER BY embedding <=> %s::vector ASC LIMIT %s",
+                (qvec, tenant_id, qvec, k),
+            ).fetchall()
+        return [
+            Exemplar(content=r[0], metrics=r[1] or {}, similarity=float(r[2]))
             for r in rows
         ]
