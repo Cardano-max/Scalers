@@ -85,7 +85,7 @@ class ResearchItem(BaseModel):      # replaces the earlier draft `Finding`
     source: str; kind: str          # kind: "signal" | "angle" | "competitor_creative"
     text: str; url: str | None
     score: float                    # 0..1 canonical RANKING signal (see scoring decision)
-    signals: ScoreSignals | None = None   # RESERVED, optional (see below)
+    breakdown: ScoreBreakdown | None = None   # RESERVED, optional (None in a9m.2; see below)
     evidence: tuple[str, ...] = ()
 class ResearchResult(BaseModel):
     items: tuple[ResearchItem, ...]; sources_used: tuple[str, ...]
@@ -94,7 +94,7 @@ class ResearchResult(BaseModel):
 
 Confirmed aligned to canonical `stack-decision.md` (verified against the live doc, June-28 correction): **Foreplay Competitor Advertising API is PRIMARY for competitor ads, Meta Ad Library is the FALLBACK** (the operator has Foreplay access; both behind the same pluggable adapter); Firecrawl primary web + Exa optional; **Reddit OUT** of the MVP brain. Hard **per-run `Budget`** (max calls/credits/wall-seconds) checked before each paid call — over-budget returns a **partial result + `over_budget=True`, never blocks**. **`Mode.MOCK` is the default** (auto-selected when secrets are absent, so CI/the slice run with zero live calls); `LIVE` requires keys-from-pack **and** passes the sec re-vet gate. A dead/over-budget backend is recorded in `degraded` and the run continues (one source never fails the run). Zero results is valid — the cells fall back to brand context only.
 
-**Scoring decision (the open question from growth): single canonical float, with per-dimension reserved.** `ResearchItem.score` is a **single 0..1 relevance/quality float** — the canonical ranking signal SelectAngle and the cells use (growth's MVP recommendation: ship simple). I add **one optional, reserved** field `signals: ScoreSignals | None` where `ScoreSignals = {relevance, recency, authority}` (each `float | None`), populated by backends that can (Exa→recency, Meta Ad Library/Foreplay→run-dates/authority) and otherwise left `None`. Rationale: **RSCH-02** (Phase-7 "competitor/winning-pattern mining + *deterministic scoring*") will need to weight recency/authority; reserving the optional sub-object now means a9m.2 ships a single float **and** Phase-7 adds dimensions **without a breaking contract change**. MVP populates only `score`; nothing is blocked on per-dimension.
+**Scoring decision (the open question from growth): single canonical float, with per-dimension reserved.** `ResearchItem.score` is a **single 0..1 relevance/quality float** — the canonical ranking signal SelectAngle and the cells use (growth's MVP recommendation: ship simple). Plus **one optional, reserved** field `breakdown: ScoreBreakdown | None` where `ScoreBreakdown = {relevance, recency, authority}` (each `float | None`), `None` in a9m.2 and populated later by backends that can (Exa→recency, Meta Ad Library/Foreplay→run-dates/authority). Rationale: **RSCH-02** (Phase-7 "competitor/winning-pattern mining + *deterministic scoring*") will need to weight recency/authority; reserving the optional sub-object now means a9m.2 ships a single float **and** Phase-7 adds dimensions **without a breaking contract change**. MVP populates only `score`; nothing is blocked on per-dimension. (Adopted in growth's a9m.2 contract, PR #52 — names match.)
 
 **Rationale.** Adopting growth's contract verbatim (one canonical home = this ADR, per the Scalers/docs decision) means a9m.2 has zero rework; the reserved `signals` field is the only arch addition, and it exists purely to keep the contract stable across the RSCH-01→RSCH-02 boundary.
 
@@ -137,8 +137,11 @@ class Exemplar(BaseModel):
 
 class Vocabulary(BaseModel):
     prefer: list[str]              # lexicon/phrases to lean on
-    ban: list[str]                 # words/phrases that must not appear
+    ban: list[str]                 # words/phrases that must not appear (regenerate-on-fail)
     approved_claims: list[str]     # the ALLOWLIST — see enforcement note below
+    sensitive_ban: list[str] = []  # ESCALATE-on-fail patterns: health/outcome guarantees,
+                                   # licensure, pricing, medical framing (e.g. "post-mastectomy").
+                                   # Distinct gate from ban/claim — skips regenerate, see Decision 4.
     emoji_policy: str              # e.g. "none" | "sparse, max 1"
     hashtag_policy: str            # e.g. "3-5, lowercase, no banned tags"
 
@@ -196,6 +199,17 @@ The Copywriter prompt is assembled in code from: **selected angle + research ite
 4. **Decision record** via the existing `autonomy/produce.py:produce_and_record_decision(...)` → stub jury (`autonomy/jury.py`) + `derive_decision` → persisted `DecisionRecord` (the console jury card binds to it). Phase-5 swaps the stub for the real jury — **no schema change**.
 
 **Routing reuses the just-merged 2kp contract** (`phase1_slice.py`): `slice_route(pack, channel, confidence, gates)` → `resolve_channel_policy(pack, channel)` → `route(...)`. **`pack.autonomy_for(channel)` (mode + threshold) is the source of truth** — never a caller default. The posting engine acts on `config.Channel.INSTAGRAM` / `FACEBOOK`; the outbox uses `_SIDE_EFFECT_CHANNEL[channel] == Channel.POSTING`.
+
+**Gate disposition — escalate-on-fail vs regenerate-on-fail (the `sensitive_ban` requirement).** Today every failed gate routes to `regenerate` (router rule 1). Some violations must NOT be silently re-drafted — health/outcome guarantees, licensure, pricing, medical framing (e.g. "post-mastectomy"). Model (pmm's instinct is correct: it's a *separate gate*, not a per-claim severity):
+
+```python
+class GateDisposition(str, Enum): REGENERATE = "regenerate"; ESCALATE = "escalate"
+# Gate gains: on_fail: GateDisposition = REGENERATE   # default preserves current 2kp routing
+```
+
+Two distinct content gates read the `VoiceDimensions.vocabulary` lists: `claim`/`banned_phrase` (allowlist miss / `ban`) → **REGENERATE**-then-escalate (bounded); `sensitive_ban` (matches the `sensitive_ban` pattern set) → **ESCALATE** immediately (straight to human-review, skip regenerate). Router order becomes: **(1) any ESCALATE-gate failed → review** · (2) any REGENERATE-gate failed → regenerate · (3) confidence < threshold → review · (4) dial REVIEW → review · (5) auto.
+
+**Scoping (safety surface):** `on_fail` on `Gate` + the new router branch is a small change to the **2kp-reviewed** `harness/router.py` + `harness/state.py:Gate`. It is **additive — `on_fail` defaults to `REGENERATE`, so all existing routing is byte-for-byte unchanged** — but because it touches the vvi surface it lands as its **own bead (the 439-lift), with eng3 + qa review**, NOT inside the slice. **Phase-3 ships regenerate-then-escalate now** (the safe current behavior); pmm authors the `sensitive_ban` patterns into `brand-dna`/`VoiceDimensions` now (harmless until the gate reads them), and 439 flips the disposition. So the data lands early, the safety-surface code change is reviewed separately.
 
 > **Honor `pack.is_enabled(channel)` (addresses a finding from the 2kp review):** the posting engine **produces nothing** for an `OFF`/disabled channel — it short-circuits before Ideate, rather than running the pipeline and queuing a REVIEW action for a channel the operator turned off. (`OFF → REVIEW` keeps the no-auto-fire safety property even if this is missed, but the engine should not do work for a disabled channel — the `config.schema` OFF contract is "produces nothing".)
 
