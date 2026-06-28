@@ -21,9 +21,15 @@ Layout it assumes (repo-relative):
 from __future__ import annotations
 
 import json
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# A tenant id / artist segment is a SINGLE path component. Reject anything that
+# could escape the packs/tenants directory (``..``, ``/``, ``\``, absolute paths,
+# drive letters, NUL). Allow only the conservative charset real ids use.
+_SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 # repo root = .../skills/brand-voice/verify/resolve_brand_voice.py -> parents[3]
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -33,6 +39,29 @@ DEFAULT_PACKS_DIR = REPO_ROOT / "engine" / "config" / "packs"
 
 class BrandVoiceError(Exception):
     """Resolution failed in a way the caller must handle (not silently)."""
+
+
+def _safe_segment(value: str, kind: str) -> str:
+    """Validate a single path segment (tenant id / artist), or raise.
+
+    Hard stop on path-traversal vectors before the value ever touches the
+    filesystem — required before multi-tenant, where tenant ids are untrusted.
+    """
+    if not isinstance(value, str) or not _SAFE_SEGMENT.match(value):
+        raise BrandVoiceError(
+            f"unsafe {kind} {value!r}: must match {_SAFE_SEGMENT.pattern} "
+            "(no path separators, no '..', no absolute paths)"
+        )
+    return value
+
+
+def _within(base: Path, child: Path) -> Path:
+    """Defense in depth: confirm ``child`` resolves inside ``base``, or raise."""
+    base_r = base.resolve()
+    child_r = child.resolve()
+    if base_r != child_r and base_r not in child_r.parents:
+        raise BrandVoiceError(f"path {child_r} escapes {base_r}")
+    return child_r
 
 
 @dataclass
@@ -77,7 +106,8 @@ class BrandVoiceContext:
 
 
 def _load_pack(tenant_id: str, packs_dir: Path) -> dict:
-    path = packs_dir / f"{tenant_id}.toml"
+    _safe_segment(tenant_id, "tenant_id")
+    path = _within(packs_dir, packs_dir / f"{tenant_id}.toml")
     if not path.is_file():
         raise BrandVoiceError(f"no pack for tenant {tenant_id!r} (looked for {path})")
     with path.open("rb") as fh:
@@ -114,8 +144,10 @@ def resolve(tenant_id: str, *, packs_dir: Path = DEFAULT_PACKS_DIR,
         )
 
     # Multi-artist tenant: the ref names the artist; load exactly that DNA.
-    artist = skill_ref.split("/", 1)[1]
-    tdir = skill_dir / "tenants" / artist
+    # Sanitize the artist segment before it touches the filesystem.
+    artist = _safe_segment(skill_ref.split("/", 1)[1], "skill_ref artist")
+    tenants_root = skill_dir / "tenants"
+    tdir = _within(tenants_root, tenants_root / artist)
     dna_path = tdir / "brand-dna.md"
     examples = _load_examples(tdir / "examples.jsonl")
     grounding = [e for e in examples if e.get("split") == "grounding"]

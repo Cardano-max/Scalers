@@ -29,7 +29,9 @@ except (AttributeError, ValueError):
     pass
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from resolve_brand_voice import REPO_ROOT, resolve, BrandVoiceContext  # noqa: E402
+from resolve_brand_voice import (  # noqa: E402
+    REPO_ROOT, resolve, BrandVoiceContext, BrandVoiceError,
+)
 
 CELL = REPO_ROOT / "engine" / "cells" / "content_brief.py"
 
@@ -104,6 +106,29 @@ def main() -> int:
         assert "positioning-only" in sp and "Lower" in sp, "degrade note missing"
         print(f"  PASS — degraded={d.degraded}; notes={d.notes}")
         print("  PASS — degrade note instructs lower confidence -> review")
+
+    banner("SECURITY — path-traversal in tenant_id / skill_ref is rejected")
+    # Via tenant_id (before any filesystem access).
+    for bad in ["../../etc/passwd", "..", "a/b", "x.toml", "/abs", "C:\\win"]:
+        try:
+            resolve(bad)
+        except BrandVoiceError:
+            print(f"  PASS — tenant_id {bad!r} rejected")
+        else:
+            raise AssertionError(f"tenant_id {bad!r} was NOT rejected")
+    # Via skill_ref artist segment (malicious pack value).
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+        (tdp / "packs").mkdir(); (tdp / "skills").mkdir()
+        (tdp / "packs" / "evil.toml").write_text(
+            'tenant_id = "evil"\ndisplay_name = "Evil"\n'
+            '[voice]\nskill = "brand-voice/../../../../secrets"\n', encoding="utf-8")
+        try:
+            resolve("evil", packs_dir=tdp / "packs", skill_dir=tdp / "skills")
+        except BrandVoiceError:
+            print("  PASS — skill_ref artist '../../../../secrets' rejected")
+        else:
+            raise AssertionError("malicious skill_ref artist was NOT rejected")
 
     banner("RESULT")
     print("All grounding + edge-case assertions passed.")

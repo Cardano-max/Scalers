@@ -50,6 +50,13 @@ A draft cell now demonstrably STARTS FROM real brand context.
 EXIT=0
 ```
 
+4. **Security — path traversal rejected (sec S1 hardening).** `tenant_id` and the
+   artist segment of `skill_ref` are validated against `^[A-Za-z0-9][A-Za-z0-9_-]*$`
+   and a containment check before any filesystem access. The demo asserts that
+   `../../etc/passwd`, `..`, `a/b`, `x.toml`, `/abs`, `C:\win` (as `tenant_id`) and
+   a malicious pack `skill = "brand-voice/../../../../secrets"` all raise
+   `BrandVoiceError`. Legit ids (`ink-studio`, `newbie`) still resolve. All PASS.
+
 ## Scope / honesty notes
 
 - This verifies the **grounding-assembly contract** that 1mk.2 owns: the skill +
