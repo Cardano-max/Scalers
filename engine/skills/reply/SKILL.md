@@ -2,6 +2,7 @@
 name: reply
 description: Use when the engagement cell drafts a SHORT reply to a social comment or DM for a tattoo artist — discovery questions and objection-handling in the artist's voice. Enforces the handoff policy: comments may auto within threshold, DMs ALWAYS go to a human. Trigger words: reply, comment, DM, engagement, objection, discovery, handoff, escalate, troll, hostile.
 license: pattern-adoption (no upstream code vendored — see VETTING.md)
+pinned: ORIGINAL
 ---
 
 # Reply (comment / DM)
