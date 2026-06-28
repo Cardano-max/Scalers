@@ -90,14 +90,18 @@ CREATE INDEX IF NOT EXISTS gold_example_embedding_idx
 -- DB for any non-superuser connection. The production app connects as the
 -- NOSUPERUSER `scalers_app` role with `app.current_tenant` set per request.
 -- (Superusers bypass RLS by design — the DAL filter is the always-on guarantee.)
+-- Best-effort: a Postgres whose connecting user lacks CREATEROLE (some CI
+-- services) still gets the tables + RLS policies; only the convenience role is
+-- skipped. RLS applies to ANY non-superuser role, not just scalers_app.
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'scalers_app') THEN
         CREATE ROLE scalers_app LOGIN PASSWORD 'scalers_app';
     END IF;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON gold_example, gold_label, eval_metric TO scalers_app;
+EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'skipping scalers_app role/grants (insufficient privilege); RLS still enforced';
 END $$;
-
-GRANT SELECT, INSERT, UPDATE, DELETE ON gold_example, gold_label, eval_metric TO scalers_app;
 
 ALTER TABLE gold_example ENABLE ROW LEVEL SECURITY;
 ALTER TABLE gold_example FORCE ROW LEVEL SECURITY;
