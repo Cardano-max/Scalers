@@ -7,7 +7,7 @@ in-house validator (engine/outreach/verifier.py). Grounded in
 docs/skills/winning-strategies-kb.md.
 
 Upstream pattern : "cold-email-verifier" (r/ClaudeAI 20-skills list)
-Pinned commit    : <PIN-AT-ADOPTION>   # sec resolves/verifies real 40-hex SHA at
+Pinned commit    : ORIGINAL (no upstream code vendored)   # sec resolves/verifies real 40-hex SHA at
                    fetch; non-loadable until filled (vetting-protocol.md).
 
 EXPLICITLY STRIPPED (capability we do NOT take)

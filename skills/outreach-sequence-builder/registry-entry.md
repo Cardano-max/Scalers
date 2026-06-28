@@ -9,7 +9,7 @@ sends until rvy.7/.8 pass).
 | **Skill** | `outreach-sequence-builder` |
 | **Bead** | `CustomerAcq-1mk.7` |
 | **Upstream source** | "outreach-sequence-builder" (r/ClaudeAI 20-skills list) — mine-patterns-only |
-| **Pinned commit** | `<PIN-AT-ADOPTION>` — sec resolves/verifies real 40-hex SHA at fetch |
+| **Pinned commit** | `ORIGINAL (no upstream code vendored)` — sec resolves/verifies real 40-hex SHA at fetch |
 | **Skill type** | Pattern-only re-authoring; prompt-only (enforcement = `engine/outreach/`) |
 | **What was stripped/sandboxed** | Nothing vendored. The money/send capability of the REJECTED family (`coldoutboundskills` real-money; marketingskills email-SEND CLIs) is **not taken**. Sending is the harness side-effect boundary, **439-gated**; `cold-email-verifier` adapted as a deterministic verifier (broker-enrichment stripped). |
 | **Re-authored to our format** | Yes — `skills/outreach-sequence-builder/` + `engine/outreach/` |

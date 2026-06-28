@@ -7,7 +7,7 @@ out"), re-written as original methodology, constrained to email, and retargeted
 to tattoo-studio outreach. Grounded in docs/skills/winning-strategies-kb.md.
 
 Upstream pattern : "outreach-sequence-builder" (r/ClaudeAI 20-skills list)
-Pinned commit    : <PIN-AT-ADOPTION>   # sec resolves/verifies the real 40-hex SHA
+Pinned commit    : ORIGINAL (no upstream code vendored)   # sec resolves/verifies the real 40-hex SHA
                    at fetch; non-loadable until filled (vetting-protocol.md).
 
 NOT ADOPTED / mine-patterns-only

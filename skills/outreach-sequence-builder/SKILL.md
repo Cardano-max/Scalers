@@ -7,6 +7,7 @@ description: Use when the outreach engine plans a cold-email sequence for a tatt
   auto-sent. Trigger words: outreach, cold email, sequence, follow-up, cadence,
   warmup, suppression, deliverability, sending cap.
 license: pattern-only re-authoring — see NOTICE
+pinned: ORIGINAL  # no upstream code vendored (pattern-only)
 ---
 
 # Outreach Sequence Builder (tattoo studio)

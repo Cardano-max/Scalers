@@ -9,7 +9,7 @@ Canonical row: `docs/skills/registry.md`. **ELIGIBLE ≠ IN USE**; additionally
 |-------|-------|
 | Skill | `outreach-sequence-builder` |
 | Upstream pattern | "outreach-sequence-builder" (r/ClaudeAI 20-skills list) — mine-patterns-only |
-| Pinned commit | `<PIN-AT-ADOPTION>` — sec resolves/verifies real 40-hex SHA at fetch |
+| Pinned commit | `ORIGINAL (no upstream code vendored)` — sec resolves/verifies real 40-hex SHA at fetch |
 | Skill type | Pattern-only re-authoring; prompt-only (enforcement = `engine/outreach/`) |
 | Our-format path | `skills/outreach-sequence-builder/` + `engine/outreach/` |
 | sec sign-off (S1) | **SUBMITTED — pending sec verification** |

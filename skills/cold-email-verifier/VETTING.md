@@ -8,7 +8,7 @@ bead 439 (the verifier is a gate, not a sender, but it serves the 439-held engin
 |-------|-------|
 | Skill | `cold-email-verifier` (verifier-only) |
 | Upstream pattern | "cold-email-verifier" (r/ClaudeAI 20-skills list) — verify-half only |
-| Pinned commit | `<PIN-AT-ADOPTION>` — sec resolves/verifies real 40-hex SHA at fetch |
+| Pinned commit | `ORIGINAL (no upstream code vendored)` — sec resolves/verifies real 40-hex SHA at fetch |
 | Skill type | Pattern-only re-authoring; deterministic in-house validator |
 | Our-format path | `skills/cold-email-verifier/` + `engine/outreach/verifier.py` |
 | sec sign-off (S1) | **SUBMITTED — pending sec verification** |

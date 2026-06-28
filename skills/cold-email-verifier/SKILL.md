@@ -7,6 +7,7 @@ description: Use before any outreach send to verify an address is deliverable an
   Trigger words: verify email, deliverability, bounce risk, disposable, role
   account, validate address, clean list.
 license: pattern-only re-authoring (verifier-only) — see NOTICE
+pinned: ORIGINAL  # no upstream code vendored (pattern-only)
 ---
 
 # Cold Email Verifier (deterministic, in-house)
