@@ -1,0 +1,58 @@
+# Seed tenant pack (INFRA-04). The engine + frontend are generic; the client
+# niche lives entirely in this file. Edit values here to change behavior with no
+# code change. Secrets are referenced by env-var name, never inlined.
+
+tenant_id = "ink-studio"
+display_name = "Ink & Iron Tattoo Studio"
+sending_domain = "outreach.inkandiron.example"
+
+[voice]
+skill = "brand-voice/ink-studio"
+examples_uri = "minio://voice/ink-studio/examples.jsonl"
+
+# --- Channels -------------------------------------------------------------- #
+# Organic posting: confident enough to auto-post above 0.85, else queue.
+[channels.instagram]
+enabled = true
+[channels.instagram.autonomy]
+mode = "auto"
+threshold = 0.85
+[channels.instagram.limits]
+per_day = 25      # conservative IG default; query content_publishing_limit at run time
+per_hour = 5
+
+[channels.facebook]
+enabled = true
+[channels.facebook.autonomy]
+mode = "auto"
+threshold = 0.85
+[channels.facebook.limits]
+per_day = 25
+
+# Cold outreach: approve-first until deliverability is proven.
+[channels.gmail]
+enabled = true
+[channels.gmail.autonomy]
+mode = "review"
+threshold = 0.9
+[channels.gmail.limits]
+per_day = 40
+per_hour = 10
+
+[suppression]
+source = "minio://suppression/ink-studio.csv"
+
+[schedule]
+timezone = "America/New_York"
+posts_per_day = 2
+quiet_hours = [22, 7]
+
+[research]
+sources = ["firecrawl", "meta_ad_library"]
+
+# Secret references (resolved from the environment at access; never stored here).
+[secrets.meta_access_token]
+env = "INK_STUDIO_META_ACCESS_TOKEN"
+
+[secrets.gmail_oauth_refresh]
+env = "INK_STUDIO_GMAIL_OAUTH_REFRESH"
