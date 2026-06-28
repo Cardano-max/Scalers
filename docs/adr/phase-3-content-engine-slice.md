@@ -152,9 +152,11 @@ class MockPostingConnector:         # Phase-3: deterministic provider_id, record
     ...
 ```
 
-Enqueue: `SideEffectBoundary.enqueue(conn, idempotency_key(tenant, Channel.POSTING, target, content), Channel.POSTING, payload)` inside the state-advancing tx; `Dispatcher` drains it through the `MockPostingConnector`. The same content derives the same key, so a replay never double-posts (HARN-04, §3) — proven by the existing exactly-once test pattern, now exercised end-to-end on the posting payload.
+Enqueue: `SideEffectBoundary.enqueue(conn, key, Channel.POSTING, payload)` inside the state-advancing tx; `Dispatcher` drains it through the `MockPostingConnector`. The same content derives the same key, so a replay never double-posts (HARN-04, §3) — proven by the existing exactly-once test pattern, now exercised end-to-end on the posting payload.
 
-**Rationale.** Phase 3 changes *what* is produced, not *how it is committed*; reusing the boundary means the real Meta MCP in Phase 6 drops in behind `PostingConnector` with the slice unchanged.
+> **The key MUST be platform-qualified (CustomerAcq-4hj).** IG and FB are both `Channel.POSTING`, so `idempotency_key(tenant, Channel.POSTING, "feed", content)` derives the **same key for the same content on both platforms** — the second enqueue dedups away and one platform silently never posts (a safe *under*-fire, but wrong). The slice publishes the same draft to both, so it hits this directly. **Phase-3 fix:** qualify the `target` with the platform — `target = f"{draft.platform.value}:feed"` (e.g. `instagram:feed` vs `facebook:feed`) — so the two posts get distinct keys while each stays idempotent under replay. This is the minimal in-slice fix using the existing key signature; the broader hardening (a first-class `platform` segment in `idempotency_key`) is tracked for the Phase-6 posting engine in **CustomerAcq-4hj** and should land there with the real Meta MCP.
+
+**Rationale.** Phase 3 changes *what* is produced, not *how it is committed*; reusing the boundary means the real Meta MCP in Phase 6 drops in behind `PostingConnector` with the slice unchanged. Platform-qualifying the key keeps the exactly-once guarantee per-platform instead of collapsing two platforms into one effect.
 
 ---
 
@@ -201,7 +203,8 @@ Parallelizable streams, each with the interface it owns. A–G can proceed concu
 - **Research budget exhausted / a source down** → degrade gracefully (pluggable adapter); the run continues on remaining findings rather than failing.
 - **AI-flagger veto** (`safety=veto`) → never auto-fire regardless of confidence (independent safety veto, AUTON-04).
 - **Regenerate loop** → bounded (retry → regenerate → human-review); after the budget, escalate to review, never loop.
-- **Replay / crash** → the mock connector + idempotency key guarantee exactly-once (Decision 5); a re-run produces no second post.
+- **Same draft to IG + FB** → both are `Channel.POSTING`; the key **must** be platform-qualified or one platform dedups away (Decision 5 / CustomerAcq-4hj). Phase-3: `target = "{platform}:feed"`.
+- **Replay / crash** → the mock connector + (platform-qualified) idempotency key guarantee exactly-once (Decision 5); a re-run produces no second post.
 - **Empty/short KB** (new tenant, few exemplars) → grounding degrades to skill-instructions-only; flag lower confidence rather than fabricate voice.
 
 ## Consequences
