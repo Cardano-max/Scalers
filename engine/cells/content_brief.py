@@ -16,14 +16,24 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
+from cells.ai_flagger import FlaggerConfig, ai_flagger
 from cells.base import Cell
 from cells.validators import (
+    Severity,
     ValidatorBank,
-    banned_phrases,
     max_items,
     no_placeholder,
     non_empty,
     word_count_between,
+)
+
+# The AI-flagger is a HARD gate on every writing cell (operator: "a validator,
+# not optional"). The headline is a hook — hedging and rule-of-three are ERROR
+# there (a hedge kills a hook); the caption keeps them advisory (WARN) per spec.
+_CAPTION_FLAGGER = FlaggerConfig()
+_HEADLINE_FLAGGER = FlaggerConfig(
+    hedge_severity=Severity.ERROR,
+    triad_severity=Severity.ERROR,
 )
 
 
@@ -60,8 +70,9 @@ def content_brief_validators() -> ValidatorBank:
             word_count_between("caption", 5, 150),
             no_placeholder("caption"),
             no_placeholder("headline"),
-            banned_phrases("caption"),
-            banned_phrases("headline"),
+            # AI-flagger hard gate (AF-01..08) over the writing fields (spec scope).
+            ai_flagger("caption", _CAPTION_FLAGGER),
+            ai_flagger("headline", _HEADLINE_FLAGGER),
             # Advisory: many hashtags is a smell, not a hard failure.
             max_items("hashtags", 10),
         )
