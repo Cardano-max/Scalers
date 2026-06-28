@@ -14,7 +14,7 @@ from cells.ai_flagger import (
     detect_ai_tells,
     normalize_ai_tells,
 )
-from cells.validators import ValidationCtx, ValidatorBank
+from cells.validators import Severity, ValidationCtx, ValidatorBank
 
 
 def _kinds(text, config=FlaggerConfig(max_triads=0)):
@@ -43,6 +43,92 @@ def test_detects_rule_of_three():
 def test_detects_generic_transitions():
     assert AiTellKind.GENERIC_TRANSITION in _kinds("Moreover, the design speaks for itself.")
     assert AiTellKind.GENERIC_TRANSITION in _kinds("In conclusion, book today.")
+
+
+def test_af04_extended_transition_wordlist():
+    assert AiTellKind.GENERIC_TRANSITION in _kinds("Last but not least, book early.")
+    assert AiTellKind.GENERIC_TRANSITION in _kinds("First and foremost, we listen.")
+
+
+# -- AF-05 banned slop lexicon ---------------------------------------------- #
+
+
+def test_af05_detects_banned_slop():
+    assert AiTellKind.BANNED_SLOP in _kinds("Ready to unleash your story?")
+    assert AiTellKind.BANNED_SLOP in _kinds("Elevate your look today.")
+    # Clean human copy is not flagged.
+    assert AiTellKind.BANNED_SLOP not in _kinds("Booked out this week, come by Thursday.")
+
+
+def test_af05_default_severity_is_error():
+    from pydantic import BaseModel
+
+    class D(BaseModel):
+        caption: str
+
+    res = ValidatorBank(validators=(ai_flagger("caption"),)).check(
+        D(caption="Time to level up your ink."), ValidationCtx()
+    )
+    assert not res.ok and any("banned slop" in i.message for i in res.errors)
+
+
+# -- AF-06 hedging ---------------------------------------------------------- #
+
+
+def test_af06_detects_hedging():
+    assert AiTellKind.HEDGING in _kinds("Arguably the best placement for this.")
+    assert AiTellKind.HEDGING in _kinds("It's worth noting we book fast.")
+
+
+def test_af06_hedging_severity_defaults_warn_and_is_tunable_to_error():
+    from pydantic import BaseModel
+
+    class D(BaseModel):
+        text: str
+
+    sample = D(text="This piece is somewhat large.")
+    warn = ValidatorBank(validators=(ai_flagger("text"),)).check(sample, ValidationCtx())
+    assert warn.ok and any(i.severity is Severity.WARN for i in warn.warnings)  # advisory
+    err = ValidatorBank(
+        validators=(ai_flagger("text", FlaggerConfig(hedge_severity=Severity.ERROR)),)
+    ).check(sample, ValidationCtx())
+    assert not err.ok  # ERROR knob (hooks/headlines) blocks
+
+
+# -- AF-07 listicle cadence ------------------------------------------------- #
+
+
+def test_af07_detects_listicle_opener_and_bullets():
+    assert AiTellKind.LISTICLE in _kinds("Here are 3 reasons to book:")
+    assert AiTellKind.LISTICLE in _kinds("Steps:\n- pick a design\n- book a slot\n- show up")
+    # A 2-item list does NOT trip (>=3 threshold; opener requires a digit).
+    assert AiTellKind.LISTICLE not in _kinds("Steps:\n- pick\n- book")
+
+
+# -- AF-08 emoji-bullet lines (AUTO-FIX) ------------------------------------ #
+
+
+def test_af08_detects_emoji_bullets_and_autofix_strips_them():
+    assert AiTellKind.EMOJI_BULLET in _kinds("✅ custom design\n✅ free consult")
+    # A single decorative/content emoji is not a bullet list.
+    assert AiTellKind.EMOJI_BULLET not in _kinds("Healed and settled 🖤")
+    # AUTO-FIX: strip the leading bullet emoji, preserving the line text + breaks.
+    assert normalize_ai_tells("✅ custom design\n✅ free consult") == "custom design\nfree consult"
+
+
+# -- composition: AF-01..08 run together ------------------------------------ #
+
+
+def test_all_eight_rules_compose_in_one_pass():
+    text = "Unleash your vibe — moreover, arguably the best.\n✅ a\n✅ b"
+    kinds = _kinds(text)
+    assert {
+        AiTellKind.EM_DASH,
+        AiTellKind.BANNED_SLOP,
+        AiTellKind.GENERIC_TRANSITION,
+        AiTellKind.HEDGING,
+        AiTellKind.EMOJI_BULLET,
+    } <= kinds
 
 
 # -- thresholds + allowlist (false-positive control) ------------------------ #
