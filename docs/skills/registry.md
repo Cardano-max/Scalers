@@ -24,6 +24,7 @@ This document is **governance + worked examples**, not the adopt-list. The opera
 | Skill (our name) | Upstream source + pinned commit | sec sign-off | What was stripped / sandboxed | Our-format path | Eval-gate (rvy) | Agent | Status |
 |---|---|---|---|---|---|---|---|
 | **human-tone** *(1mk.3, first real sign-off)* | `Varnan-Tech/opendirectory` — "human-tone" @ `9c30f79eb975c50a97bed10b47e14f18116a3e3b` (MIT; `main` HEAD at vetting 2026-06-28) | **APPROVED — ELIGIBLE** (sec, see §Sign-off) | **Nothing stripped** — upstream is pure markdown (no scripts/network/file/exec); read in full for prompt-injection/off-policy, none found. Enforcement re-authored as our own pure-code validator + temp-0 cell. | `engine/skills/human-tone/SKILL.md` + `engine/cells/ai_flagger.py` (validator) + `engine/cells/humanize.py` (temp-0 rewrite) — PR #26 | **PASS** — `test_ai_flagger.py::test_labeled_set_separates_slop_from_human` (recall 1.0, FP 0.0); 173 unit pass, ruff clean | *(eligible for: AI-flagger validator / voice-QA; assigned at adoption)* | **ELIGIBLE** — gate green; **operator adopt-approval pending** (not yet IN USE) |
+| **brand-voice** *(1mk.2, per-artist)* | `anthropics/skills` — `skills/brand-guidelines` @ `b9e19e6f44773509fbdd7001d77ff41a49a486c1` (Apache-2.0; 2026-04-20) | **APPROVED — ELIGIBLE (conditional)** (sec, see §Sign-off) | **Nothing stripped** — upstream is prompt-only markdown; **structure-only** derivative, none of Anthropic's brand content (colors/type/marks) reproduced; NOTICE satisfies Apache-2.0 §4, trademarks excluded. Shipped `verify/*.py` are **our own** stdlib-only resolver+demo (no net/exec/env; read-only repo config + temp writes). | `skills/brand-voice/` (SKILL.md + per-tenant DNA + examples) — PR #29 | **PENDING-on-gold-set** — brand-voice ≥90% gate runs once the eval gold set (rvy.10 smoke) exists; **not a blocker for ELIGIBLE** (operator-authorized) | *(intended: posting/reply/outreach writing cells; assigned at adoption)* | **ELIGIBLE (conditional)** — steps 1–3 green; eval-gate deferred-by-dependency; operator adopt-approval pending; **must clear ≥90% gate before production writing use** |
 | brand-alchemy *(worked example)* | `<org>/brand-alchemy` @ `<PIN-AT-ADOPTION>` | **APPROVED-AS-STRIPPED** (sec, see §Demo) — conditional on eval-gate + operator approval | `domain_checker.py` **stripped in full** (TLS-disabled DNS/RDAP network). See itemized list in §Demo. | `engine/skills/brand-alchemy/` *(prompt-only after strip; to be authored at adoption)* | **PENDING** (gold-set not yet run) | *(intended: brand-voice / strategist)* | **HELD** — eval-gate PENDING + operator approval pending |
 | map-your-market | `<org>/map-your-market` @ `<PIN-AT-ADOPTION>` | **HELD** — strip required before sign-off | `fetch.py` (TLS disabled, `CERT_NONE`) → **strip**; reads `GITHUB_TOKEN` + ships `.env.example` → **strip** credential read; re-route through Firecrawl/Meta Ad Library adapter with TLS restored | *(to be authored after strip)* | PENDING | *(intended: research)* | **HELD** |
 | where-your-customer-lives | `<org>/where-your-customer-lives` @ `<PIN-AT-ADOPTION>` | **HELD** — same family as map-your-market | `fetch.py` (TLS disabled) + `GITHUB_TOKEN`/`.env` read → **strip**; route via vetted adapter | *(to be authored)* | PENDING | *(intended: research)* | **HELD** |
@@ -31,6 +32,45 @@ This document is **governance + worked examples**, not the adopt-list. The opera
 | coldoutboundskills | `growthenginenowoslawski/coldoutboundskills` @ `<PIN-AT-ADOPTION>` | **REJECTED** (sec) | `.ts` scripts **SPEND REAL MONEY** (Dynadot bulk domain purchase) + create live Instantly/Smartlead campaigns. Money/destructive class. | — | — | none | **REJECTED** — mine patterns only |
 | coreyhaines31/marketingskills (67 Node CLIs) | `coreyhaines31/marketingskills` @ `<PIN-AT-ADOPTION>` | **REJECTED by default** (sec) | 67 bundled CLIs read env API tokens, hit data brokers (apollo/zoominfo/clearbit/hunter) + **send real email** (resend/sendgrid/postmark). | — | — | none | **REJECTED** — opt-in only later, scoped creds + `--dry-run`, never default |
 | Nuwa Skill Distiller | skillhub.club / lobehub (off-GitHub) | **REJECTED** (sec) | Unclear/no OSS license; auto-generates executable `SKILL.md` (generation + injection surface). | — | — | none | **REJECTED** — use first-party skill-creator |
+
+---
+
+## §Sign-off — brand-voice (1mk.2, sec sign-off; eval-gate deferred by dependency)
+
+The per-artist brand-voice skill (writer, PR #29). sec applied the gate independently; eval-gate is the one step not green, and only because its gold set does not exist yet — this is an **operator-authorized conditional eligibility**, not a passed quality gate.
+
+```
+Skill:              brand-voice  (upstream: anthropics/skills — skills/brand-guidelines)
+Pinned commit:      b9e19e6f44773509fbdd7001d77ff41a49a486c1   # verified via GitHub API; 2026-04-20
+License:            Apache-2.0  (verified: skills/brand-guidelines/LICENSE.txt at the pinned commit)
+Reviewed by:        sec        Date: 2026-06-28
+```
+
+**Step 1 — READ.** SKILL.md + README + NOTICE + brand-DNA template + ink-studio DNA + examples + both `verify/*.py` read in full. SKILL.md is instructions-only and defers to the validator bank / jury / confidence gate (it grounds voice, makes no decision). No prompt-injection / gate-subversion / off-policy markers in SKILL.md or the tenant DNA (the live prompt-prepended surface).
+
+**Step 2 — STRIP / REDISTRIBUTION.**
+- **Upstream nothing-to-strip:** confirmed — `anthropics/skills/skills/brand-guidelines` is prompt-only markdown; no network/file/exec/credential/money surface.
+- **Redistribution terms (the licensing ask):** independently verified the pinned commit exists and `LICENSE.txt` at it is **Apache-2.0**. Apache-2.0 permits reproduction/modification/distribution of derivative works royalty-free; the bundle's `NOTICE` satisfies §4 (license reference, modification notice, attribution retained). **Trademarks correctly NOT used.** It is a **structure-only** derivative — none of Anthropic's brand content (colors `#141413`/`#d97757`, typography, pptx styling) is reproduced; all voice content is original, grounded in `docs/skills/winning-strategies-kb.md`. Redistribution is clean.
+- **Shipped scripts (writer's own, not upstream):** `verify/resolve_brand_voice.py` (the runtime resolver contract) + `verify/demo_brand_grounding.py` (manual demo) are **stdlib-only** (`json`/`tomllib`/`re`/`sys`/`tempfile`/`pathlib`). No `socket`/`requests`/`urllib`/`subprocess`/`os.system`/`eval`/`exec`/`getenv`/`ssl`; no model call. File access is read-only on repo config; the demo writes only to a `TemporaryDirectory`. Nothing to strip.
+
+**Step 3 — RE-AUTHOR + PIN.** Re-authored into our format (`skills/brand-voice/`) with determinism intent (grounding only; the cell's output still flows through every downstream gate). Pinned to `b9e19e6f…` (re-vet on any upstream bump).
+
+**Step 4 — EVAL-GATE.** **PENDING-on-gold-set.** The brand-voice **≥90%** quality gate runs once the eval gold set (rvy.10 smoke / holdout) is built — it does not exist yet. Per operator direction this is **not a blocker for ELIGIBLE/registry**, but the skill **MUST clear the ≥90% gate before any production writing use**.
+
+```
+SEC VERDICT:    APPROVED — ELIGIBLE (CONDITIONAL). Steps 1–3 green; provenance +
+                Apache-2.0 redistribution verified; secret/PII scan = 0 hits.
+                Eval-gate deferred by dependency (gold set not built) — operator-
+                authorized. NOT "IN USE": operator approves adoption + agent
+                assignment separately, AND the ≥90% gate must pass first.
+Residual (for arch/operator, non-blocking):
+  - resolve_brand_voice.py builds paths from tenant_id/skill_ref without
+    sanitizing '..' — LOW severity (inputs are internal pack config, not external
+    request data); recommend rejecting '/' and '..' in the artist/tenant token as
+    defense-in-depth before multi-tenant exposure.
+  - Re-vet trigger: upstream commit bump OR the ≥90% eval-gate result (flip
+    PENDING→PASS/FAIL when the gold set lands).
+```
 
 ---
 
