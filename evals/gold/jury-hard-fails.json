@@ -8,7 +8,7 @@
     "judge": "semantic; each cross-family judge emits the code as a flag alongside its per-dimension score when present."
   },
   "catalog_version": 1,
-  "code_stability": "STABLE ENUM, APPEND-ONLY. The strings in code_catalog are frozen: never renamed or removed — only new codes added (with a catalog_version bump). The jury cell emits codes ONLY from this catalog; the aggregator matches against it as a closed set (an unknown code = a bug, not a silent pass). pmm owns the voice_* + APPR_* codes; sec owns the SAFE_* codes (sec/rubrics/safety-hard-fails.json) — the full jury code space is the UNION of both catalogs.",
+  "code_stability": "STABLE ENUM, APPEND-ONLY. The strings in code_catalog are frozen: never renamed or removed — only new codes added (with a catalog_version bump). The jury cell emits codes ONLY from this catalog; the aggregator matches against it as a closed set. pmm owns the voice_* + APPR_* codes; sec owns the SAFE_* codes (sec/rubrics/safety-hard-fails.json) — the full jury code space is the UNION of both catalogs. FAIL-SAFE (arch ADR PR #81): an unknown/unmatched code OR a catalog_version mismatch between the jury cell and the aggregator fails safe -> REVIEW (never a silent pass, never a crash; catalog drift escalates to a human). OPERATIONAL CONSEQUENCE of a catalog_version bump: it MUST be propagated (re-vendor this file into the engine path + re-pin the aggregator's expected version) — until both sides match, the version-parity gate routes ALL runs to REVIEW (safe, but blocks autonomy). So append a code + bump version + re-sync as one coordinated change.",
   "code_catalog": [
     "VOICE_HF_BANNED_LEXICON",
     "VOICE_HF_UNAPPROVED_CLAIM",
