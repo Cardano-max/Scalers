@@ -59,18 +59,13 @@ def _model():
     return tool_model(VALID_BRIEF)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="CustomerAcq-4hj: IG/FB collapse to side_channel=POSTING and the idem key "
-    "has no platform segment, so FB's cross-post is deduped away. Remove this xfail "
-    "when the key derivation includes the platform — the test then guards the fix.",
-)
 async def test_ig_and_fb_cross_post_must_both_persist(db, dsn):
     """Cross-post identical content to IG then FB — BOTH effects must persist.
 
-    Marked ``xfail(strict=True)``: RED today (proves the bug) and keeps CI green;
-    the moment an eng puts the platform in the key it PASSES, the strict xfail
-    flips, and removing the marker leaves a permanent regression guard.
+    Permanent regression guard for CustomerAcq-4hj: the idempotency target is
+    platform-qualified (``target="{platform}:feed"``, ADR #38 Decision 5), so IG
+    and FB derive DISTINCT keys and both cross-posts persist. (Was xfail(strict)
+    while the bug was open; the fix flipped it, so the marker is removed.)
     """
     connector = MockConnector()
 
