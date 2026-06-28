@@ -16,12 +16,14 @@ from enum import Enum
 
 import psycopg
 
+from harness.hold import DEFAULT_HOLD_REGISTRY, HoldRegistry
 from sideeffects.keys import Channel
 
 
 class EnqueueStatus(Enum):
     ENQUEUED = "enqueued"   # this call created the outbox row
     DUPLICATE = "duplicate"  # the key was already enqueued/sent
+    HELD = "held"           # refused by the bead-439 hold gate (CustomerAcq-4z2)
 
 
 @dataclass(frozen=True)
@@ -40,8 +42,18 @@ class SideEffectBoundary:
         key: str,
         channel: Channel | str,
         payload: dict,
+        *,
+        tenant_id: str,
+        hold_registry: HoldRegistry = DEFAULT_HOLD_REGISTRY,
     ) -> EnqueueResult:
         channel_value = channel.value if isinstance(channel, Channel) else str(channel)
+        # bead-439 two-layer HOLD (CustomerAcq-4z2): an INDEPENDENT gate at the
+        # send boundary. A held (tenant, channel) cannot enqueue no matter how the
+        # routing decision was reached — defense-in-depth behind the router's HOLD.
+        # The default registry holds everything (fail-safe), so nothing publishes
+        # until an operator explicitly lifts a tenant/channel.
+        if hold_registry.is_held(tenant_id, channel_value):
+            return EnqueueResult(EnqueueStatus.HELD, key)
         cur = await conn.execute(
             "INSERT INTO outbox (idempotency_key, channel, payload, status)"
             " VALUES (%s, %s, %s, 'PENDING')"

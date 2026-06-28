@@ -160,11 +160,20 @@ class EnqueueNode:
 
     name = "enqueue"
 
-    def __init__(self, *, dsn: str, tenant_id: str, channel: Channel, target: str) -> None:
+    def __init__(
+        self,
+        *,
+        dsn: str,
+        tenant_id: str,
+        channel: Channel,
+        target: str,
+        hold_registry: HoldRegistry = DEFAULT_HOLD_REGISTRY,
+    ) -> None:
         self._dsn = dsn
         self._tenant_id = tenant_id
         self._channel = channel
         self._target = target
+        self._hold_registry = hold_registry
 
     def key_for(self, draft: str) -> str:
         return idempotency_key(self._tenant_id, self._channel, self._target, draft)
@@ -176,7 +185,8 @@ class EnqueueNode:
         try:
             async with conn.transaction():
                 await SideEffectBoundary().enqueue(
-                    conn, key, self._channel, {"draft": draft, "run_id": _run_id_of(state)}
+                    conn, key, self._channel, {"draft": draft, "run_id": _run_id_of(state)},
+                    tenant_id=self._tenant_id, hold_registry=self._hold_registry,
                 )
         finally:
             await conn.close()
@@ -231,6 +241,7 @@ def build_slice_graph(
     target: str = "feed",
     checkpointer=None,
     enqueue_node: EnqueueNode | None = None,
+    hold_registry: HoldRegistry = DEFAULT_HOLD_REGISTRY,
 ):
     """Build the Phase-1 slice graph: research -> assemble -> route -> [enqueue|END].
 
@@ -243,7 +254,10 @@ def build_slice_graph(
     harness.add_node(AssembleCellNode(assemble_model))
     harness.add_node(
         enqueue_node
-        or EnqueueNode(dsn=dsn, tenant_id=tenant_id, channel=channel, target=target)
+        or EnqueueNode(
+            dsn=dsn, tenant_id=tenant_id, channel=channel, target=target,
+            hold_registry=hold_registry,
+        )
     )
     harness.add_edge(START, "research")
     harness.add_edge("research", "assemble")
@@ -313,6 +327,7 @@ async def run_slice(
         channel=side_channel,
         target=target,
         checkpointer=checkpointer,
+        hold_registry=hold_registry,
     )
     state = await graph.run(
         run_id, GraphState(tenant_id=tenant_id, run_id=run_id, topic=topic)

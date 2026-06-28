@@ -189,7 +189,8 @@ async def test_crash_between_state_advance_and_enqueue_does_not_lose_effect(db, 
             return await super().__call__(state)
 
     enqueue_node = CrashOnceEnqueue(
-        dsn=dsn, tenant_id=TENANT, channel=Channel.POSTING, target="feed"
+        dsn=dsn, tenant_id=TENANT, channel=Channel.POSTING, target="feed",
+        hold_registry=LIFTED,  # 4z2: the boundary gate now blocks held tenants
     )
     key = enqueue_node.key_for(VALID_BRIEF["caption"])
 

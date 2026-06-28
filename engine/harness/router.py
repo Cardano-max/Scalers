@@ -33,7 +33,7 @@ def route(
     confidence: float,
     threshold: float = DEFAULT_THRESHOLD,
     gates: Sequence[Gate] | None = None,
-    autonomy: AutonomyMode = AutonomyMode.AUTO,
+    autonomy: AutonomyMode = AutonomyMode.REVIEW,
 ) -> RouteDecision:
     """Return the routing decision (``auto`` / ``review`` / ``regenerate``).
 
@@ -41,7 +41,9 @@ def route(
         confidence: Computed confidence in ``[0.0, 1.0]``.
         threshold: The auto bar, in ``[0.0, 1.0]`` (inclusive).
         gates: Deterministic gate results; any failure forces ``regenerate``.
-        autonomy: The channel's autonomy dial.
+        autonomy: The channel's autonomy dial. Defaults to ``REVIEW`` so a caller
+            that omits it can never get ``auto`` — fail-safe-by-default
+            (CustomerAcq-4z2). Real call sites pass it explicitly.
 
     Raises:
         ValueError: If ``confidence`` or ``threshold`` is outside ``[0.0, 1.0]``.
