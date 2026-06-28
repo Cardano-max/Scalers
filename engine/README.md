@@ -112,11 +112,15 @@ splits auto from review.
 
 ### Durability & crash recovery (HARN-03)
 
-`make_checkpointer()` returns LangGraph's durable `PostgresSaver` (via a psycopg
-connection pool) when `ENGINE_DATABASE_URL` is set — the operator's
-durable-substrate decision — and an in-memory checkpointer otherwise, so the
-demo and tests run with no external dependency. The Postgres dependency is
-imported lazily; both checkpointers use the allow-listed serializer.
+`make_checkpointer()` (async) returns LangGraph's durable **`AsyncPostgresSaver`**
+over a psycopg `AsyncConnectionPool` when `ENGINE_DATABASE_URL` is set — the
+operator's durable-substrate decision — and an in-memory checkpointer otherwise,
+so the demo and tests run with no external dependency. The harness drives every
+graph via async `ainvoke`/`astream`, so the checkpointer must be async (the sync
+`PostgresSaver` raises under the async loop); `get_state`/`is_complete` likewise
+use `aget_state`. The Postgres dependency is imported lazily; both checkpointers
+use the allow-listed serializer. Verified end to end against a real Postgres via
+`tests/test_postgres_integration.py` (skipped unless `ENGINE_DATABASE_URL` is set).
 
 A checkpoint is a **save-point, not exactly-once execution** (§2.2). State is
 persisted after every node, so a crashed run resumes from the last completed

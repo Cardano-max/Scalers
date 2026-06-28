@@ -78,7 +78,7 @@ async def test_crash_midrun_resumes_from_last_node_exactly_once():
     # a ran once (not re-applied), b crashed then retried, c ran once.
     assert calls == {"a": 1, "b": 2, "c": 1}
     assert final.step_log == ["a", "b", "c"]
-    assert graph.is_complete("crash")
+    assert await graph.is_complete("crash")
 
 
 async def test_replay_of_completed_thread_is_rejected_fk5():
@@ -92,14 +92,14 @@ async def test_replay_of_completed_thread_is_rejected_fk5():
         await graph.run("dup", _init("x", "dup"))
 
     # State is unchanged — no accumulation leaked into step_log.
-    assert graph.get_state("dup").values["step_log"] == ["research", "assemble"]
+    assert (await graph.get_state("dup")).values["step_log"] == ["research", "assemble"]
 
 
 async def test_fresh_thread_runs_normally():
     graph = build_demo_graph()
     final = await graph.run("fresh", _init("y", "fresh"))
     assert final.step_log == ["research", "assemble"]
-    assert graph.is_complete("fresh")
+    assert await graph.is_complete("fresh")
 
 
 async def test_gates_jury_are_last_value_not_accumulating():

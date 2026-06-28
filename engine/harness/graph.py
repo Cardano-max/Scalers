@@ -23,8 +23,8 @@ store (see ``runstore``).
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Callable
-from functools import lru_cache
 from typing import Any
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -66,30 +66,34 @@ class RunInProgressError(RuntimeError):
     """
 
 
-def make_checkpointer() -> BaseCheckpointSaver:
-    """Return the durable Postgres checkpointer, or in-memory if no DB is set.
+async def make_checkpointer() -> BaseCheckpointSaver:
+    """Return the durable async Postgres checkpointer, or in-memory if no DB.
 
-    The Postgres dependency is imported lazily so the engine runs (and tests
-    pass) without ``langgraph-checkpoint-postgres`` installed. Both checkpointers
-    use the type-allow-listed serializer so durable checkpoints survive strict
-    msgpack mode (CustomerAcq-fk5 secondary note).
+    The harness runs every graph via async ``ainvoke`` / ``astream``, so the
+    Postgres path uses ``AsyncPostgresSaver`` over an ``AsyncConnectionPool`` —
+    the *synchronous* ``PostgresSaver`` raises ``NotImplementedError`` under the
+    async Pregel loop (``aget_tuple``). The Postgres dependency is imported
+    lazily so the in-memory path needs no driver. Both checkpointers use the
+    type-allow-listed serializer so durable checkpoints survive strict msgpack
+    mode (CustomerAcq-fk5 secondary note).
     """
 
     serde = make_serde()
     database_url = get_settings().database_url
     if database_url:
-        from langgraph.checkpoint.postgres import PostgresSaver
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
         from psycopg.rows import dict_row
-        from psycopg_pool import ConnectionPool
+        from psycopg_pool import AsyncConnectionPool
 
-        pool = ConnectionPool(
+        pool = AsyncConnectionPool(
             conninfo=database_url,
             max_size=10,
-            open=True,
+            open=False,
             kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
         )
-        checkpointer = PostgresSaver(pool, serde=serde)
-        checkpointer.setup()  # idempotent: creates the LangGraph checkpoint tables
+        await pool.open()
+        checkpointer = AsyncPostgresSaver(pool, serde=serde)
+        await checkpointer.setup()  # idempotent: creates the LangGraph checkpoint tables
         return checkpointer
     return InMemorySaver(serde=serde)
 
@@ -111,7 +115,7 @@ class CompiledGraph:
         :class:`RunInProgressError` (use ``recover`` / ``resume``).
         """
 
-        snapshot = self._graph.get_state(self._config(run_id))
+        snapshot = await self._graph.aget_state(self._config(run_id))
         if snapshot.values:
             if snapshot.next:
                 raise RunInProgressError(run_id)
@@ -152,15 +156,20 @@ class CompiledGraph:
         ):
             yield update
 
-    def get_state(self, run_id: str) -> Any:
-        """Return the persisted checkpoint snapshot for ``run_id``."""
+    async def get_state(self, run_id: str) -> Any:
+        """Return the persisted checkpoint snapshot for ``run_id``.
 
-        return self._graph.get_state(self._config(run_id))
+        Uses the async ``aget_state`` so it works with the async Postgres
+        checkpointer (the sync ``get_state`` raises on ``AsyncPostgresSaver``);
+        ``aget_state`` works equally on the in-memory checkpointer.
+        """
 
-    def is_complete(self, run_id: str) -> bool:
+        return await self._graph.aget_state(self._config(run_id))
+
+    async def is_complete(self, run_id: str) -> bool:
         """True if ``run_id`` has a checkpoint that reached END."""
 
-        snapshot = self._graph.get_state(self._config(run_id))
+        snapshot = await self._graph.aget_state(self._config(run_id))
         return bool(snapshot.values) and not snapshot.next
 
 
@@ -210,8 +219,21 @@ def build_demo_graph(checkpointer: BaseCheckpointSaver | None = None) -> Compile
     return harness.compile(checkpointer or InMemorySaver(serde=make_serde()))
 
 
-@lru_cache(maxsize=1)
-def get_graph() -> CompiledGraph:
-    """Return the process-wide demo graph with its configured checkpointer."""
+_graph: CompiledGraph | None = None
+_graph_lock = asyncio.Lock()
 
-    return build_demo_graph(make_checkpointer())
+
+async def get_graph() -> CompiledGraph:
+    """Return the process-wide demo graph with its configured checkpointer.
+
+    Async because the durable checkpointer (``make_checkpointer``) opens an
+    async connection pool and awaits ``setup()``. Cached behind a lock so a
+    burst of concurrent requests builds the graph exactly once.
+    """
+
+    global _graph
+    if _graph is None:
+        async with _graph_lock:
+            if _graph is None:
+                _graph = build_demo_graph(await make_checkpointer())
+    return _graph

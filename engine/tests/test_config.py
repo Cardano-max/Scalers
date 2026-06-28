@@ -37,7 +37,10 @@ def test_model_pins_are_frozen():
         pins.opus = "claude-something-else"
 
 
-def test_database_url_defaults_to_none():
+def test_database_url_defaults_to_none(monkeypatch):
+    # Hermetic: ignore any ambient ENGINE_DATABASE_URL (e.g. when the Postgres
+    # integration suite is run in the same session).
+    monkeypatch.delenv("ENGINE_DATABASE_URL", raising=False)
     assert Settings().database_url is None
 
 

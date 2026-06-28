@@ -58,7 +58,7 @@ def test_node_order_is_fixed():
 def test_checkpointer_persists_run_state():
     graph = build_demo_graph()
     asyncio.run(graph.run("resume-me", _init("resumable", "resume-me")))
-    snapshot = graph.get_state("resume-me")
+    snapshot = asyncio.run(graph.get_state("resume-me"))
     assert snapshot.values["assembled"].topic == "resumable"
     assert snapshot.values["confidence"] > 0
 

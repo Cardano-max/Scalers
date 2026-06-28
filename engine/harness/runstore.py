@@ -198,13 +198,16 @@ class PostgresRunStore:
     def append_step(self, run_id: str, *, text: str, state: str) -> None:
         with self._connect() as conn:
             # seq = current array length; append atomically under the row lock.
+            # Cast the value params to ::text — without it PG gives them the
+            # 'any' pseudo-type and raises IndeterminateDatatype (could not
+            # determine data type of parameter).
             conn.execute(
                 """
                 UPDATE runs
                    SET steps = steps || jsonb_build_array(
                            jsonb_build_object(
                                'seq', jsonb_array_length(steps),
-                               'at', %s, 'text', %s, 'state', %s)),
+                               'at', %s::text, 'text', %s::text, 'state', %s::text)),
                        updated_at = now()
                  WHERE run_id = %s
                 """,
@@ -284,7 +287,7 @@ async def execute_and_record(
         store.finish_run(run_id, status=RunStatus.FAILED)
         raise
 
-    values = graph.get_state(run_id).values
+    values = (await graph.get_state(run_id)).values
     confidence = values.get("confidence") or 0.0
     decision = route(confidence, autonomy=autonomy)
     store.finish_run(
