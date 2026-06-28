@@ -1,0 +1,86 @@
+# Scalers local development stack.
+#   docker compose up -d   → Postgres+pgvector, Redis, MinIO (+ console)
+# All credentials/ports come from .env (copy .env.example → .env).
+# No cloud, no AWS — everything runs locally on named volumes.
+
+name: scalers
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: scalers-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-scalers}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-scalers}
+      POSTGRES_DB: ${POSTGRES_DB:-scalers}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # init SQL runs once on a fresh cluster; mounted read-only.
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # -q so a healthy DB is the ONLY thing that flips this green.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-scalers} -d ${POSTGRES_DB:-scalers} -q"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: scalers-redis
+    restart: unless-stopped
+    # appendonly → queue/scheduler state survives restarts.
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  minio:
+    image: minio/minio:latest
+    container_name: scalers-minio
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-scalers}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-scalers-dev-secret}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"      # S3 API
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"  # web console
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # One-shot: create the assets bucket, then exit. Not part of steady state.
+  minio-init:
+    image: minio/mc:latest
+    container_name: scalers-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 '${MINIO_ROOT_USER:-scalers}' '${MINIO_ROOT_PASSWORD:-scalers-dev-secret}' &&
+      mc mb --ignore-existing local/${MINIO_BUCKET:-scalers-assets} &&
+      echo 'bucket ready: ${MINIO_BUCKET:-scalers-assets}'
+      "
+    restart: "no"
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
