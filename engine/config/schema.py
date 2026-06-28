@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class Channel(str, Enum):
@@ -50,7 +50,7 @@ class SecretRef(BaseModel):
     The secret value is never stored in a pack file — only the variable name.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     env: str = Field(description="Name of the environment variable holding the secret.")
 
@@ -69,7 +69,7 @@ class SecretRef(BaseModel):
 class VoiceRef(BaseModel):
     """Reference to the brand-voice skill/examples for a tenant."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     skill: str = Field(description="Brand-voice skill ref id (loaded on demand by the engine).")
     examples_uri: str | None = Field(
@@ -80,7 +80,7 @@ class VoiceRef(BaseModel):
 class AutonomyConfig(BaseModel):
     """Per-channel autonomy defaults: mode plus the confidence gate."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     mode: AutonomyMode = AutonomyMode.REVIEW  # safe default: approve-first
     threshold: float = Field(
@@ -109,7 +109,7 @@ class AutonomyConfig(BaseModel):
 class RateLimits(BaseModel):
     """Per-channel rate caps. ``None`` means "no explicit cap in config"."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     per_hour: int | None = Field(default=None, ge=0)
     per_day: int | None = Field(default=None, ge=0)
@@ -118,7 +118,7 @@ class RateLimits(BaseModel):
 class ChannelConfig(BaseModel):
     """Everything tenant-specific about one channel."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     enabled: bool = True
     autonomy: AutonomyConfig = Field(default_factory=AutonomyConfig)
@@ -128,7 +128,7 @@ class ChannelConfig(BaseModel):
 class SuppressionConfig(BaseModel):
     """Where the suppression list (do-not-contact) comes from."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     source: str = Field(description="Ref/URI to the suppression list source.")
 
@@ -136,7 +136,7 @@ class SuppressionConfig(BaseModel):
 class ScheduleConfig(BaseModel):
     """Posting cadence and quiet hours for a tenant."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     timezone: str = "UTC"
     posts_per_day: int = Field(default=1, ge=0)
@@ -144,11 +144,18 @@ class ScheduleConfig(BaseModel):
         default=None, description="Local [start, end) hour range to suppress sends, 0-23."
     )
 
+    @field_validator("quiet_hours")
+    @classmethod
+    def _hours_in_range(cls, v: tuple[int, int] | None) -> tuple[int, int] | None:
+        if v is not None and not all(0 <= h <= 23 for h in v):
+            raise ValueError(f"quiet_hours must be hours in 0-23, got {v}")
+        return v
+
 
 class ResearchConfig(BaseModel):
     """Which external research sources are enabled for a tenant."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     sources: tuple[str, ...] = ()
 
@@ -159,7 +166,9 @@ class TenantPack(BaseModel):
     # Reject unknown keys: a typo in a pack file should fail loudly, not be ignored.
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    tenant_id: str = Field(description="Stable tenant key; matches the pack filename.")
+    tenant_id: str = Field(
+        min_length=1, description="Stable tenant key; matches the pack filename."
+    )
     display_name: str
     voice: VoiceRef
     channels: dict[Channel, ChannelConfig] = Field(
