@@ -27,12 +27,23 @@ import socket
 from collections.abc import Callable
 from urllib.parse import urlsplit
 
-# Official API hosts per provider name (the only bases a provider may call).
+# Official API hosts per provider name (the only bases a provider may call). The
+# keys MUST match each provider's ``name`` (research/providers/*.py): a name with
+# no entry resolves to an EMPTY allowlist and is fail-closed (SSRFError) — correct
+# for unknown providers, but it means every shipped provider name needs a row here
+# before its live client wires, or it self-rejects (gy2).
 OFFICIAL_API_HOSTS: dict[str, frozenset[str]] = {
     "firecrawl": frozenset({"api.firecrawl.dev"}),
     "meta_ad_library": frozenset(
         {"graph.facebook.com", "api.foreplay.co"}  # Meta Ad Library + Foreplay (primary)
     ),
+    # a9m.2 added these providers (ExaProvider 'exa', ForeplayProvider 'foreplay')
+    # but no allowlist rows — without them assert_official_endpoint(url, 'exa'|
+    # 'foreplay') hits the empty default and SSRF-rejects the provider's OWN base
+    # the moment its live client wires (gy2). 'foreplay' is also reachable under the
+    # combined 'meta_ad_library' provider above; this row is its standalone provider.
+    "exa": frozenset({"api.exa.ai"}),
+    "foreplay": frozenset({"api.foreplay.co"}),
 }
 
 # Hostnames that are never legitimate fetch targets (SSRF / metadata vectors).

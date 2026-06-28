@@ -161,6 +161,23 @@ def test_official_endpoint_allowlist():
         assert_official_endpoint("http://api.firecrawl.dev/x", "firecrawl")  # non-https
 
 
+def test_exa_and_foreplay_official_endpoints_allowlisted():
+    """Regression (gy2): the live exa/foreplay clients must NOT be fail-closed
+    SSRF-rejected for lack of an allowlist entry. Before the fix, the 'exa' and
+    'foreplay' provider names mapped to an EMPTY allowlist, so their own official
+    bases raised SSRFError — blocking the provider the moment the live client wired.
+    The provider names match ExaProvider.name / ForeplayProvider.name."""
+    assert assert_official_endpoint("https://api.exa.ai/search", "exa")
+    assert assert_official_endpoint("https://api.foreplay.co/v1/ads", "foreplay")
+    # still fail-closed for a non-official host under each provider name
+    with pytest.raises(SSRFError):
+        assert_official_endpoint("https://evil.example.com/api", "exa")
+    with pytest.raises(SSRFError):
+        assert_official_endpoint("https://api.exa.ai/search", "foreplay")  # wrong host for foreplay
+    with pytest.raises(SSRFError):
+        assert_official_endpoint("http://api.exa.ai/search", "exa")  # non-https
+
+
 # ── rate limiter ─────────────────────────────────────────────────────────────
 
 
