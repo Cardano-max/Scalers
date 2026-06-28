@@ -64,10 +64,12 @@ SEC VERDICT:    APPROVED — ELIGIBLE (CONDITIONAL). Steps 1–3 green; provenan
                 authorized. NOT "IN USE": operator approves adoption + agent
                 assignment separately, AND the ≥90% gate must pass first.
 Residual (for arch/operator, non-blocking):
-  - resolve_brand_voice.py builds paths from tenant_id/skill_ref without
-    sanitizing '..' — LOW severity (inputs are internal pack config, not external
-    request data); recommend rejecting '/' and '..' in the artist/tenant token as
-    defense-in-depth before multi-tenant exposure.
+  - [RESOLVED — PR #29 @ cbd3b43, sec-verified] path-traversal hardening on
+    tenant_id/skill_ref. resolve_brand_voice.py now allowlists each segment
+    (^[A-Za-z0-9][A-Za-z0-9_-]*$) + a _within() containment check before any fs
+    access. Verified: the verify demo rejects '../../etc/passwd', '..', 'a/b',
+    '/abs', 'C:\win', and skill_ref '../../../../secrets' (BrandVoiceError), legit
+    ids still resolve, demo exit 0. (Originally LOW — internal pack config only.)
   - Re-vet trigger: upstream commit bump OR the ≥90% eval-gate result (flip
     PENDING→PASS/FAIL when the gold set lands).
 ```
