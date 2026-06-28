@@ -36,10 +36,14 @@ class AutonomyMode(str, Enum):
 
     ``AUTO`` permits auto actions when confidence clears the bar; ``REVIEW``
     forces a human to sign off on anything that would otherwise auto-fire.
+    ``HOLD`` is the bead-439 safety hold: it forces human review unconditionally
+    — overriding confidence, gates, and the dial — so a held tenant/channel can
+    never auto-fire (CustomerAcq-b3f). It is the strongest, fail-safe mode.
     """
 
     AUTO = "auto"
     REVIEW = "review"
+    HOLD = "hold"
 
 
 class Gate(BaseModel):

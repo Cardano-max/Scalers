@@ -19,6 +19,7 @@ import uuid
 import pytest
 
 from config.schema import Channel as PackChannel
+from harness.hold import HoldRegistry
 from harness.state import Gate, GraphState, RouteDecision
 from phase1_slice import EnqueueNode, build_slice_graph, run_slice
 from sideeffects import Channel
@@ -38,6 +39,11 @@ pytestmark = [
 
 TENANT = "ink-studio"  # shipped seed pack (engine/config/packs/ink-studio.toml)
 
+# bead-439 (CustomerAcq-b3f): the slice is HELD by default, so tests that exercise
+# the auto path / pack dial explicitly LIFT the hold (operator opt-in). The
+# held-by-default fail-safe is asserted in test_held_tenant_does_not_fire.
+LIFTED = HoldRegistry().lift(TENANT)
+
 
 def _model():
     """A deterministic model that drives the content-brief cell to a valid brief."""
@@ -53,7 +59,7 @@ async def test_slice_runs_research_then_typed_cell_deterministically(db, dsn):
         topic="spring blackwork promo",
         dsn=dsn,
         connector=MockConnector(),
-        assemble_model=_model(),
+        assemble_model=_model(), hold_registry=LIFTED,
     )
     # load_pack ran.
     assert result.pack.tenant_id == TENANT
@@ -78,10 +84,26 @@ async def test_router_auto_fires_side_effect(db, dsn):
     connector = MockConnector()
     result = await run_slice(
         tenant_id=TENANT, topic="auto", dsn=dsn, connector=connector,
-        assemble_model=_model(), channel=PackChannel.INSTAGRAM,
+        assemble_model=_model(), hold_registry=LIFTED, channel=PackChannel.INSTAGRAM,
     )
     assert result.decision is RouteDecision.AUTO
     assert connector.call_count == 1
+
+
+async def test_held_tenant_does_not_fire(db, dsn):
+    # bead-439 (CustomerAcq-b3f) on real PG: with the FAIL-SAFE default registry
+    # (held), instagram (auto/0.85) + the stub jury's hardcoded 0.9 confidence
+    # STILL routes REVIEW — HOLD overrides the dial + confidence. Nothing enqueues
+    # or fires. No hold_registry arg -> the default held registry is used.
+    connector = MockConnector()
+    result = await run_slice(
+        tenant_id=TENANT, topic="held", dsn=dsn, connector=connector,
+        assemble_model=_model(), channel=PackChannel.INSTAGRAM,
+    )
+    assert result.decision is RouteDecision.REVIEW
+    assert connector.call_count == 0
+    assert result.idempotency_key is None
+    assert "enqueue" not in result.steps  # the in-graph enqueue node never ran
 
 
 async def test_pack_review_channel_does_not_fire(db, dsn):
@@ -91,7 +113,7 @@ async def test_pack_review_channel_does_not_fire(db, dsn):
     connector = MockConnector()
     result = await run_slice(
         tenant_id=TENANT, topic="review", dsn=dsn, connector=connector,
-        assemble_model=_model(), channel=PackChannel.GMAIL,
+        assemble_model=_model(), hold_registry=LIFTED, channel=PackChannel.GMAIL,
     )
     assert result.decision is RouteDecision.REVIEW
     assert connector.call_count == 0
@@ -102,7 +124,7 @@ async def test_router_regenerate_on_failed_gate_does_not_fire(db, dsn):
     connector = MockConnector()
     result = await run_slice(
         tenant_id=TENANT, topic="regen", dsn=dsn, connector=connector,
-        assemble_model=_model(),
+        assemble_model=_model(), hold_registry=LIFTED,
         gates=[Gate(name="banned_phrase", passed=False, detail="off-brand")],
     )
     assert result.decision is RouteDecision.REGENERATE
@@ -119,11 +141,11 @@ async def test_replay_same_content_fires_effect_once(db, dsn):
 
     first = await run_slice(
         tenant_id=TENANT, topic="replayed", dsn=dsn, connector=connector,
-        assemble_model=_model(),
+        assemble_model=_model(), hold_registry=LIFTED,
     )
     second = await run_slice(
         tenant_id=TENANT, topic="replayed", dsn=dsn, connector=connector,
-        assemble_model=_model(),
+        assemble_model=_model(), hold_registry=LIFTED,
     )
 
     assert first.idempotency_key == second.idempotency_key
