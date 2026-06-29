@@ -9,7 +9,7 @@ const ACTION_FIELDS = `
   id tenantId type channel worker target createdAt subject context draft
   confidence threshold
   escalation { kind label }
-  jury { confidence threshold agreement dimensions { label score } }
+  jury { confidence threshold agreement dimensions { label score verdict threshold jurorBreakdown { judge score vote } } }
   gates { label ok }
   recommendation idempotencyKey status
 `;

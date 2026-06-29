@@ -51,9 +51,17 @@ export interface Escalation {
   kind: EscalationKind;
   label: string;
 }
+export interface JurorDimScore {
+  judge: string;
+  score: number;
+  vote: string; // 'pass' | 'fail'
+}
 export interface JuryDim {
   label: string; // "Brand voice" | "Safety" | "Appropriateness"
   score: number;
+  verdict: string; // 'pass' | 'fail'
+  threshold: number;
+  jurorBreakdown: JurorDimScore[];
 }
 export interface JuryDecision {
   confidence: number;

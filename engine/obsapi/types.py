@@ -18,6 +18,7 @@ validate. They are used only as mutation inputs.
 
 from __future__ import annotations
 
+from dataclasses import field
 from enum import Enum
 from typing import Optional
 
@@ -44,9 +45,21 @@ class Escalation:
 
 
 @strawberry.type
+class JurorDimScore:
+    """Per-juror vote on a single dimension."""
+
+    judge: str
+    score: float
+    vote: str  # 'pass' | 'fail'
+
+
+@strawberry.type
 class JuryDim:
     label: str
     score: float
+    verdict: str = "pass"  # 'pass' | 'fail'
+    threshold: float = 0.0
+    juror_breakdown: list[JurorDimScore] = field(default_factory=list)
 
 
 @strawberry.type

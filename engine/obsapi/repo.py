@@ -35,6 +35,7 @@ from .types import (
     JudgeVote,
     JuryDecision,
     JuryDim,
+    JurorDimScore,
     Kpis,
     Outcome,
     Overview,
@@ -319,13 +320,44 @@ def _build_action(conn: Any, row: dict[str, Any]) -> Action:
                     overall=overall,
                 )
             )
-        dimensions = [
-            JuryDim(label="Brand voice", score=sum(v["voice"] for v in jury_rows) / n),
-            JuryDim(label="Safety", score=sum(v["safety"] for v in jury_rows) / n),
-            JuryDim(
-                label="Appropriateness", score=sum(v["appr"] for v in jury_rows) / n
-            ),
+
+        # Build per-dimension verdicts + per-juror breakdowns
+        # Compute reliability-weighted mean for each dimension
+        dimension_specs = [
+            ("Brand voice", "voice"),
+            ("Safety", "safety"),
+            ("Appropriateness", "appr"),
         ]
+
+        for label, field_name in dimension_specs:
+            # Compute per-juror votes and scores
+            juror_breakdown: list[JurorDimScore] = []
+            dim_scores = []
+
+            for v in jury_rows:
+                score = v[field_name]
+                dim_scores.append(score)
+                # A juror's vote on this dimension: pass if score >= threshold, else fail
+                juror_vote = "pass" if score >= threshold else "fail"
+                juror_breakdown.append(
+                    JurorDimScore(judge=v["judge"], score=score, vote=juror_vote)
+                )
+
+            # Compute mean score for this dimension
+            mean_score = sum(dim_scores) / n if dim_scores else 0.0
+
+            # Dimension verdict: pass if mean >= threshold, else fail
+            dim_verdict = "pass" if mean_score >= threshold else "fail"
+
+            dimensions.append(
+                JuryDim(
+                    label=label,
+                    score=mean_score,
+                    verdict=dim_verdict,
+                    threshold=threshold,
+                    juror_breakdown=juror_breakdown,
+                )
+            )
 
     gates = [Gate(label=g.get("label", ""), ok=bool(g.get("ok"))) for g in gates_src]
 
