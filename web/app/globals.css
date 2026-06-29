@@ -1,0 +1,147 @@
+/*
+ * Scalers Operator Console — design tokens (VERBATIM from the locked design
+ * handoff). Two semantic accents drive the whole UI:
+ *   teal  = automation / live / auto-executed / healthy
+ *   amber = human-in-the-loop / escalated / needs review / caution
+ * Where the handoff gives exact hex/px, they are honored here. Do not invent
+ * values; new surfaces compose from these tokens.
+ */
+:root {
+  /* --- neutrals --- */
+  --app-bg: #eeece6; /* behind panels */
+  --canvas: #f6f5f1; /* main content */
+  --surface: #ffffff; /* sidebar / cards */
+  --surface-alt: #fbfaf7; /* card alt / row resting */
+  --hairline: #e7e3db;
+  --hairline-light: #ece9e1;
+  --hairline-lighter: #f0eee8;
+  --hairline-strong: #e0dcd3;
+  --ink: #1a1a17; /* primary text */
+  --text-secondary: #5c584f;
+  --text-secondary-2: #46423b;
+  --text-muted: #8c877d;
+  --text-faint: #a8a299;
+
+  /* --- accent: teal (primary / interactive) --- */
+  --teal: #0f8a82;
+  --teal-dark: #0b6f68; /* hover / dark */
+  --teal-rgb: 15, 138, 130;
+  --nav-active-bg: rgba(15, 138, 130, 0.11);
+  --auto-chip-text: #0b6f68;
+  --auto-chip-bg: #e1f1ef;
+  --auto-chip-dot: #0f8a82;
+  --reasoning-border: #cde7e4;
+  --reasoning-bg: #f4faf9;
+  --reasoning-text: #34504c;
+
+  /* --- semantic: amber (human / escalated) --- */
+  --amber-text: #9a6b00;
+  --amber-bg: #fbf0d9;
+  --amber-dot: #d99405;
+  --amber-border: #ead6a8;
+  --amber-kpi-bg: #fdf8ec;
+
+  /* --- semantic: success / danger --- */
+  --success-text: #157f4b;
+  --success-bg: #e6f4ec;
+  --success-dot: #1a9d5e;
+  --danger-text: #b42318;
+  --danger-bg: #fbe9e6;
+  --danger-dot: #e04a38;
+
+  /* --- channel dots --- */
+  --channel-gmail: #0f8a82;
+  --channel-instagram: #7a5af8;
+  --channel-facebook: #2563c9;
+  --channel-x: #1a1a1a;
+  --channel-reddit: #c2502e;
+
+  /* --- worker colors --- */
+  --worker-supervisor: #1a1a17;
+  --worker-outreach: #0f8a82;
+  --worker-publisher: #7a5af8;
+  --worker-responder: #2563c9;
+  --worker-jury: #9a6b00;
+  --worker-safety: #b42318;
+  --worker-system: #8c877d;
+
+  /* --- radius --- */
+  --radius-card: 12px;
+  --radius-button: 9px;
+  --radius-chip: 7px;
+  --radius-pill: 999px;
+
+  /* --- shadow --- */
+  --shadow-card: 0 1px 2px rgba(26, 26, 23, 0.03);
+  --shadow-selected: 0 1px 3px rgba(26, 26, 23, 0.06);
+  --shadow-toast: 0 10px 30px rgba(26, 26, 23, 0.25);
+
+  /* --- spacing (8px-ish grid) --- */
+  --pad-card: 17px;
+  --pad-row: 13px;
+  --pad-section: 26px;
+
+  /* --- accent (configurable "Tweak"; default teal) --- */
+  --accent: var(--teal);
+  --accent-dark: var(--teal-dark);
+
+  /* --- typography --- */
+  --font-ui: var(--font-hanken, 'Hanken Grotesk'), system-ui, -apple-system,
+    'Segoe UI', sans-serif;
+  --font-mono: var(--font-plex-mono, 'IBM Plex Mono'), ui-monospace,
+    'SF Mono', 'Cascadia Code', monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--app-bg);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Mono treatment for IDs, idempotency keys, timestamps, metric labels. */
+.mono {
+  font-family: var(--font-mono);
+}
+.label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+/*
+ * Entrance motion is TRANSFORM-ONLY. Never gate content visibility behind an
+ * animation that starts at opacity:0 — in a paused/throttled render context the
+ * animation never advances and content stays invisible (real handoff bug).
+ */
+@keyframes slide-in {
+  from {
+    transform: translateY(6px);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+.enter {
+  animation: slide-in 160ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .enter {
+    animation: none;
+  }
+}

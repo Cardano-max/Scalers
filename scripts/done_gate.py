@@ -108,6 +108,11 @@ def gate_frontend(subdir: str) -> Result:
     pkg = REPO_ROOT / subdir / "package.json"
     if not pkg.exists():
         return Result(name, SKIP, "no package.json yet (eslint/prettier land when the app is scaffolded)")
+    if not (REPO_ROOT / subdir / "node_modules").exists():
+        # deps not installed in this job (e.g. the engine done-gate job does not
+        # npm-install the apps); the dedicated `frontend (node)` CI job runs the
+        # real lint with deps installed. SKIP here rather than exit 127.
+        return Result(name, SKIP, "node_modules not installed here; dedicated frontend CI job runs the lint")
     if not _have("npm"):
         return Result(name, FAIL, "npm not installed but package.json present")
     return _run(name, ["npm", "run", "lint", "--if-present"], REPO_ROOT / subdir)
