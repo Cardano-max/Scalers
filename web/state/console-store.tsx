@@ -40,6 +40,8 @@ export const NAV_ITEMS: NavItemDef[] = [
 
 interface ConsoleState {
   screen: ScreenId;
+  /** Optional context ID (action/run/feed-event) to auto-select when navigating. */
+  contextId: string | null;
   /** Whether an inline edit (e.g. Review-queue draft) is open. Reset on nav. */
   editing: boolean;
   /** The in-progress edit buffer. Reset on nav. */
@@ -47,7 +49,8 @@ interface ConsoleState {
 }
 
 type Action =
-  | { type: 'navigate'; screen: ScreenId }
+  | { type: 'navigate'; screen: ScreenId; contextId?: string | null }
+  | { type: 'setContext'; contextId: string | null }
   | { type: 'startEditing'; draftText: string }
   | { type: 'setDraft'; draftText: string }
   | { type: 'cancelEditing' };
@@ -57,7 +60,9 @@ function reducer(state: ConsoleState, action: Action): ConsoleState {
     case 'navigate':
       if (action.screen === state.screen) return state;
       // Reset editing state on every screen switch (handoff behavior).
-      return { screen: action.screen, editing: false, draftText: '' };
+      return { screen: action.screen, contextId: action.contextId ?? null, editing: false, draftText: '' };
+    case 'setContext':
+      return { ...state, contextId: action.contextId };
     case 'startEditing':
       return { ...state, editing: true, draftText: action.draftText };
     case 'setDraft':
@@ -70,7 +75,8 @@ function reducer(state: ConsoleState, action: Action): ConsoleState {
 }
 
 interface ConsoleStore extends ConsoleState {
-  navigate: (screen: ScreenId) => void;
+  navigate: (screen: ScreenId, contextId?: string | null) => void;
+  setContext: (contextId: string | null) => void;
   startEditing: (draftText: string) => void;
   setDraft: (draftText: string) => void;
   cancelEditing: () => void;
@@ -87,6 +93,7 @@ export function ConsoleProvider({
 }) {
   const [state, dispatch] = useReducer(reducer, {
     screen: initialScreen,
+    contextId: null,
     editing: false,
     draftText: '',
   });
@@ -94,7 +101,8 @@ export function ConsoleProvider({
   const store = useMemo<ConsoleStore>(
     () => ({
       ...state,
-      navigate: (screen) => dispatch({ type: 'navigate', screen }),
+      navigate: (screen, contextId) => dispatch({ type: 'navigate', screen, contextId }),
+      setContext: (contextId) => dispatch({ type: 'setContext', contextId }),
       startEditing: (draftText) => dispatch({ type: 'startEditing', draftText }),
       setDraft: (draftText) => dispatch({ type: 'setDraft', draftText }),
       cancelEditing: () => dispatch({ type: 'cancelEditing' }),

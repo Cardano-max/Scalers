@@ -14,6 +14,7 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { useData } from '@/lib/data/DataProvider';
 import { useAsync } from '@/lib/useAsync';
+import { useConsole } from '@/state/console-store';
 import { AsyncBoundary } from './states';
 import { Dot } from './icons';
 import { Chip, Tag, channelLabel, clockTime, matchesFilter, typeLabel, type ChipTone, type QueueFilter } from './console-bits';
@@ -43,6 +44,7 @@ const SPAN_KIND_STYLE: Record<Span['kind'], { color: string; bg: string }> = {
 
 export function ActivityScreen() {
   const { adapter, tenantId } = useData();
+  const console = useConsole();
   const activity = useAsync<ActivityItem[]>(() => adapter.getActivity(tenantId), [tenantId]);
 
   const [filter, setFilter] = useState<QueueFilter>('ALL');
@@ -52,6 +54,14 @@ export function ActivityScreen() {
   const items = useMemo(() => activity.data ?? [], [activity.data]);
   const filtered = useMemo(() => items.filter((a) => matchesFilter(a.type, filter)), [items, filter]);
   const counts = useMemo(() => countByFilter(items), [items]);
+
+  // Auto-select based on contextId from navigation
+  useEffect(() => {
+    if (console.contextId && filtered.some((a) => a.id === console.contextId)) {
+      setSelectedId(console.contextId);
+      console.setContext(null);
+    }
+  }, [console.contextId, filtered, console]);
 
   useEffect(() => {
     if (filtered.length === 0) {

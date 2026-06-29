@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { __reducer, NAV_ITEMS } from '../console-store';
 
 describe('console store — nav + edit reset', () => {
-  const start = { screen: 'overview' as const, editing: false, draftText: '' };
+  const start = { screen: 'overview' as const, contextId: null, editing: false, draftText: '' };
 
   it('includes Activity in the locked nav order', () => {
     expect(NAV_ITEMS.map((n) => n.id)).toEqual([

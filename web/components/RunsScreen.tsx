@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useData } from '@/lib/data/DataProvider';
 import { useAsync } from '@/lib/useAsync';
+import { useConsole } from '@/state/console-store';
 import { Dot } from './icons';
 import { Chip, clockTime } from './console-bits';
 import { WORKER_COLOR } from '@/lib/tokens';
@@ -18,6 +19,7 @@ const SPAN_KIND_STYLE: Record<Span['kind'], { color: string; bg: string }> = {
 
 export function RunsScreen() {
   const { adapter, tenantId } = useData();
+  const console = useConsole();
   const runs = useAsync<Run[]>(() => adapter.getRuns(tenantId), [tenantId]);
 
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -275,18 +277,27 @@ export function RunsScreen() {
                       <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginTop: 2 }}>
                         <button
                           type="button"
+                          disabled={!event.actionId}
+                          onClick={() => {
+                            if (event.actionId) {
+                              console.navigate('activity', event.actionId);
+                            }
+                          }}
                           style={{
                             fontSize: 11.5,
                             fontWeight: 600,
-                            color: '#0B6F68',
+                            color: event.actionId ? '#0B6F68' : '#BDB8AD',
                             background: '#fff',
-                            border: '1px solid #C9E5E1',
+                            border: `1px solid ${event.actionId ? '#C9E5E1' : '#E0DCD3'}`,
                             padding: '6px 10px',
                             borderRadius: 8,
-                            cursor: 'pointer',
+                            cursor: event.actionId ? 'pointer' : 'not-allowed',
+                            opacity: event.actionId ? 1 : 0.5,
                           }}
                           onMouseEnter={(e) => {
-                            (e.currentTarget as HTMLElement).style.background = '#F1EFEA';
+                            if (event.actionId) {
+                              (e.currentTarget as HTMLElement).style.background = '#F1EFEA';
+                            }
                           }}
                           onMouseLeave={(e) => {
                             (e.currentTarget as HTMLElement).style.background = '#fff';
@@ -296,18 +307,27 @@ export function RunsScreen() {
                         </button>
                         <button
                           type="button"
+                          disabled={!selected}
+                          onClick={() => {
+                            if (selected) {
+                              console.navigate('feed', selected.id);
+                            }
+                          }}
                           style={{
                             fontSize: 11.5,
                             fontWeight: 500,
-                            color: '#46423B',
+                            color: selected ? '#46423B' : '#BDB8AD',
                             background: '#fff',
-                            border: '1px solid #E0DCD3',
+                            border: `1px solid ${selected ? '#E0DCD3' : '#E0DCD3'}`,
                             padding: '6px 10px',
                             borderRadius: 8,
-                            cursor: 'pointer',
+                            cursor: selected ? 'pointer' : 'not-allowed',
+                            opacity: selected ? 1 : 0.5,
                           }}
                           onMouseEnter={(e) => {
-                            (e.currentTarget as HTMLElement).style.background = '#F1EFEA';
+                            if (selected) {
+                              (e.currentTarget as HTMLElement).style.background = '#F1EFEA';
+                            }
                           }}
                           onMouseLeave={(e) => {
                             (e.currentTarget as HTMLElement).style.background = '#fff';

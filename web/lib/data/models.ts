@@ -77,6 +77,9 @@ export interface RunEvent {
   severity: Severity;
   ms: string;
   spans: Span[];
+  actionId?: string | null;
+  runId?: string | null;
+  decisionId?: string | null;
 }
 export interface Judge {
   name: string;
@@ -171,6 +174,9 @@ export interface FeedEvent {
   at: string;
   chip?: string | null;
   severity: Severity;
+  actionId?: string | null;
+  runId?: string | null;
+  decisionId?: string | null;
 }
 
 export interface Kpis {

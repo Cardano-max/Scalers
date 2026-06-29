@@ -603,6 +603,9 @@ def _action_feed(r: dict[str, Any]) -> dict[str, Any]:
         "chip": chip,
         "severity": sev,
         "ts": r.get("updated_at") or r.get("created_at"),
+        "action_id": r.get("id"),
+        "run_id": r.get("run_id"),
+        "decision_id": r.get("decision_id"),
     }
 
 
@@ -621,6 +624,9 @@ def _decision_feed(r: dict[str, Any]) -> dict[str, Any]:
         "chip": None if auto else "Escalated",
         "severity": "INFO" if auto else "WARN",
         "ts": r.get("created_at"),
+        "action_id": None,
+        "run_id": r.get("run_id"),
+        "decision_id": r.get("decision_id"),
     }
 
 
@@ -636,6 +642,9 @@ def _run_feed(r: dict[str, Any]) -> dict[str, Any]:
         "chip": None,
         "severity": sev,
         "ts": r.get("created_at"),
+        "action_id": None,
+        "run_id": r.get("run_id"),
+        "decision_id": None,
     }
 
 
@@ -683,6 +692,9 @@ def feed(
                 at=e["at"],
                 chip=e["chip"],
                 severity=e["severity"],
+                action_id=e.get("action_id"),
+                run_id=e.get("run_id"),
+                decision_id=e.get("decision_id"),
             )
         )
     return out

@@ -201,6 +201,9 @@ class FeedEvent:
     at: str
     chip: Optional[str]
     severity: str
+    action_id: Optional[strawberry.ID] = None
+    run_id: Optional[strawberry.ID] = None
+    decision_id: Optional[strawberry.ID] = None
 
 
 @strawberry.type

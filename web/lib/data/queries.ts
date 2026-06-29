@@ -36,7 +36,7 @@ const RUN_FIELDS = `
   events { worker text severity ms spans { kind title ms detail } }
 `;
 
-const FEED_FIELDS = `id tenantId worker text at chip severity`;
+const FEED_FIELDS = `id tenantId worker text at chip severity actionId runId decisionId`;
 const KPIS_FIELDS = `autonomyPct reviewQueueCount outreachToday complaintsPct commentsAuto commentsReview postsPublished postsScheduled`;
 const HEALTH_FIELDS = `emailComplaintRate emailBounceRate gmailWarmupUsed gmailWarmupCap igPublishUsed igPublishCap checkpointStatus`;
 
