@@ -35,17 +35,26 @@ def _brief_to_text(brief: dict[str, Any]) -> str:
     """
     goal = brief.get("goal", "").strip()
     audience = brief.get("audience", "").strip()
-    constraints = brief.get("constraints") or {}
+    constraints = brief.get("constraints") or ""
+    hooks = brief.get("hooks") or []
 
     parts = []
     if goal:
         parts.append(goal)
     if audience:
         parts.append(f"Target audience: {audience}")
+    if hooks:
+        hook_items = [h for h in hooks if h]
+        if hook_items:
+            parts.append("Hooks to use: " + ", ".join(hook_items))
     if constraints:
-        constraint_items = [f"{k}: {v}" for k, v in constraints.items() if v]
-        if constraint_items:
-            parts.append("Constraints: " + ", ".join(constraint_items))
+        # schema types `constraints` as a String; tolerate a dict defensively
+        if isinstance(constraints, dict):
+            constraint_items = [f"{k}: {v}" for k, v in constraints.items() if v]
+            if constraint_items:
+                parts.append("Constraints: " + ", ".join(constraint_items))
+        else:
+            parts.append(f"Constraints: {constraints}")
 
     return " ".join(parts)
 
