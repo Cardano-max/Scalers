@@ -294,6 +294,22 @@ class FeedFilter:
     worker: Optional[str] = None
 
 
+@strawberry.input
+class CampaignBrief:
+    goal: str
+    audience: str
+    channels: list[str]
+    constraints: Optional[str] = None
+    hooks: Optional[list[str]] = None
+
+
+@strawberry.type
+class StartCampaignResult:
+    run_id: strawberry.ID
+    action_ids: list[strawberry.ID]
+    status: str
+
+
 @strawberry.type
 class Span:
     """A trace span: a unit of work with timing and output detail."""

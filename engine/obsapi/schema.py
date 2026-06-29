@@ -17,12 +17,14 @@ from typing import Optional
 import strawberry
 
 from . import repo
+from studio import orchestrator
 from .types import (
     Action,
     ActionFilter,
     ActivityItem,
     AutonomyConfig,
     AutonomyMode,
+    CampaignBrief,
     Channel,
     ChatMessage,
     FeedEvent,
@@ -31,6 +33,7 @@ from .types import (
     Overview,
     Run,
     RunFilter,
+    StartCampaignResult,
     SystemHealth,
     Tenant,
 )
@@ -167,6 +170,33 @@ class Mutation:
             text=f"Acknowledged: {text}",
             label=None,
             at=now,
+        )
+
+    @strawberry.mutation
+    async def start_campaign(
+        self, tenant_id: strawberry.ID, brief: CampaignBrief
+    ) -> StartCampaignResult:
+        # Build the brief dict from the input type
+        brief_dict = {
+            "goal": brief.goal,
+            "audience": brief.audience,
+            "channels": brief.channels,
+        }
+        if brief.constraints is not None:
+            brief_dict["constraints"] = brief.constraints
+        if brief.hooks is not None:
+            brief_dict["hooks"] = brief.hooks
+
+        # Call the orchestrator to start the campaign
+        result = await asyncio.to_thread(
+            orchestrator.start_campaign, str(tenant_id), brief_dict
+        )
+
+        # Return the result as a StartCampaignResult type
+        return StartCampaignResult(
+            run_id=strawberry.ID(result["run_id"]),
+            action_ids=[strawberry.ID(aid) for aid in result["action_ids"]],
+            status="PENDING",
         )
 
 

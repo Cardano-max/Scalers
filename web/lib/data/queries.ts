@@ -141,3 +141,8 @@ export const SEND_COMMAND = `
     sendCommand(tenantId: $tenantId, text: $text) { id role text label at }
   }
 `;
+export const START_CAMPAIGN = `
+  mutation StartCampaign($tenantId: ID!, $brief: CampaignBrief!) {
+    startCampaign(tenantId: $tenantId, brief: $brief) { runId actionIds status }
+  }
+`;
