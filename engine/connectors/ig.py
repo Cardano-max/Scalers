@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 
 from connectors.base import GatedConnector, appsecret_proof, redact
@@ -251,25 +252,38 @@ class InstagramConnector(GatedConnector):
         return _safe_json(resp.body)
 
     def _fetch_permalink(self, media_id: str, proof: str) -> str | None:
-        """Best-effort ``GET /{media_id}?fields=permalink``. The access token rides
-        the ``Authorization: Bearer`` header (NEVER the URL); ``appsecret_proof`` is a
-        non-reversible HMAC and is safe as a query param. Returns ``None`` on any
-        failure rather than fabricating a link."""
-        try:
-            resp = self._secure_request(
-                api_base=GRAPH_API_BASE,
-                host=_GRAPH_HOST,
-                method="GET",
-                path=f"/{_GRAPH_VERSION}/{media_id}?fields=permalink&appsecret_proof={proof}",
-                headers={"Authorization": f"Bearer {self._page_token}"},
-            )
-        except Exception:  # noqa: BLE001 — permalink is best-effort, post already shipped
-            return None
-        if resp.status >= 400:
-            return None
-        data = _safe_json(resp.body)
-        link = data.get("permalink") if isinstance(data, dict) else None
-        return str(link) if link else None
+        """Best-effort ``GET /{media_id}?fields=permalink`` with bounded retry for IG
+        eventual-consistency. The access token rides the ``Authorization: Bearer``
+        header (NEVER the URL); ``appsecret_proof`` is a non-reversible HMAC and is
+        safe as a query param. Returns ``None`` on any failure rather than fabricating
+        a link."""
+        # IG permalink may not be ready immediately (eventual consistency); retry up to
+        # 3 times with ~1.0s sleep between attempts. Post has already shipped, so we
+        # are best-effort only — never raise, always return None on any failure.
+        for attempt in range(3):
+            try:
+                resp = self._secure_request(
+                    api_base=GRAPH_API_BASE,
+                    host=_GRAPH_HOST,
+                    method="GET",
+                    path=f"/{_GRAPH_VERSION}/{media_id}?fields=permalink&appsecret_proof={proof}",
+                    headers={"Authorization": f"Bearer {self._page_token}"},
+                )
+            except Exception:  # noqa: BLE001 — permalink is best-effort, post already shipped
+                if attempt < 2:
+                    time.sleep(1.0)
+                continue
+            if resp.status >= 400:
+                if attempt < 2:
+                    time.sleep(1.0)
+                continue
+            data = _safe_json(resp.body)
+            link = data.get("permalink") if isinstance(data, dict) else None
+            if link:
+                return str(link)
+            if attempt < 2:
+                time.sleep(1.0)
+        return None
 
     def _error_detail(self, raw: str) -> str:
         """Extract the REAL Graph error (message/type/code) for a connector error.
