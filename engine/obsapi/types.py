@@ -83,6 +83,9 @@ class JuryDecision:
     dimensions: list[JuryDim]
     judges: list[JudgeVote]
     is_seeded: bool = False
+    # B1: generation-stability component of confidence (Phase-5 only; NULL on
+    # pre-Phase-5 rows where the probe did not run). NEVER default null→0.
+    self_consistency: Optional[float] = None
 
 
 @strawberry.type
@@ -330,6 +333,12 @@ class RunEvent:
     severity: str  # info|warn|error
     ms: str
     spans: list[Span]
+    # B3: ids for the action/run/decision this step produced — set ONLY when the
+    # step JSONB carries them (written by harness nodes). None = not yet captured;
+    # never synthesized. Enables "Open in Activity" on the Runs screen.
+    action_id: Optional[strawberry.ID] = None
+    run_id: Optional[strawberry.ID] = None
+    decision_id: Optional[strawberry.ID] = None
 
 
 @strawberry.type

@@ -25,15 +25,15 @@ describe('ReviewScreen — escalated → human, on the mock adapter spine', () =
   it('shows the autonomy decision card for the first selected action', async () => {
     renderReview();
     expect(await screen.findByText('Autonomy decision')).toBeInTheDocument();
-    // confidence vs threshold for the first item (conf 0.78 / 0.85)
-    expect(screen.getAllByText(/conf 0\.78 \/ 0\.85/).length).toBeGreaterThan(0);
+    // confidence displayed for the first item (78% → pct(0.78))
+    expect(screen.getAllByText('78%').length).toBeGreaterThan(0);
     // per-dimension jury bars
     expect(screen.getByText('Brand voice')).toBeInTheDocument();
     expect(screen.getByText('Appropriateness')).toBeInTheDocument();
     // deterministic gate chips
     expect(screen.getByText('Suppression')).toBeInTheDocument();
-    // the idempotency key (unique to the first seeded action)
-    expect(screen.getByText('nw:outreach:bayside-pg:c8821')).toBeInTheDocument();
+    // the action id (unique to the first seeded action, rendered in the detail header)
+    expect(screen.getByText('act_8f2a1')).toBeInTheDocument();
     // outreach → "Approve & send"
     expect(screen.getByRole('button', { name: 'Approve & send' })).toBeInTheDocument();
   });
@@ -44,10 +44,10 @@ describe('ReviewScreen — escalated → human, on the mock adapter spine', () =
     fireEvent.click(approve);
     // success toast
     expect(await screen.findByText(/Approved & sent/)).toBeInTheDocument();
-    // selection advanced to the next item (the IG comment) — its idem key now shows
-    expect(await screen.findByText('nw:comment:ig:coastal-eats:r41')).toBeInTheDocument();
+    // selection advanced to the next item (the IG comment) — its action id now shows in detail
+    expect(await screen.findByText('act_3c7b9')).toBeInTheDocument();
     // the approved item is gone from the queue
-    expect(screen.queryByText('nw:outreach:bayside-pg:c8821')).not.toBeInTheDocument();
+    expect(screen.queryByText('act_8f2a1')).not.toBeInTheDocument();
     // All count dropped 3 → 2
     expect(screen.getByRole('button', { name: /All\s*2/ })).toBeInTheDocument();
   });

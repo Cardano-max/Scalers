@@ -42,12 +42,12 @@ describe('AppShell — locked shell', () => {
 
   it('nav switches the single active screen', async () => {
     renderShell();
-    // Overview shows the foundation smoke view
-    expect(await screen.findByText(/Foundation smoke view/)).toBeInTheDocument();
+    // Overview shows the KPI strip (SmokeScreen)
+    expect(await screen.findByText(/Autonomy · today/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Runs/ }));
-    expect(await screen.findByText(/Runs — coming up/)).toBeInTheDocument();
-    // Overview's smoke view is no longer mounted (single active screen)
-    expect(screen.queryByText(/Foundation smoke view/)).not.toBeInTheDocument();
+    expect(await screen.findByText(/WORKFLOW RUNS/)).toBeInTheDocument();
+    // Overview KPIs are no longer mounted (single active screen)
+    expect(screen.queryByText(/Autonomy · today/)).not.toBeInTheDocument();
   });
 
   it('Pause/Resume toggles harness state (master control, not autonomy)', async () => {

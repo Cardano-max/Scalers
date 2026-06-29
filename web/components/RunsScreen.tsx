@@ -7,15 +7,8 @@ import { useConsole } from '@/state/console-store';
 import { Dot } from './icons';
 import { Chip, clockTime } from './console-bits';
 import { WORKER_COLOR } from '@/lib/tokens';
-import type { Run, Span } from '@/lib/data/models';
-
-const SPAN_KIND_STYLE: Record<Span['kind'], { color: string; bg: string }> = {
-  tool: { color: '#0B6F68', bg: '#E1F1EF' },
-  llm: { color: '#0B6F68', bg: '#E1F1EF' },
-  jury: { color: '#9A6B00', bg: '#FBF0D9' },
-  gate: { color: '#157F4B', bg: '#E6F4EC' },
-  decision: { color: '#157F4B', bg: '#E6F4EC' },
-};
+import type { Run } from '@/lib/data/models';
+import { SpanTree } from './trace/SpanTree';
 
 export function RunsScreen() {
   const { adapter, tenantId } = useData();
@@ -255,7 +248,7 @@ export function RunsScreen() {
                   </button>
 
                   {/* Expanded span tree */}
-                  {openEventIndex === idx && event.spans && event.spans.length > 0 && (
+                  {openEventIndex === idx && (
                     <div
                       style={{
                         marginTop: 11,
@@ -266,44 +259,55 @@ export function RunsScreen() {
                         gap: 12,
                       }}
                     >
-                      {event.spans.map((span, sidx) => (
-                        <div key={sidx} style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
-                          <span
-                            style={{
-                              width: 6,
-                              height: 6,
-                              borderRadius: '50%',
-                              background: SPAN_KIND_STYLE[span.kind]?.color || '#8C877D',
-                              flex: '0 0 auto',
-                              marginTop: 5,
-                            }}
-                          />
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 3 }}>
-                              <span
-                                style={{
-                                  fontSize: 9,
-                                  fontWeight: 600,
-                                  color: SPAN_KIND_STYLE[span.kind]?.color || '#8C877D',
-                                  background: SPAN_KIND_STYLE[span.kind]?.bg || '#F1EFEA',
-                                  padding: '2px 6px',
-                                  borderRadius: 5,
-                                  textTransform: 'uppercase',
-                                }}
-                              >
-                                {span.kind}
-                              </span>
-                              <span style={{ fontSize: 12, fontWeight: 600, color: '#1A2E2B' }}>{span.title}</span>
-                              <span style={{ flex: 1 }} />
-                              {span.ms && <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9.5, color: '#9BBFBB', flex: '0 0 auto' }}>{span.ms}ms</span>}
-                            </div>
-                            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#5C7A76', lineHeight: 1.5 }}>{span.detail}</div>
-                          </div>
-                        </div>
-                      ))}
+                      {event.spans && event.spans.length > 0 ? (
+                        <SpanTree spans={event.spans} dense />
+                      ) : (
+                        <p
+                          style={{
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            fontSize: 11,
+                            color: '#8C877D',
+                            lineHeight: 1.5,
+                            margin: 0,
+                          }}
+                        >
+                          No sub-step trace was captured for this step — only the step label, worker and duration above are recorded.
+                          {event.actionId && ' Open the action for its full reasoning trace.'}
+                        </p>
+                      )}
 
                       {/* Nav buttons */}
                       <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginTop: 2 }}>
+                        <button
+                          type="button"
+                          disabled={!event.actionId}
+                          onClick={() => {
+                            if (event.actionId) {
+                              console.navigate('step_detail', event.actionId);
+                            }
+                          }}
+                          style={{
+                            fontSize: 11.5,
+                            fontWeight: 600,
+                            color: event.actionId ? '#0B6F68' : '#BDB8AD',
+                            background: '#fff',
+                            border: `1px solid ${event.actionId ? '#C9E5E1' : '#E0DCD3'}`,
+                            padding: '6px 10px',
+                            borderRadius: 8,
+                            cursor: event.actionId ? 'pointer' : 'not-allowed',
+                            opacity: event.actionId ? 1 : 0.5,
+                          }}
+                          onMouseEnter={(e) => {
+                            if (event.actionId) {
+                              (e.currentTarget as HTMLElement).style.background = '#F1EFEA';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            (e.currentTarget as HTMLElement).style.background = '#fff';
+                          }}
+                        >
+                          Open reasoning →
+                        </button>
                         <button
                           type="button"
                           disabled={!event.actionId}

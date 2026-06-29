@@ -146,6 +146,12 @@ def _build_run_events(steps_jsonb: list[dict[str, Any]] | None) -> list[RunEvent
                 severity=severity,
                 ms=ms_str,
                 spans=child_spans,
+                # B3: ids from step JSONB only when present — no synthesis.
+                # action_id and decision_id are written by harness nodes that
+                # produce/decide an action; run_id comes from the Span's own field.
+                action_id=top_step.get("action_id"),
+                run_id=top_step.get("run_id"),
+                decision_id=top_step.get("decision_id"),
             )
         )
 
@@ -399,6 +405,9 @@ def _build_action(conn: Any, row: dict[str, Any]) -> Action:
             dimensions=dimensions,
             judges=judges,
             is_seeded=(decision.get("run_id", "").startswith("demo-") if decision else False),
+            # B1: read directly from autonomy_decisions; None on pre-Phase-5 rows
+            # where the probe did not run. NEVER default null→0.
+            self_consistency=decision.get("self_consistency") if decision else None,
         ),
         gates=gates,
         recommendation=row.get("recommend"),

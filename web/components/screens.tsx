@@ -15,6 +15,7 @@ import { ActivityScreen } from './ActivityScreen';
 import { RunsScreen } from './RunsScreen';
 import { FeedScreen } from './FeedScreen';
 import { CommandScreen } from './CommandScreen';
+import { StepDetailScreen } from './StepDetailScreen';
 
 export const SCREENS: Record<ScreenId, ComponentType> = {
   overview: SmokeScreen,
@@ -23,4 +24,6 @@ export const SCREENS: Record<ScreenId, ComponentType> = {
   feed: FeedScreen,
   runs: RunsScreen,
   command: CommandScreen,
+  // drill-only — not in NAV_ITEMS; reached via navigate('step_detail', actionId)
+  step_detail: StepDetailScreen,
 };
