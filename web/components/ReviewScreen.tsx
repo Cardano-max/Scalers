@@ -875,7 +875,7 @@ function fmt(n: number): string {
   return n.toFixed(2);
 }
 function pct(n: number): number {
-  return Math.max(0, Math.min(100, n * 100));
+  return Math.round(Math.max(0, Math.min(100, n * 100)));
 }
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
