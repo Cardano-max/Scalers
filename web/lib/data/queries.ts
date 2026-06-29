@@ -32,7 +32,7 @@ const ACTIVITY_FIELDS = `
 
 const RUN_FIELDS = `
   id tenantId type trigger status startedAt duration autoCount reviewCount
-  retries idempotencyKey channels trajectory { at text state } note
+  retries idempotencyKey channels trajectory { at text state } note traceUrl
   events { worker text severity ms spans { kind title ms detail } }
 `;
 

@@ -171,6 +171,7 @@ export interface Run {
   channels: Channel[];
   trajectory: RunStep[];
   note?: string | null;
+  traceUrl?: string | null;
   events?: RunEvent[];
 }
 

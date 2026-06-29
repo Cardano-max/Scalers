@@ -153,6 +153,39 @@ export function RunsScreen() {
             </div>
           </div>
 
+          {/* Langfuse trace link */}
+          {selected.traceUrl ? (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  if (selected.traceUrl) {
+                    window.open(selected.traceUrl, '_blank');
+                  }
+                }}
+                style={{
+                  fontSize: 12.5,
+                  fontWeight: 500,
+                  color: '#0B6F68',
+                  background: '#fff',
+                  border: '1px solid #D8D3C9',
+                  padding: '8px 13px',
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                  textDecoration: 'none',
+                }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLElement).style.background = '#F1EFEA';
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLElement).style.background = '#fff';
+                }}
+              >
+                View Langfuse trace ↗
+              </button>
+            </div>
+          ) : null}
+
           {/* Run History */}
           <div style={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: '#A8A299', letterSpacing: '0.7px', marginBottom: 11 }}>RUN HISTORY · tap a step for its trace</div>
 

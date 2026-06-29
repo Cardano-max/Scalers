@@ -202,6 +202,7 @@ class Run:
     channels: list[str]
     trajectory: list[RunStep]
     note: Optional[str]
+    trace_url: Optional[str] = None
     events: list[RunEvent]
 
 

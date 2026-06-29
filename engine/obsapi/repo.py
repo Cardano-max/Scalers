@@ -17,9 +17,11 @@ than crashing the server, so read-only queries keep working.
 from __future__ import annotations
 
 import importlib
+import os
 from typing import Any, Callable
 
 from . import mappers
+import observability
 from .db import connect
 from .types import (
     Action,
@@ -559,6 +561,12 @@ def _build_run(conn: Any, row: dict[str, Any]) -> Run:
     # v2 observability: build events from steps JSONB
     events = _build_run_events(row.get("steps"))
 
+    # Compute trace_url: if Langfuse is configured, construct the URL; else None
+    trace_url: str | None = None
+    if observability.is_configured():
+        langfuse_host = os.environ.get("LANGFUSE_HOST", observability._DEFAULT_HOST)
+        trace_url = f"{langfuse_host.rstrip('/')}/traces/{row['run_id']}"
+
     return Run(
         id=row["run_id"],
         tenant_id=row["tenant_id"],
@@ -574,6 +582,7 @@ def _build_run(conn: Any, row: dict[str, Any]) -> Run:
         channels=channels,
         trajectory=trajectory,
         note=None,
+        trace_url=trace_url,
         events=events,
     )
 
