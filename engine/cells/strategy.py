@@ -82,21 +82,36 @@ _INSTRUCTIONS = (
 )
 
 
-def build_strategy_prompt(tenant_id: str, brief: str) -> str:
+def build_strategy_prompt(tenant_id: str, brief: str, research: str | None = None) -> str:
     """Render the per-campaign prompt the strategy cell runs against.
 
     Campaign-level context (one strategy per campaign), composed the same way the
     draft prompt is: account/voice context, then the brief, then the task.
+
+    When the upstream research step (slice-3 research agent) produced real findings
+    grounded in cited web sources, they are composed in between the brief and the
+    task so the strategy is informed by real research — research -> strategy ->
+    draft. ``research=None`` (honest-empty research) degrades cleanly: the strategy
+    proceeds from the brief alone, never from fabricated research.
     """
-    return (
+    parts = [
         f"Studio/account: @{tenant_id} — a women-led tattoo studio with a warm, "
-        f"concrete, human voice.\n"
-        f"Campaign brief: {brief}\n"
+        f"concrete, human voice.",
+        f"Campaign brief: {brief}",
+    ]
+    if research and research.strip():
+        parts.append(
+            "Market research (real findings from the research agent, grounded in "
+            "cited web sources — use these to inform the angle and messages):\n"
+            + research.strip()
+        )
+    parts.append(
         "Produce the strategic plan for THIS campaign: the single best target angle "
         "to lead with, the brand positioning, the key messages to land, and the "
         "channel rationale. Be concrete and specific to this studio — no generic "
         "marketing boilerplate, no placeholders."
     )
+    return "\n".join(parts)
 
 
 def render_strategy(strategy: CampaignStrategy) -> str:

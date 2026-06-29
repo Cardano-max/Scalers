@@ -21,6 +21,7 @@ from cells.strategy import build_strategy_cell, build_strategy_prompt, render_st
 from contentrun import run_content_to_review
 from harness.runstore import PostgresRunStore, RunStatus
 from harness.spans import Span, summarize
+from research.agent import run_research
 
 
 def _now_iso() -> str:
@@ -114,24 +115,58 @@ def start_campaign(
     # Record the pipeline steps (the intended trajectory)
     steps: list[Span] = []
 
-    # Step 1: Research — STUB today (no research agent yet). HONESTY GATE: this
-    # slice instruments only the REAL steps; we do NOT fabricate research content.
-    # input/output/model stay null and the step is badged not-captured. Real
-    # research is a separate later slice.
+    # Step 1: Research — REAL research agent (slice 3). An LLM derives a few (<=3)
+    # real search queries from the brief, the EXISTING vetted Firecrawl provider
+    # runs them through the official /v1/search API (SSRF-guarded, official-API-only,
+    # pinned-IP TLS, rate-limited), the REAL hits (title/url/snippet) are persisted
+    # to research_sources, and an LLM synthesizes findings that CITE those sources.
+    # The research span carries the REAL queries+method (input), the synthesized
+    # findings + cited source URLs (output), and the real synthesis model pin.
+    # HONESTY GATE: if Firecrawl returns nothing / errors, the step degrades to
+    # status=failed with empty sources and an honest reason — sources are NEVER
+    # fabricated. The findings (when real) feed forward into the strategy step.
     step_seq = 0
-    now = _now_iso()
+    research_start = _now_iso()
+    research = run_research(tenant_id, brief_text, run_id, dsn=dsn)
+    research_findings: str | None = research.findings if research.status == "ok" else None
     research_span = Span(
         span_id=uuid.uuid4().hex,
         run_id=run_id,
         node="research",
         kind="node",
-        start_ts=now,
-        end_ts=now,
+        start_ts=research_start,
+        end_ts=_now_iso(),
         status="ok",
         seq=step_seq,
-        text="STUB — no research agent yet; input/output not captured (P0 instruments only real steps)",
+        text="Real web research (Firecrawl-cited sources)",
         state="research",
     )
+    if research.queries:
+        # The real queries actually run + the method are real even when the search
+        # later fails, so the input is captured whenever queries were derived.
+        research_span.input, research_span.input_truncated = summarize(
+            {"queries": research.queries, "method": research.method}
+        )
+    if research.status == "ok" and research.sources:
+        research_span.output, research_span.output_truncated = summarize(
+            {
+                "findings": research.findings,
+                "cited_urls": research.cited_urls,
+                "sources": [
+                    {"query": s["query"], "url": s["url"], "title": s["title"]}
+                    for s in research.sources
+                ],
+            }
+        )
+        research_span.model = research.model  # real synthesis model pin (null if none ran)
+        research_span.text = (
+            f"Real web research — {len(research.sources)} cited source(s) via "
+            f"Firecrawl across {len(research.queries)} query(ies)"
+        )
+    else:
+        # HONESTY GATE: no real sources -> failed + honest reason, output/model NULL.
+        research_span.status = "failed"
+        research_span.text = f"Research not captured ({research.error or 'no sources'})"
     steps.append(research_span)
     step_seq += 1
 
@@ -142,7 +177,10 @@ def start_campaign(
     # The strategy span carries the REAL prompt / model output / model pin (same as
     # the slice-1 draft + jury spans). If the strategy call fails, we degrade (drafts
     # proceed without it) and leave input/output/model NULL — never fabricated.
-    strategy_prompt = build_strategy_prompt(tenant_id, brief_text)
+    # Feed the REAL research findings forward into the strategy (research ->
+    # strategy -> draft). research_findings is None on an honest-empty research
+    # run, so the strategy degrades cleanly to the brief alone — never fabricated.
+    strategy_prompt = build_strategy_prompt(tenant_id, brief_text, research=research_findings)
     strategy_text: str | None = None
     strategy_payload: dict[str, Any] | None = None
     strategy_model: str | None = None
