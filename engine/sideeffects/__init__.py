@@ -16,6 +16,14 @@ cannot abolish it.
 
 from sideeffects.capture import capture_engagement, capture_provider_result, redact_pii
 from sideeffects.keys import Channel, idempotency_key
+from sideeffects.posting import (
+    MockPostingConnector,
+    OutOfSpecError,
+    PublishIntent,
+    posting_idempotency_key,
+    posting_target,
+    publish_approved_post,
+)
 from sideeffects.provider import ProviderResult, as_provider_result
 
 __all__ = [
@@ -26,4 +34,10 @@ __all__ = [
     "capture_engagement",
     "capture_provider_result",
     "redact_pii",
+    "PublishIntent",
+    "MockPostingConnector",
+    "OutOfSpecError",
+    "posting_idempotency_key",
+    "posting_target",
+    "publish_approved_post",
 ]
