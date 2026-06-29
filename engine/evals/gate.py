@@ -32,6 +32,15 @@ from kb.schema import Direction, Engine, EvalMetric, GoldExample, RunKind, Split
 Predictor = Callable[[GoldExample], dict[str, Any]]
 
 
+class CellNotBuilt(Exception):
+    """Raised by a predictor for an (engine, cell) whose cell does not exist yet.
+
+    The gate treats it as SKIP-neutral (never a false fail) — an unbuilt engine
+    (outreach/engagement land in Phase 7) cannot be scored, so its gate skips
+    rather than running an oracle tautology or failing the build (rvy.7).
+    """
+
+
 @dataclass(frozen=True)
 class GateThreshold:
     """One registered gate (a row of ADR Decision 4's threshold registry)."""
@@ -180,8 +189,13 @@ def run_eval_gate(
         if not rows:
             result.skipped.append(f"{g.engine.value}.{g.cell}.{g.metric}")
             continue
+        try:
+            preds = [predictor(r) for r in rows]
+        except CellNotBuilt:
+            # Cell not built yet (Phase 7) — SKIP-neutral, never a false fail.
+            result.skipped.append(f"{g.engine.value}.{g.cell}.{g.metric} (cell not built)")
+            continue
         any_scored = True
-        preds = [predictor(r) for r in rows]
         value = _value_for(g, rows, preds)
         passed = _passes(value, g.threshold, g.direction)
         version = f"label_version={rows[0].label_version} dataset={_dataset_hash(rows)}"

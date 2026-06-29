@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 
-from evals.demo_cells import oracle_cell, regressed_triage_cell
+from evals.predictors import cell_predictor, regressed_cell_predictor
 from evals.gate import run_eval_gate
 from evals.smoke_gold_set import SMOKE_TENANT, load_smoke_gold_set
 from kb.schema import RunKind
@@ -37,7 +37,7 @@ def main() -> int:
     load_smoke_gold_set(store)
 
     regress = os.environ.get("EVAL_GATE_REGRESS") == "1"
-    predictor = regressed_triage_cell if regress else oracle_cell
+    predictor = regressed_cell_predictor if regress else cell_predictor
     result = run_eval_gate(
         store, predictor, tenant_id=SMOKE_TENANT,
         run_kind=RunKind.PER_COMMIT, git_sha=os.environ.get("GIT_SHA"),
