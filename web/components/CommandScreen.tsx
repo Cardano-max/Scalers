@@ -33,6 +33,7 @@ export function CommandScreen() {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<CampaignResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const channelOptions = ['Instagram', 'Facebook', 'Email'];
@@ -42,6 +43,27 @@ export function CommandScreen() {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [result, running]);
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout | null = null;
+
+    if (running) {
+      setElapsedSeconds(0);
+      interval = setInterval(() => {
+        setElapsedSeconds((prev) => prev + 1);
+      }, 1000);
+    }
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [running]);
+
+  const formatElapsed = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
 
   const toggleChannel = (channel: string) => {
     setFormData((prev) => ({
@@ -352,8 +374,13 @@ export function CommandScreen() {
             {/* In-progress timeline */}
             {running && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: '#46423B', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                  Campaign Pipeline
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: '#46423B', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                    Campaign Pipeline
+                  </div>
+                  <div style={{ fontSize: 13, color: '#6B6461', lineHeight: 1.4 }}>
+                    Working… {formatElapsed(elapsedSeconds)} elapsed
+                  </div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
                   {steps.map((step, idx) => (
@@ -374,7 +401,7 @@ export function CommandScreen() {
                           animation: 'pulse 1.5s ease-in-out infinite',
                         }}
                       >
-                        ✓
+                        ·
                       </div>
                       <span style={{ fontSize: 13, color: '#6B6461', whiteSpace: 'nowrap' }}>{step}</span>
                       {idx < steps.length - 1 && (
@@ -382,6 +409,25 @@ export function CommandScreen() {
                       )}
                     </div>
                   ))}
+                </div>
+                <div
+                  style={{
+                    padding: '12px 14px',
+                    background: '#F0F9F8',
+                    borderRadius: 9,
+                    border: '1px solid #C8E7E4',
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 10,
+                  }}
+                >
+                  <div style={{ fontSize: 18, flex: '0 0 auto' }}>⏱</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: '#0B6F68' }}>Pipeline in Progress</div>
+                    <div style={{ fontSize: 13, lineHeight: 1.4, color: '#0F5A52' }}>
+                      This runs the real multi-step pipeline (research → strategy → draft → cross-family jury → route). Typically 1-3 minutes — please wait, it is not frozen.
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
