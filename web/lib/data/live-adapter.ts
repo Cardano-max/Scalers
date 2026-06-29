@@ -166,4 +166,13 @@ export class LiveAdapter implements DataAdapter {
       text,
     }).then((d) => d.sendCommand);
   }
+  startCampaign(
+    tenantId: string,
+    brief: { goal: string; audience: string; channels: string[]; constraints?: string; hooks?: string[] },
+  ) {
+    return this.mutate<{ startCampaign: { runId: string; actionIds: string[]; status: string } }>(
+      Q.START_CAMPAIGN,
+      { tenantId, brief },
+    ).then((d) => d.startCampaign);
+  }
 }

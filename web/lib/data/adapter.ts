@@ -80,4 +80,12 @@ export interface DataAdapter {
     threshold: number,
   ): Promise<AutonomyConfig>;
   sendCommand(tenantId: string, text: string): Promise<ChatMessage>;
+  /**
+   * Start a campaign with the given brief. Returns the campaign run ID, action IDs
+   * generated, and the initial status.
+   */
+  startCampaign(
+    tenantId: string,
+    brief: { goal: string; audience: string; channels: string[]; constraints?: string; hooks?: string[] },
+  ): Promise<{ runId: string; actionIds: string[]; status: string }>;
 }

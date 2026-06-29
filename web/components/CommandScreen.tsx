@@ -2,55 +2,105 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useData } from '@/lib/data/DataProvider';
-import type { ChatMessage } from '@/lib/data/models';
+import { useConsole } from '@/state/console-store';
+
+interface StudioState {
+  goal: string;
+  audience: string;
+  channels: string[];
+  constraints: string;
+  hooks: string;
+}
+
+interface CampaignResult {
+  runId: string;
+  actionIds: string[];
+  status: string;
+}
 
 export function CommandScreen() {
   const { adapter, tenantId } = useData();
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: 'sys_init',
-      role: 'ASSISTANT',
-      text: 'Harness is running for Ladies First (@ladies8391). Actions are flowing into your review queue, and autonomy is HELD — every send waits for your approve-first sign-off. What do you want to do?',
-      label: 'Harness',
-      at: '2026-06-29T13:40:00Z',
-    },
-  ]);
-  const [input, setInput] = useState('');
-  const [thinking, setThinking] = useState(false);
+  const { navigate } = useConsole();
+
+  const [formData, setFormData] = useState<StudioState>({
+    goal: '',
+    audience: '',
+    channels: [],
+    constraints: '',
+    hooks: '',
+  });
+
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<CampaignResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const suggestions = ['Pause the engine', 'Raise Gmail threshold to 0.90', 'Run outreach batch for tomorrow'];
+  const channelOptions = ['Instagram', 'Facebook', 'Email'];
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, thinking]);
+  }, [result, running]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const toggleChannel = (channel: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      channels: prev.channels.includes(channel)
+        ? prev.channels.filter((c) => c !== channel)
+        : [...prev.channels, channel],
+    }));
+  };
+
+  const handleRunCampaign = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim()) return;
+    setError(null);
+    setResult(null);
 
-    const userMsg: ChatMessage = {
-      id: `msg_${Date.now()}`,
-      role: 'OPERATOR',
-      text: input,
-      at: new Date().toISOString(),
-    };
+    if (!formData.goal.trim() || !formData.audience.trim() || formData.channels.length === 0) {
+      setError('Goal, audience, and at least one channel are required');
+      return;
+    }
 
-    setMessages((prev) => [...prev, userMsg]);
-    setInput('');
-    setThinking(true);
+    setRunning(true);
 
     try {
-      const response = await adapter.sendCommand(tenantId, input);
-      setMessages((prev) => [...prev, response]);
+      const hooksArray = formData.hooks
+        .split(',')
+        .map((h) => h.trim())
+        .filter((h) => h.length > 0);
+
+      const brief = {
+        goal: formData.goal,
+        audience: formData.audience,
+        channels: formData.channels.map((c) => c.toLowerCase()),
+        constraints: formData.constraints || undefined,
+        hooks: hooksArray.length > 0 ? hooksArray : undefined,
+      };
+
+      const res = await adapter.startCampaign(tenantId, brief);
+      setResult(res);
     } catch (err) {
-      console.error('Failed to send command:', err);
+      console.error('Failed to start campaign:', err);
+      setError(err instanceof Error ? err.message : 'Failed to start campaign');
     } finally {
-      setThinking(false);
+      setRunning(false);
     }
   };
+
+  const handleReset = () => {
+    setFormData({
+      goal: '',
+      audience: '',
+      channels: [],
+      constraints: '',
+      hooks: '',
+    });
+    setResult(null);
+    setError(null);
+  };
+
+  const steps = ['Research', 'Strategy', 'Draft', 'Jury', 'Route'];
 
   return (
     <section
@@ -62,7 +112,7 @@ export function CommandScreen() {
         alignItems: 'center',
       }}
     >
-      {/* Messages */}
+      {/* Main content */}
       <div
         ref={scrollRef}
         style={{
@@ -73,237 +123,454 @@ export function CommandScreen() {
           padding: '28px 24px 14px',
           display: 'flex',
           flexDirection: 'column',
-          gap: 16,
+          gap: 24,
           minHeight: 0,
         }}
       >
-        {messages.map((m) => (
-          <div
-            key={m.id}
-            style={{
-              display: 'flex',
-              gap: 11,
-              alignItems: 'flex-start',
-              justifyContent: m.role === 'OPERATOR' ? 'flex-end' : 'flex-start',
-              minWidth: 0,
-            }}
-          >
-            {m.role === 'ASSISTANT' && (
-              <div
+        {!result ? (
+          <>
+            {/* Header */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <h1 style={{ margin: 0, fontSize: 24, fontWeight: 600, color: '#1A1A17' }}>Campaign Studio</h1>
+              <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5, color: '#6B6461' }}>
+                Design a brief and launch a multi-step campaign across your channels. The harness will research, strategize, draft content, and route with your autonomy settings (HELD = approve-first).
+              </p>
+            </div>
+
+            {/* Form */}
+            <form onSubmit={handleRunCampaign} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {/* Goal */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: '#46423B', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                  Goal
+                </label>
+                <input
+                  type="text"
+                  value={formData.goal}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, goal: e.target.value }))}
+                  placeholder="e.g., Increase engagement for summer campaign"
+                  disabled={running}
+                  style={{
+                    fontSize: 14,
+                    padding: '10px 12px',
+                    border: '1px solid var(--hairline)',
+                    borderRadius: 9,
+                    background: '#fff',
+                    fontFamily: 'inherit',
+                    outline: 'none',
+                    opacity: running ? 0.6 : 1,
+                  }}
+                  onFocus={(e) => {
+                    if (!running) (e.target as HTMLInputElement).style.borderColor = '#0F8A82';
+                  }}
+                  onBlur={(e) => {
+                    (e.target as HTMLInputElement).style.borderColor = 'var(--hairline)';
+                  }}
+                />
+              </div>
+
+              {/* Audience */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: '#46423B', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                  Audience
+                </label>
+                <input
+                  type="text"
+                  value={formData.audience}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, audience: e.target.value }))}
+                  placeholder="e.g., Women ages 25-35 interested in sustainable fashion"
+                  disabled={running}
+                  style={{
+                    fontSize: 14,
+                    padding: '10px 12px',
+                    border: '1px solid var(--hairline)',
+                    borderRadius: 9,
+                    background: '#fff',
+                    fontFamily: 'inherit',
+                    outline: 'none',
+                    opacity: running ? 0.6 : 1,
+                  }}
+                  onFocus={(e) => {
+                    if (!running) (e.target as HTMLInputElement).style.borderColor = '#0F8A82';
+                  }}
+                  onBlur={(e) => {
+                    (e.target as HTMLInputElement).style.borderColor = 'var(--hairline)';
+                  }}
+                />
+              </div>
+
+              {/* Channels */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: '#46423B', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                  Channels
+                </label>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {channelOptions.map((ch) => (
+                    <button
+                      key={ch}
+                      type="button"
+                      onClick={() => toggleChannel(ch)}
+                      disabled={running}
+                      style={{
+                        fontSize: 13,
+                        fontWeight: 500,
+                        padding: '8px 14px',
+                        border: '1px solid',
+                        borderColor: formData.channels.includes(ch) ? '#0F8A82' : 'var(--hairline)',
+                        borderRadius: 9,
+                        background: formData.channels.includes(ch) ? '#0F8A82' : '#fff',
+                        color: formData.channels.includes(ch) ? '#fff' : '#46423B',
+                        cursor: running ? 'not-allowed' : 'pointer',
+                        opacity: running ? 0.6 : 1,
+                        transition: 'all 0.15s ease',
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!running) {
+                          (e.currentTarget as HTMLElement).style.borderColor = '#0F8A82';
+                          if (!formData.channels.includes(ch)) {
+                            (e.currentTarget as HTMLElement).style.background = '#F5F3F0';
+                          }
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!running) {
+                          (e.currentTarget as HTMLElement).style.borderColor = formData.channels.includes(ch) ? '#0F8A82' : 'var(--hairline)';
+                          (e.currentTarget as HTMLElement).style.background = formData.channels.includes(ch) ? '#0F8A82' : '#fff';
+                        }
+                      }}
+                    >
+                      {ch}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Constraints */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: '#46423B', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                  Constraints (optional)
+                </label>
+                <textarea
+                  value={formData.constraints}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, constraints: e.target.value }))}
+                  placeholder="e.g., No profanity, brand-safe only, max 280 chars per post"
+                  disabled={running}
+                  style={{
+                    fontSize: 14,
+                    padding: '10px 12px',
+                    border: '1px solid var(--hairline)',
+                    borderRadius: 9,
+                    background: '#fff',
+                    fontFamily: 'inherit',
+                    outline: 'none',
+                    minHeight: 80,
+                    resize: 'vertical',
+                    opacity: running ? 0.6 : 1,
+                  }}
+                  onFocus={(e) => {
+                    if (!running) (e.currentTarget as HTMLTextAreaElement).style.borderColor = '#0F8A82';
+                  }}
+                  onBlur={(e) => {
+                    (e.currentTarget as HTMLTextAreaElement).style.borderColor = 'var(--hairline)';
+                  }}
+                />
+              </div>
+
+              {/* Hooks */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: '#46423B', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                  Hooks (optional, comma-separated)
+                </label>
+                <input
+                  type="text"
+                  value={formData.hooks}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, hooks: e.target.value }))}
+                  placeholder="e.g., summer vibes, new collection, limited time"
+                  disabled={running}
+                  style={{
+                    fontSize: 14,
+                    padding: '10px 12px',
+                    border: '1px solid var(--hairline)',
+                    borderRadius: 9,
+                    background: '#fff',
+                    fontFamily: 'inherit',
+                    outline: 'none',
+                    opacity: running ? 0.6 : 1,
+                  }}
+                  onFocus={(e) => {
+                    if (!running) (e.target as HTMLInputElement).style.borderColor = '#0F8A82';
+                  }}
+                  onBlur={(e) => {
+                    (e.target as HTMLInputElement).style.borderColor = 'var(--hairline)';
+                  }}
+                />
+              </div>
+
+              {/* Error */}
+              {error && (
+                <div
+                  style={{
+                    fontSize: 13,
+                    padding: '12px 14px',
+                    borderRadius: 9,
+                    background: '#FEF3F0',
+                    border: '1px solid #FDCCC1',
+                    color: '#8B3A1F',
+                  }}
+                >
+                  {error}
+                </div>
+              )}
+
+              {/* Run Campaign Button */}
+              <button
+                type="submit"
+                disabled={running}
                 style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: '50%',
+                  fontSize: 14,
+                  fontWeight: 600,
+                  padding: '12px 20px',
+                  border: 'none',
+                  borderRadius: 9,
                   background: '#0F8A82',
                   color: '#fff',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontWeight: 600,
-                  fontSize: 14,
-                  flex: '0 0 auto',
+                  cursor: running ? 'not-allowed' : 'pointer',
+                  opacity: running ? 0.7 : 1,
+                  transition: 'all 0.15s ease',
+                }}
+                onMouseEnter={(e) => {
+                  if (!running) (e.currentTarget as HTMLElement).style.background = '#0B6F68';
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLElement).style.background = '#0F8A82';
                 }}
               >
-                S
+                {running ? 'Running Campaign...' : 'Run Campaign'}
+              </button>
+            </form>
+
+            {/* In-progress timeline */}
+            {running && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: '#46423B', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                  Campaign Pipeline
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                  {steps.map((step, idx) => (
+                    <div key={step} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <div
+                        style={{
+                          width: 24,
+                          height: 24,
+                          borderRadius: '50%',
+                          background: '#0F8A82',
+                          color: '#fff',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: 11,
+                          fontWeight: 600,
+                          flex: '0 0 auto',
+                          animation: 'pulse 1.5s ease-in-out infinite',
+                        }}
+                      >
+                        ✓
+                      </div>
+                      <span style={{ fontSize: 13, color: '#6B6461', whiteSpace: 'nowrap' }}>{step}</span>
+                      {idx < steps.length - 1 && (
+                        <div style={{ width: 8, height: 1, background: 'var(--hairline)', margin: '0 2px' }} />
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 5, maxWidth: '80%', minWidth: 0 }}>
-              {m.role === 'ASSISTANT' && m.label && (
-                <span style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: '#A8A299', paddingLeft: 2 }}>{m.label}</span>
+          </>
+        ) : (
+          <>
+            {/* Success State */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ fontSize: 20, fontWeight: 600, color: '#0F8A82' }}>✓ Campaign Launched</div>
+                <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5, color: '#6B6461' }}>
+                  Your campaign has been queued through the pipeline. Drafts are pending your approve-first sign-off in the review queue.
+                </p>
+              </div>
+
+              {/* Run ID */}
+              <div style={{ padding: '14px 16px', background: '#F9F7F5', borderRadius: 9, border: '1px solid var(--hairline)' }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: '#A8A299', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>
+                  Run ID
+                </div>
+                <div style={{ fontSize: 13, fontFamily: "'IBM Plex Mono', monospace", color: '#1A1A17', wordBreak: 'break-all' }}>
+                  {result.runId}
+                </div>
+              </div>
+
+              {/* Action IDs */}
+              {result.actionIds.length > 0 && (
+                <div style={{ padding: '14px 16px', background: '#F9F7F5', borderRadius: 9, border: '1px solid var(--hairline)' }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: '#A8A299', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+                    Draft Action{result.actionIds.length !== 1 ? 's' : ''} ({result.actionIds.length})
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {result.actionIds.map((id, idx) => (
+                      <div
+                        key={id}
+                        style={{
+                          fontSize: 12,
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          color: '#46423B',
+                          padding: '6px 8px',
+                          background: '#fff',
+                          borderRadius: 6,
+                          border: '1px solid var(--hairline)',
+                          wordBreak: 'break-all',
+                        }}
+                      >
+                        {idx + 1}. {id}
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
+
+              {/* Status Banner */}
               <div
                 style={{
-                  fontSize: 14,
-                  lineHeight: 1.6,
-                  padding: '15px 17px',
-                  borderRadius: '14px',
-                  border: '1px solid var(--hairline)',
-                  background: m.role === 'ASSISTANT' ? '#fff' : 'var(--accent)',
-                  color: m.role === 'ASSISTANT' ? '#1A1A17' : '#fff',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
+                  padding: '12px 14px',
+                  background: '#FEF9F5',
+                  borderRadius: 9,
+                  border: '1px solid #F0E6D8',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 10,
                 }}
               >
-                {m.text}
+                <div style={{ fontSize: 18, flex: '0 0 auto' }}>⏸</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: '#8B6F47' }}>Drafts PENDING</div>
+                  <div style={{ fontSize: 13, lineHeight: 1.4, color: '#6B5E47' }}>
+                    Autonomy is HELD. Each draft must be reviewed and approved before sending. View them in the Review queue.
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
-        ))}
 
-        {/* Thinking indicator */}
-        {thinking && (
-          <div
-            style={{
-              display: 'flex',
-              gap: 11,
-              alignItems: 'flex-start',
-            }}
-          >
-            <div
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: '50%',
-                background: '#0F8A82',
-                color: '#fff',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontWeight: 600,
-                fontSize: 14,
-                flex: '0 0 auto',
-              }}
-            >
-              S
-            </div>
-            <div
-              style={{
-                background: '#fff',
-                border: '1px solid var(--hairline)',
-                borderRadius: 14,
-                padding: '15px 17px',
-                display: 'flex',
-                gap: 5,
-                alignItems: 'center',
-              }}
-            >
-              <span
+              {/* Coming Soon Banner */}
+              <div
                 style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: '50%',
-                  background: '#A8A299',
-                  animation: 'dot 1.2s ease-in-out infinite',
-                }}
-              />
-              <span
-                style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: '50%',
-                  background: '#A8A299',
-                  animation: 'dot 1.2s ease-in-out 0.2s infinite',
-                }}
-              />
-              <span
-                style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: '50%',
-                  background: '#A8A299',
-                  animation: 'dot 1.2s ease-in-out 0.4s infinite',
-                }}
-              />
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Input area */}
-      <div style={{ width: '100%', maxWidth: 780, padding: '0 24px 22px', flex: '0 0 auto' }}>
-        {/* Suggestions */}
-        {!thinking && (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 11 }}>
-            {suggestions.map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => setInput(s)}
-                style={{
-                  background: '#fff',
-                  border: '1px solid #E0DCD3',
-                  color: '#46423B',
-                  fontSize: 12.5,
-                  fontWeight: 500,
-                  padding: '8px 13px',
+                  padding: '12px 14px',
+                  background: '#F0F9F8',
                   borderRadius: 9,
+                  border: '1px solid #C8E7E4',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 10,
+                }}
+              >
+                <div style={{ fontSize: 18, flex: '0 0 auto' }}>🚀</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: '#0B6F68' }}>Richer Insights Coming</div>
+                  <div style={{ fontSize: 13, lineHeight: 1.4, color: '#0F5A52' }}>
+                    Multi-agent team chat, live research citations, and cost tracking are on the roadmap. For now, we show the real results only — no fabricated reasoning.
+                  </div>
+                </div>
+              </div>
+
+              {/* Navigation Actions */}
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigate('review', result.actionIds[0]);
+                  }}
+                  style={{
+                    flex: '1 1 auto',
+                    minWidth: 200,
+                    fontSize: 13,
+                    fontWeight: 600,
+                    padding: '12px 16px',
+                    border: '1px solid #0F8A82',
+                    borderRadius: 9,
+                    background: '#0F8A82',
+                    color: '#fff',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLElement).style.background = '#0B6F68';
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLElement).style.background = '#0F8A82';
+                  }}
+                >
+                  View Draft in Review Queue
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigate('runs', result.runId);
+                  }}
+                  style={{
+                    flex: '1 1 auto',
+                    minWidth: 200,
+                    fontSize: 13,
+                    fontWeight: 600,
+                    padding: '12px 16px',
+                    border: '1px solid var(--hairline)',
+                    borderRadius: 9,
+                    background: '#fff',
+                    color: '#46423B',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLElement).style.background = '#F1EFEA';
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLElement).style.background = '#fff';
+                  }}
+                >
+                  View Run Details
+                </button>
+              </div>
+
+              {/* Reset Button */}
+              <button
+                type="button"
+                onClick={handleReset}
+                style={{
+                  fontSize: 13,
+                  fontWeight: 500,
+                  padding: '10px 16px',
+                  border: '1px solid var(--hairline)',
+                  borderRadius: 9,
+                  background: '#fff',
+                  color: '#46423B',
                   cursor: 'pointer',
+                  transition: 'all 0.15s ease',
                 }}
                 onMouseEnter={(e) => {
                   (e.currentTarget as HTMLElement).style.background = '#F1EFEA';
-                  (e.currentTarget as HTMLElement).style.borderColor = '#D2CCC1';
                 }}
                 onMouseLeave={(e) => {
                   (e.currentTarget as HTMLElement).style.background = '#fff';
-                  (e.currentTarget as HTMLElement).style.borderColor = '#E0DCD3';
                 }}
               >
-                {s}
+                Start Another Campaign
               </button>
-            ))}
-          </div>
+            </div>
+          </>
         )}
-
-        {/* Input form */}
-        <form
-          onSubmit={handleSubmit}
-          style={{
-            display: 'flex',
-            gap: 10,
-            alignItems: 'center',
-            background: '#fff',
-            border: '1px solid #E0DCD3',
-            borderRadius: 13,
-            padding: '7px 7px 7px 16px',
-            boxShadow: '0 1px 3px rgba(26,26,23,0.04)',
-          }}
-        >
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Send a command to the harness…"
-            disabled={thinking}
-            style={{
-              flex: 1,
-              border: 'none',
-              outline: 'none',
-              background: 'transparent',
-              fontSize: 14,
-              padding: '8px 0',
-            }}
-          />
-          <button
-            type="submit"
-            disabled={thinking || !input.trim()}
-            style={{
-              background: '#0F8A82',
-              color: '#fff',
-              border: 'none',
-              padding: '8px 18px',
-              borderRadius: 8,
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: 'pointer',
-              opacity: thinking || !input.trim() ? 0.5 : 1,
-            }}
-            onMouseEnter={(e) => {
-              if (!thinking && input.trim()) {
-                (e.currentTarget as HTMLElement).style.background = '#0B6F68';
-              }
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLElement).style.background = '#0F8A82';
-            }}
-          >
-            Send
-          </button>
-        </form>
-
-        <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: '#A8A299', marginTop: 10, textAlign: 'center' }}>
-          The harness can pause agents, retune thresholds, draft content, and answer questions about runs.
-        </div>
       </div>
 
       <style>{`
-        @keyframes dot {
-          0%, 80%, 100% {
-            opacity: 0.25;
-            transform: translateY(0);
-          }
-          40% {
+        @keyframes pulse {
+          0%, 100% {
             opacity: 1;
-            transform: translateY(-2px);
+          }
+          50% {
+            opacity: 0.6;
           }
         }
       `}</style>

@@ -696,6 +696,16 @@ export class MockAdapter implements DataAdapter {
       at: '2026-06-29T13:40:00Z',
     };
   }
+  async startCampaign(
+    _tenantId: string,
+    _brief: { goal: string; audience: string; channels: string[]; constraints?: string; hooks?: string[] },
+  ): Promise<{ runId: string; actionIds: string[]; status: string }> {
+    return {
+      runId: `mock-campaign-${Date.now()}`,
+      actionIds: ['mock_act_1', 'mock_act_2', 'mock_act_3'],
+      status: 'PENDING',
+    };
+  }
 }
 
 export const MOCK_TENANT_ID = TENANT_ID;
