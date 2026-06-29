@@ -1,0 +1,50 @@
+{
+  "_note": "Machine-readable hard-fail registry for the Phase-5 jury (pmm-owned content, dimensions voice + appropriateness; sec owns safety codes). Makes the prose disqualifiers in jury-rubric-voice-appropriateness.md detectable by the 4jx.2 (AUTON-01) aggregator. Each hard_fail code is tagged in the rubric markdown as [HARD-FAIL · <code>] so prose and this file cannot drift.",
+  "floor_semantics": "A hard_fail flagged on ANY dimension is a DETERMINISTIC FLOOR: it forces route=ESCALATE/review and CANNOT be reliability-weighted or averaged away — a high voice score never washes out an appropriateness (or safety) hard-fail. Aggregator rule: OR all present hard_fail codes (from deterministic validators + per-judge emissions); if any present -> escalate, regardless of the weighted per-dimension means.",
+  "stage_note": "This is the JURY-AGGREGATION floor, distinct from the upstream VALIDATOR-bank disposition (a9m.10): the validator runs its regenerate-then-escalate repair loop FIRST; a hard-fail that survives to the jury (or is judge-detected there) escalates and is non-averageable. No contradiction — different stages.",
+  "disposition": "ESCALATE",
+  "detection_legend": {
+    "deterministic": "code-detectable pre-jury by the validator bank (reads VoiceDimensions); the aggregator can also read the validator's gate result directly.",
+    "judge": "semantic; each cross-family judge emits the code as a flag alongside its per-dimension score when present."
+  },
+  "catalog_version": 1,
+  "code_stability": "STABLE ENUM, APPEND-ONLY. The strings in code_catalog are frozen: never renamed or removed — only new codes added (with a catalog_version bump). The jury cell emits codes ONLY from this catalog; the aggregator matches against it as a closed set. pmm owns the voice_* + APPR_* codes; sec owns the SAFE_* codes (sec/rubrics/safety-hard-fails.json) — the full jury code space is the UNION of both catalogs. FAIL-SAFE (arch ADR PR #81): an unknown/unmatched code OR a catalog_version mismatch between the jury cell and the aggregator fails safe -> REVIEW (never a silent pass, never a crash; catalog drift escalates to a human). OPERATIONAL CONSEQUENCE of a catalog_version bump: it MUST be propagated (re-vendor this file into the engine path + re-pin the aggregator's expected version) — until both sides match, the version-parity gate routes ALL runs to REVIEW (safe, but blocks autonomy). So append a code + bump version + re-sync as one coordinated change.",
+  "code_catalog": [
+    "VOICE_HF_BANNED_LEXICON",
+    "VOICE_HF_UNAPPROVED_CLAIM",
+    "VOICE_HF_WRONG_POV",
+    "VOICE_HF_EMOJI_HASHTAG_POLICY",
+    "APPR_HF_SENSITIVE_EXPLOIT",
+    "APPR_HF_COMMERCIALIZE_TRAUMA",
+    "APPR_HF_PITY_SAVIOR",
+    "APPR_HF_PRESSURE",
+    "APPR_SC_OUT_OF_SCOPE"
+  ],
+  "hard_fails": [
+    { "code": "VOICE_HF_BANNED_LEXICON", "dimension": "voice", "trigger": "any banned-lexicon phrase or AI-tell present", "detection": "deterministic", "source": "dimensions.vocabulary.ban", "floor": { "voice_anchor": 0, "on_voice": false } },
+    { "code": "VOICE_HF_UNAPPROVED_CLAIM", "dimension": "voice", "trigger": "a NON-regulated factual/offer claim not in approved_claims (brand/offer puffery, e.g. 'voted coziest studio')", "detection": "deterministic", "source": "dimensions.vocabulary.approved_claims", "floor": { "voice_anchor": 0, "on_voice": false }, "boundary": "CEDES the regulated subset to sec: any medical/health claim, outcome guarantee, or false credential → sec SAFE_HF_REGULATED_CLAIM (not this code). This code = unapproved claims that are NOT regulated.", "note": "also the validator claim gate; the legal/medical-sensitive subset escalates upstream via sensitive-ban-patterns.json" },
+    { "code": "VOICE_HF_WRONG_POV", "dimension": "voice", "trigger": "faceless corporate 'we' when the artist POV is first-person 'I'", "detection": "judge", "source": "dimensions.tone", "floor": { "voice_anchor": 0, "on_voice": false } },
+    { "code": "VOICE_HF_EMOJI_HASHTAG_POLICY", "dimension": "voice", "trigger": "hype emoji or hashtag-spam wall (emoji/hashtag policy violation)", "detection": "deterministic", "source": "dimensions.vocabulary.emoji_policy + hashtag_policy", "floor": { "voice_anchor": 0, "on_voice": false } },
+    { "code": "APPR_HF_SENSITIVE_EXPLOIT", "dimension": "appropriateness", "trigger": "exploits or mocks a sensitive subject (tasteless, but NOT harmful)", "detection": "judge", "source": "brand-dna Sensitive subjects", "floor": { "appropriateness_anchor_max": 1 }, "boundary": "CEDES to sec when it rises to harm: targeted abuse/hate → SAFE_HF_HATE_HARASSMENT; encouraging self-harm → SAFE_HF_SELF_HARM. This code = tact failure without harm." },
+    { "code": "APPR_HF_COMMERCIALIZE_TRAUMA", "dimension": "appropriateness", "trigger": "commercializes trauma (before/after, glow-up, discount/urgency on a reclaim piece)", "detection": "judge", "exemplar": "ladies8391-rub-appr-001", "floor": { "appropriateness_anchor_max": 1 } },
+    { "code": "APPR_HF_PITY_SAVIOR", "dimension": "appropriateness", "trigger": "pity / savior framing (centers the wound: 'fix what life broke', 'feel beautiful again')", "detection": "judge", "exemplar": "ladies8391-offv-012", "floor": { "appropriateness_anchor_max": 1 } },
+    { "code": "APPR_HF_PRESSURE", "dimension": "appropriateness", "trigger": "pressure tactics misaligned to the brand's consent-first stance", "detection": "judge", "floor": { "appropriateness_anchor_max": 1 } }
+  ],
+  "soft_caps": [
+    { "code": "APPR_SC_OUT_OF_SCOPE", "dimension": "appropriateness", "trigger": "promotes an out-of-scope service the artist does not offer (off-positioning)", "detection": "judge", "source": "brand-dna Sensitive subjects out-of-scope", "exemplar": "ladies8391-rub-appr-002", "cap": { "appropriateness_anchor_max": 2 }, "disposition": "REVIEW", "note": "questionable, not insensitive — caps the score and warrants review; NOT a deterministic escalate floor." }
+  ],
+  "safety_note": "The safety dimension's hard_fail codes (slurs, harassment, dangerous/illegal, red-team, PII, prompt-injection) are sec-owned (sec/rubrics/safety-hard-fails.json); they participate in the SAME deterministic floor (any safety hard_fail -> escalate, non-averageable). Defined in sec's safety rubric, not here.",
+  "dimension_boundary": {
+    "_note": "Reconciled with sec 2026-06-29. Each CODE lives in exactly one file (no code is duplicated). A single piece of text MAY trip a voice code AND a safety code when it genuinely fails on both axes (e.g. '100% painless guaranteed' = VOICE_HF_BANNED_LEXICON register + SAFE_HF_REGULATED_CLAIM guarantee) — that is two real, separately-owned failures, OR'd into one escalate, NOT a double-count error.",
+    "rule": "appropriateness = brand-fit + tact (sensitivity WITHOUT harm); safety = harm/illegal/policy/privacy/agent-integrity; voice = sounds-like-the-artist + claims discipline (non-regulated).",
+    "sensitive_ban_category_to_jury_owner": {
+      "medical_health": "SAFETY (sec SAFE_HF_REGULATED_CLAIM / DANGEROUS_INSTRUCTION)",
+      "guarantees_outcomes": "SAFETY (sec SAFE_HF_REGULATED_CLAIM)",
+      "credentials_licensure": "SAFETY (sec SAFE_HF_REGULATED_CLAIM)",
+      "safety_sterility": "SAFETY (sec SAFE_HF_REGULATED_CLAIM — cite now includes safety_sterility; resolved 2026-06-29)",
+      "age_consent_regulated": "SAFETY (sec SAFE_HF_ILLEGAL — explicit cite; tattooing a minor / impaired consent)",
+      "pricing_financial": "VOICE (VOICE_HF_BANNED_LEXICON: price/discount lexicon) + APPROPRIATENESS (APPR_HF_PRESSURE: urgency). No safety harm — covered on the pmm side.",
+      "comparative_disparagement": "DUAL-TRIGGER (resolved 2026-06-29): pmm fires the BRAND axis — VOICE (banned: comparisons to other artists) + APPROPRIATENESS (off-brand); sec fires the LEGAL axis — SAFE_HF_DISPARAGEMENT (VETO; defamation/false-advertising). Both OR into one escalate, not a double-count. (sec's SAFE_FLAG_THIRD_PARTY is the soft non-clear case.)"
+    }
+  }
+}
