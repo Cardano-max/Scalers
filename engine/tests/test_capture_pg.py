@@ -14,11 +14,15 @@ import os
 import pytest
 
 from sideeffects import Channel, idempotency_key
+from harness.hold import HoldRegistry
 from sideeffects.boundary import SideEffectBoundary
 from sideeffects.capture import capture_engagement, capture_provider_result
 from sideeffects.dispatcher import Dispatcher
 from sideeffects.provider import ProviderResult
 from tests.mock_connector import MockConnector
+
+# 4z2: lift the test tenant ("nw") so the boundary's hold gate doesn't block.
+_LIFTED = HoldRegistry().lift("nw")
 
 pytestmark = [
     pytest.mark.integration,
@@ -33,7 +37,9 @@ KEY_ARGS = ("nw", Channel.POSTING, "feed", "the captured post")
 
 async def _enqueue(db, key):
     async with db.transaction():
-        await SideEffectBoundary().enqueue(db, key, Channel.POSTING, {"text": "hi"})
+        await SideEffectBoundary().enqueue(
+            db, key, Channel.POSTING, {"text": "hi"}, tenant_id="nw", hold_registry=_LIFTED
+        )
 
 
 async def _ledger(db, key):

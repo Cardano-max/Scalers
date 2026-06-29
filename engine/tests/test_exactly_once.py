@@ -21,10 +21,16 @@ import asyncio
 import psycopg
 import pytest
 
+from harness.hold import HoldRegistry
 from sideeffects import Channel, idempotency_key
 from sideeffects.boundary import EnqueueStatus, SideEffectBoundary
 from sideeffects.dispatcher import Dispatcher
 from tests.mock_connector import MockConnector
+
+# 4z2: the boundary now independently refuses held tenants. These exactly-once
+# tests are about the DB idempotency mechanics, not the hold, so they LIFT the
+# tenant ("nw", per KEY_ARGS) to exercise the enqueue path.
+_LIFTED = HoldRegistry().lift("nw")
 
 # These exercise the exactly-once guarantee against a REAL Postgres (UNIQUE
 # constraints, row locking, crash recovery), so they carry the `integration`
@@ -63,7 +69,8 @@ async def _ledger_rows(conn: psycopg.AsyncConnection, key: str):
 async def _enqueue(db, key, payload=None):
     async with db.transaction():
         await SideEffectBoundary().enqueue(
-            db, key, Channel.OUTREACH, payload or {"text": "hi"}
+            db, key, Channel.OUTREACH, payload or {"text": "hi"},
+            tenant_id="nw", hold_registry=_LIFTED,
         )
 
 
@@ -77,11 +84,15 @@ async def test_enqueue_is_idempotent_under_graph_retry(db):
     key = idempotency_key(*KEY_ARGS)
 
     async with db.transaction():
-        first = await boundary.enqueue(db, key, Channel.OUTREACH, {"text": "hi"})
+        first = await boundary.enqueue(
+            db, key, Channel.OUTREACH, {"text": "hi"}, tenant_id="nw", hold_registry=_LIFTED
+        )
     assert first.status is EnqueueStatus.ENQUEUED
 
     async with db.transaction():
-        second = await boundary.enqueue(db, key, Channel.OUTREACH, {"text": "hi"})
+        second = await boundary.enqueue(
+            db, key, Channel.OUTREACH, {"text": "hi"}, tenant_id="nw", hold_registry=_LIFTED
+        )
     assert second.status is EnqueueStatus.DUPLICATE
 
     rows = await _outbox_rows(db, key)
@@ -98,7 +109,10 @@ async def test_concurrent_enqueue_same_key_yields_one_row(db, dsn):
         conn = await psycopg.AsyncConnection.connect(dsn, autocommit=False)
         try:
             async with conn.transaction():
-                return await boundary.enqueue(conn, key, Channel.OUTREACH, {"t": 1})
+                return await boundary.enqueue(
+                    conn, key, Channel.OUTREACH, {"t": 1},
+                    tenant_id="nw", hold_registry=_LIFTED,
+                )
         finally:
             await conn.close()
 
