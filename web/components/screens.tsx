@@ -14,7 +14,7 @@ import { ReviewScreen } from './ReviewScreen';
 import { ActivityScreen } from './ActivityScreen';
 import { RunsScreen } from './RunsScreen';
 import { FeedScreen } from './FeedScreen';
-import { CommandScreen } from './CommandScreen';
+import { CampaignStudio } from './studio/CampaignStudio';
 import { StepDetailScreen } from './StepDetailScreen';
 
 export const SCREENS: Record<ScreenId, ComponentType> = {
@@ -23,7 +23,10 @@ export const SCREENS: Record<ScreenId, ComponentType> = {
   activity: ActivityScreen,
   feed: FeedScreen,
   runs: RunsScreen,
-  command: CommandScreen,
+  // P2: the Command tab is now the interactive Campaign Studio (scaffold;
+  // PreviewStudioAdapter — not yet wired to live agents). Replaces the static
+  // CommandScreen brief form per docs/adr/command-campaign-studio.md Decision 7.
+  command: CampaignStudio,
   // drill-only — not in NAV_ITEMS; reached via navigate('step_detail', actionId)
   step_detail: StepDetailScreen,
 };
