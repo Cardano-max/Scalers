@@ -437,7 +437,7 @@ function ActivityDetail({
                         {dimPassed ? '✓ Pass' : '✗ Fail'}
                       </span>
                       <span className="mono" style={{ fontSize: 11, color: 'var(--text-secondary-2)', flex: '0 0 auto' }}>
-                        {dim.score.toFixed(2)} / {dim.threshold.toFixed(2)}
+                        ({dim.score.toFixed(2)})
                       </span>
                     </div>
                   );

@@ -540,7 +540,7 @@ function AutonomyCard({ action }: { action: Action }) {
                     {verdictPassed ? 'Pass' : 'Fail'}
                   </Chip>
                   <span className="mono" style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-                    {fmt(d.score)} / {fmt(d.threshold)}
+                    thr {fmt(d.threshold)}
                   </span>
                 </div>
 
