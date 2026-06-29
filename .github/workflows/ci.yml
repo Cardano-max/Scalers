@@ -134,13 +134,37 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Authoritative "done means green" gate. Re-runs the umbrella done-gate so the
-  # exact same DB-free check developers run locally is what blocks the merge.
-  # (Integration tests run in their own job above.)
+  # exact same check developers run locally is what blocks the merge. EVAL_GATE=1
+  # + a real Postgres make gate_evals() RUN (and BLOCK on a regressed required
+  # metric) instead of auto-SKIPping — the eval gate is now enforced, not opt-in
+  # theater (rvy.7 / the gate that lets 439 lift).
   # ---------------------------------------------------------------------------
   done-gate:
     name: done-gate
     runs-on: ubuntu-latest
     needs: [engine, engine-integration, frontend]
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: scalers
+          POSTGRES_PASSWORD: scalers
+          POSTGRES_DB: scalers
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U scalers"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Make the per-commit eval gate run + block (CTO directive). The gate is
+      # HERMETIC (deterministic predictors, no model call), so it needs no key.
+      EVAL_GATE: "1"
+      ENGINE_DATABASE_URL: postgresql://scalers:scalers@localhost:5432/scalers
+      # Available for the live/per-promotion eval path (Pydantic-AI reads it
+      # natively); the hermetic per-commit gate above does not use it.
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -149,9 +173,9 @@ jobs:
           enable-cache: true
           cache-dependency-glob: engine/uv.lock
 
-      - name: Sync engine deps
+      - name: Sync engine deps (incl. postgres extra for the eval KB)
         working-directory: engine
-        run: uv sync --dev
+        run: uv sync --dev --extra postgres
 
-      - name: Run done-gate
+      - name: Run done-gate (incl. enforced eval gate)
         run: python3 scripts/done_gate.py
