@@ -27,7 +27,7 @@ def _all(**kw):
     return {n: JudgeScore(**base) for n in ("opus-strict", "opus-charitable", "ollama-cross")}
 
 
-def _produce(store, runner, *, autonomy=AutonomyMode.AUTO, threshold=0.85):
+def _produce(store, runner, *, autonomy=AutonomyMode.AUTO, threshold=0.85, self_consistency=1.0):
     return asyncio.run(
         produce_and_record_decision_real(
             store,
@@ -35,6 +35,7 @@ def _produce(store, runner, *, autonomy=AutonomyMode.AUTO, threshold=0.85):
             channel="instagram", action_kind="post",
             action="a healed floral cover-up, captioned warmly",
             threshold=threshold, autonomy=autonomy, judge_runner=runner,
+            self_consistency=self_consistency,
         )
     )
 
@@ -50,6 +51,25 @@ def test_real_jury_persists_cross_family_votes():
 def test_clean_high_panel_auto_when_unblocked():
     rec = _produce(InMemoryDecisionStore(), _runner(_all()))
     assert rec.decision is RouteDecision.AUTO and rec.esc.kind is EscKind.NONE
+
+
+def test_uncomputable_confidence_routes_review():
+    # self_consistency=None (probe couldn't run / too few samples) -> confidence
+    # uncomputable -> fail safe to review even on a clean high panel in AUTO mode.
+    # "couldn't compute" is never treated as high confidence.
+    rec = _produce(InMemoryDecisionStore(), _runner(_all()), self_consistency=None)
+    assert rec.decision is RouteDecision.REVIEW
+    assert rec.self_consistency is None
+
+
+def test_low_self_consistency_blocks_auto():
+    # the jury liked its one sample, but the generator is unstable across probes
+    # (low self-consistency) -> pooled confidence drops below threshold -> review.
+    # this is what computed confidence buys over the flat 0.9: a wobbly generator
+    # can't auto-fire even when the jury scored the single judged sample highly.
+    rec = _produce(InMemoryDecisionStore(), _runner(_all()), self_consistency=0.2)
+    assert rec.decision is RouteDecision.REVIEW
+    assert rec.self_consistency == 0.2
 
 
 def test_hard_fail_item_routes_review_via_floor():
@@ -92,6 +112,7 @@ def test_safety_veto_blocks_even_clean_panel():
             store, decision_id="d2", run_id="r1", tenant_id="t", channel="instagram",
             action_kind="post", action="x", threshold=0.85,
             safety_verdict=SafetyVerdict.VETO, judge_runner=_runner(_all()),
+            self_consistency=1.0,
         )
     )
     assert rec.decision is RouteDecision.REVIEW and rec.esc.kind is EscKind.SAFETY
