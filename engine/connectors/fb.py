@@ -46,12 +46,13 @@ class FacebookConnector(GatedConnector):
     provider_name = "facebook"
 
     def __init__(self, *, page_token: str | None = None, app_secret: str | None = None,
-                 **kw) -> None:
+                 page_id: str | None = None, **kw) -> None:
         # key-from-pack (LADIES8391_FB_PAGE_TOKEN) + app secret (app-level); never
-        # a vendored .env, never logged.
+        # a vendored .env, never logged. page_id identifies the FB Page to post to.
         super().__init__(**kw)
         self._page_token = page_token
         self._app_secret = app_secret
+        self._page_id = page_id
 
     def __repr__(self) -> str:  # never leak the token in a repr
         return f"FacebookConnector(enabled={self._enabled}, token={redact(self._page_token)})"
@@ -70,22 +71,33 @@ class FacebookConnector(GatedConnector):
                 "no autonomous send."
             )
         self._require_enabled()
-        if not (self._page_token and self._app_secret):
-            raise ConnectorHeldError("facebook connector missing key-from-pack token/secret")
+        if not (self._page_token and self._app_secret and self._page_id):
+            raise ConnectorHeldError(
+                "facebook connector missing key-from-pack page_token/app_secret/page_id"
+            )
 
-        # appsecret_proof on EVERY Graph call; token + proof in the POST BODY, never
-        # the URL (sec req B/C). `key` is the idempotency token (exactly-once).
+        # FB Page feed post (the dev-smoke target): POST /{page_id}/feed with the
+        # message. appsecret_proof on EVERY Graph call; token + proof in the POST
+        # BODY, never the URL (sec req B/C). `key` is the idempotency token.
+        message = payload.get("message") or payload.get("caption") or ""
+        if not message:
+            raise RuntimeError("facebook feed post requires a 'message'")
         proof = appsecret_proof(self._app_secret, self._page_token)
-        body = json.dumps({
+        fields = {
+            "message": message,
             "access_token": self._page_token,   # body, not ?access_token=
             "appsecret_proof": proof,
-            "idempotency_key": key,
-            **payload,
-        }).encode("utf-8")
-        path = f"/{_GRAPH_VERSION}/me/media"  # representative publish endpoint
+        }
+        if payload.get("link"):
+            fields["link"] = payload["link"]
+        body = json.dumps(fields).encode("utf-8")
+        path = f"/{_GRAPH_VERSION}/{self._page_id}/feed"
         resp = self._secure_request(
             api_base=GRAPH_API_BASE, host=_GRAPH_HOST, method="POST", path=path,
-            headers={"Content-Type": "application/json"}, body=body,
+            headers={
+                "Content-Type": "application/json",
+                "Idempotency-Key": key,          # exactly-once
+            }, body=body,
         )
         if resp.status >= 400:
             # error message must not echo the token/proof
