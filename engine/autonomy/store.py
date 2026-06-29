@@ -93,6 +93,7 @@ class PostgresDecisionStore:
                     esc_kind          TEXT        NOT NULL,
                     esc_label         TEXT        NOT NULL,
                     gates             JSONB       NOT NULL DEFAULT '[]'::jsonb,
+                    self_consistency  DOUBLE PRECISION,
                     created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
                 );
                 CREATE INDEX IF NOT EXISTS autonomy_decisions_run_idx
@@ -108,8 +109,39 @@ class PostgresDecisionStore:
                     voice       DOUBLE PRECISION NOT NULL,
                     safety      DOUBLE PRECISION NOT NULL,
                     appr        DOUBLE PRECISION NOT NULL,
+                    reliability_weight DOUBLE PRECISION,
+                    hard_fail   BOOLEAN NOT NULL DEFAULT false,
                     PRIMARY KEY (decision_id, judge)
                 );
+
+                -- bead-439 lift ledger (4jx.8): durable per-channel lift state,
+                -- read by BOTH the router and the independent side-effect boundary
+                -- (the two HOLD layers can't disagree). A lift = a row; a revert
+                -- sets reverted_at. "Currently lifted" = reverted_at IS NULL.
+                CREATE TABLE IF NOT EXISTS autonomy_lifts (
+                    id              BIGSERIAL PRIMARY KEY,
+                    tenant_id       TEXT        NOT NULL,
+                    channel         TEXT        NOT NULL,
+                    lifted_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    lifted_by       TEXT        NOT NULL,
+                    eval_metric_ref TEXT,
+                    reverted_at     TIMESTAMPTZ,
+                    reverted_reason TEXT
+                );
+                CREATE INDEX IF NOT EXISTS autonomy_lifts_tenant_channel_idx
+                    ON autonomy_lifts (tenant_id, channel);
+                -- at most ONE active lift per (tenant, channel)
+                CREATE UNIQUE INDEX IF NOT EXISTS autonomy_lifts_active_uq
+                    ON autonomy_lifts (tenant_id, channel) WHERE reverted_at IS NULL;
+
+                -- Idempotent additive migration for EXISTING clusters (the CREATEs
+                -- above are no-ops there, so add the new columns here too).
+                ALTER TABLE autonomy_decisions
+                    ADD COLUMN IF NOT EXISTS self_consistency DOUBLE PRECISION;
+                ALTER TABLE autonomy_jury
+                    ADD COLUMN IF NOT EXISTS reliability_weight DOUBLE PRECISION;
+                ALTER TABLE autonomy_jury
+                    ADD COLUMN IF NOT EXISTS hard_fail BOOLEAN NOT NULL DEFAULT false;
                 """
             )
 
