@@ -443,6 +443,18 @@ function DetailPane({
 
 function AutonomyCard({ action }: { action: Action }) {
   const { confidence, threshold, jury } = action;
+  const [expandedDims, setExpandedDims] = useState<Set<string>>(new Set());
+
+  const toggleDimension = (label: string) => {
+    const next = new Set(expandedDims);
+    if (next.has(label)) {
+      next.delete(label);
+    } else {
+      next.add(label);
+    }
+    setExpandedDims(next);
+  };
+
   return (
     <div
       style={{
@@ -493,20 +505,101 @@ function AutonomyCard({ action }: { action: Action }) {
         </div>
       </div>
 
-      {/* per-dimension jury mini-bars */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-        {jury.dimensions.map((d) => (
-          <div key={d.label} style={{ display: 'grid', gap: 5 }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-              <span className="label" style={{ fontSize: 9.5 }}>{d.label}</span>
-              <span className="mono" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-secondary)' }}>{fmt(d.score)}</span>
+      {/* per-dimension jury with verdict chips and expandable breakdown */}
+      <div style={{ display: 'grid', gap: 12 }}>
+        {jury.dimensions.map((d) => {
+          const isExpanded = expandedDims.has(d.label);
+          const hasBreakdown = d.jurorBreakdown && d.jurorBreakdown.length > 0;
+          const verdictPassed = d.verdict === 'pass';
+          return (
+            <div key={d.label} style={{ display: 'grid', gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => hasBreakdown && toggleDimension(d.label)}
+                style={{
+                  all: 'unset',
+                  cursor: hasBreakdown ? 'pointer' : 'default',
+                  display: 'grid',
+                  gap: 8,
+                }}
+              >
+                {/* dimension header with verdict chip */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span className="label" style={{ fontSize: 10 }}>{d.label}</span>
+                  {hasBreakdown && (
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                      {isExpanded ? '▼' : '▶'}
+                    </span>
+                  )}
+                  <Chip
+                    tone={verdictPassed ? 'success' : 'danger'}
+                    style={{ marginLeft: 'auto' }}
+                  >
+                    <span aria-hidden>{verdictPassed ? '✓' : '✕'}</span>
+                    {' '}
+                    {verdictPassed ? 'Pass' : 'Fail'}
+                  </Chip>
+                  <span className="mono" style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                    {fmt(d.score)} / {fmt(d.threshold)}
+                  </span>
+                </div>
+
+                {/* mini-bar */}
+                <div style={{ height: 5, borderRadius: 999, background: 'var(--hairline-light)' }}>
+                  <div
+                    style={{
+                      width: `${pct(d.score)}%`,
+                      height: '100%',
+                      borderRadius: 999,
+                      background: verdictPassed ? 'var(--teal)' : 'var(--amber-dot)',
+                    }}
+                  />
+                </div>
+              </button>
+
+              {/* expandable juror breakdown */}
+              {isExpanded && hasBreakdown && (
+                <div style={{ display: 'grid', gap: 6, paddingLeft: 16, borderLeft: '2px solid var(--hairline-light)' }}>
+                  {d.jurorBreakdown.map((juror) => {
+                    const jurorPassed = juror.vote === 'pass';
+                    return (
+                      <div
+                        key={juror.judge}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8,
+                          fontSize: 12,
+                          color: 'var(--text-secondary)',
+                        }}
+                      >
+                        <span style={{ flex: 1, minWidth: 0 }}>{juror.judge}</span>
+                        <span
+                          style={{
+                            fontSize: 11,
+                            fontWeight: 600,
+                            color: jurorPassed ? '#157F4B' : '#B42318',
+                            background: jurorPassed ? '#E6F4EC' : '#FBE9E6',
+                            padding: '2px 6px',
+                            borderRadius: 4,
+                            flex: '0 0 auto',
+                          }}
+                        >
+                          {jurorPassed ? '✓' : '✕'}
+                        </span>
+                        <span className="mono" style={{ fontSize: 11, color: 'var(--text-secondary)', flex: '0 0 auto' }}>
+                          {fmt(juror.score)}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-            <div style={{ height: 5, borderRadius: 999, background: 'var(--hairline-light)' }}>
-              <div style={{ width: `${pct(d.score)}%`, height: '100%', borderRadius: 999, background: 'var(--teal)' }} />
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
+
       <div className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }}>jury · {jury.agreement}</div>
 
       {/* deterministic gate chips */}

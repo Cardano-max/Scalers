@@ -60,9 +60,36 @@ function action(partial: Partial<Action> & Pick<Action, 'id' | 'type' | 'channel
       threshold: partial.threshold,
       agreement: 'split',
       dimensions: [
-        { label: 'Brand voice', score: 0.82 },
-        { label: 'Safety', score: 0.95 },
-        { label: 'Appropriateness', score: 0.74 },
+        {
+          label: 'Brand voice',
+          score: 0.82,
+          verdict: 'pass',
+          threshold: 0.8,
+          jurorBreakdown: [
+            { judge: 'Judge A', score: 0.85, vote: 'pass' },
+            { judge: 'Judge B', score: 0.79, vote: 'fail' },
+          ],
+        },
+        {
+          label: 'Safety',
+          score: 0.95,
+          verdict: 'pass',
+          threshold: 0.9,
+          jurorBreakdown: [
+            { judge: 'Judge A', score: 0.97, vote: 'pass' },
+            { judge: 'Judge B', score: 0.93, vote: 'pass' },
+          ],
+        },
+        {
+          label: 'Appropriateness',
+          score: 0.74,
+          verdict: 'fail',
+          threshold: 0.8,
+          jurorBreakdown: [
+            { judge: 'Judge A', score: 0.72, vote: 'fail' },
+            { judge: 'Judge B', score: 0.76, vote: 'fail' },
+          ],
+        },
       ],
     },
     gates: [
@@ -167,9 +194,36 @@ function activityItem(
       threshold,
       agreement: 'unanimous',
       dimensions: [
-        { label: 'Brand voice', score: 0.9 },
-        { label: 'Safety', score: 0.97 },
-        { label: 'Appropriateness', score: 0.88 },
+        {
+          label: 'Brand voice',
+          score: 0.9,
+          verdict: 'pass',
+          threshold: 0.8,
+          jurorBreakdown: [
+            { judge: 'Judge A', score: 0.92, vote: 'pass' },
+            { judge: 'Judge B', score: 0.88, vote: 'pass' },
+          ],
+        },
+        {
+          label: 'Safety',
+          score: 0.97,
+          verdict: 'pass',
+          threshold: 0.9,
+          jurorBreakdown: [
+            { judge: 'Judge A', score: 0.98, vote: 'pass' },
+            { judge: 'Judge B', score: 0.96, vote: 'pass' },
+          ],
+        },
+        {
+          label: 'Appropriateness',
+          score: 0.88,
+          verdict: 'pass',
+          threshold: 0.8,
+          jurorBreakdown: [
+            { judge: 'Judge A', score: 0.89, vote: 'pass' },
+            { judge: 'Judge B', score: 0.87, vote: 'pass' },
+          ],
+        },
       ],
     },
     gates: [

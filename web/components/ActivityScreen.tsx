@@ -384,7 +384,7 @@ function ActivityDetail({
         </div>
       ) : null}
 
-      {/* JURY card */}
+      {/* JURY card with per-dimension verdict summary */}
       {item.judges && item.judges.length > 0 ? (
         <div
           style={{
@@ -393,7 +393,7 @@ function ActivityDetail({
             background: 'var(--surface)',
             padding: 'var(--pad-card)',
             display: 'grid',
-            gap: 11,
+            gap: 14,
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -401,6 +401,52 @@ function ActivityDetail({
             <span style={{ flex: 1 }} />
             <span className="mono" style={{ fontSize: 11, color: 'var(--teal)' }}>pooled {item.jury.confidence.toFixed(2)}</span>
           </div>
+
+          {/* per-dimension verdict summary */}
+          {item.jury.dimensions && item.jury.dimensions.length > 0 ? (
+            <div style={{ display: 'grid', gap: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+                Dimension verdicts
+              </div>
+              <div style={{ display: 'grid', gap: 8 }}>
+                {item.jury.dimensions.map((dim) => {
+                  const dimPassed = dim.verdict === 'pass';
+                  return (
+                    <div
+                      key={dim.label}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        fontSize: 13,
+                        color: 'var(--text-secondary)',
+                      }}
+                    >
+                      <span style={{ flex: 1, minWidth: 0 }}>{dim.label}</span>
+                      <span
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 600,
+                          color: dimPassed ? '#157F4B' : '#B42318',
+                          background: dimPassed ? '#E6F4EC' : '#FBE9E6',
+                          padding: '2px 8px',
+                          borderRadius: 4,
+                          flex: '0 0 auto',
+                        }}
+                      >
+                        {dimPassed ? '✓ Pass' : '✗ Fail'}
+                      </span>
+                      <span className="mono" style={{ fontSize: 11, color: 'var(--text-secondary-2)', flex: '0 0 auto' }}>
+                        {dim.score.toFixed(2)} / {dim.threshold.toFixed(2)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+
+          {/* per-judge breakdown */}
           <div style={{ display: 'grid', gap: 10 }}>
             {item.judges.map((judge, i) => (
               <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
