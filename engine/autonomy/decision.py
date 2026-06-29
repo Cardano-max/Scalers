@@ -23,15 +23,25 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 from harness.router import DEFAULT_THRESHOLD, route
 from harness.state import AutonomyMode, Gate, RouteDecision
 
+if TYPE_CHECKING:  # avoid a runtime import cycle (aggregate imports this module)
+    from autonomy.aggregate import JuryAggregate
+
 # A jury whose overall scores span more than this range is "split": jurors
 # disagree enough that an auto-fire is not safe even if the pool clears the bar.
 AGREEMENT_MIN = 0.5
+
+# Minimum contributing judges before a measured (aggregate) jury may AUTO. Below
+# this, agreement is not meaningfully measurable (a lone juror trivially "agrees"),
+# so the action routes to review. A single-family or single-seat panel therefore
+# cannot auto-fire — cross-family is also enforced at the producer.
+MIN_JUDGES_FOR_AGREEMENT = 2
 
 
 class SafetyVerdict(str, Enum):
@@ -55,11 +65,29 @@ class EscKind(str, Enum):
     MODE = "mode"                       # channel dial forces approve-first
 
 
-class JudgeVote(BaseModel):
-    """One cross-family judge's per-dimension scores (placeholder until Phase 5).
+#: The three independently-scored jury dimensions (ADR Decision 1, pmm load-bearing:
+#: a post can be in the exact artist voice yet inappropriate — never collapse them).
+DIMENSIONS: tuple[str, ...] = ("voice", "safety", "appr")
 
-    Each dimension is in ``[0, 1]``. ``family`` records the model family so the
-    cross-family rule (don't let one family dominate) is auditable.
+
+class JudgeVote(BaseModel):
+    """One cross-family judge's per-dimension scores (real jury, AUTON-01 / 4jx.2).
+
+    Each dimension is in ``[0, 1]`` (0–4 rubric anchors normalized). ``family``
+    records the model family so the cross-family rule (don't let one family dominate)
+    is auditable. The Phase-5 additions over the stub shape are all **defaulted**, so
+    existing records/producers keep working:
+
+    * ``on_voice`` — the rubric's brand-voice boolean (distinct from the graded
+      ``voice`` score).
+    * ``*_hard_fail`` — per-dimension, machine-detectable rubric **disqualifier**
+      tags. A hard-fail is a FLOOR, never a low number that weighted averaging can
+      wash out (ADR Decision 1): the aggregator reads these SEPARATELY, before the
+      mean. Per-dimension because a hard appropriateness/safety fail must sink the
+      action even at voice≈1.
+    * ``reliability_weight`` — this judge's aggregation weight (default uniform;
+      gold-calibrated when available). A judge dropped for timeout/error is given a
+      reduced weight, never silently counted as agreement.
     """
 
     model_config = {"frozen": True}
@@ -69,11 +97,28 @@ class JudgeVote(BaseModel):
     voice: float = Field(ge=0.0, le=1.0)
     safety: float = Field(ge=0.0, le=1.0)
     appr: float = Field(ge=0.0, le=1.0)
+    on_voice: bool = True
+    voice_hard_fail: bool = False
+    safety_hard_fail: bool = False
+    appr_hard_fail: bool = False
+    reliability_weight: float = Field(default=1.0, ge=0.0)
 
     @property
     def overall(self) -> float:
         """This juror's mean across the three dimensions."""
         return (self.voice + self.safety + self.appr) / 3.0
+
+    def score_for(self, dimension: str) -> float:
+        """This juror's ``[0,1]`` score on one dimension (``voice``/``safety``/``appr``)."""
+        return getattr(self, dimension)
+
+    def hard_fail_for(self, dimension: str) -> bool:
+        """Whether this juror tagged a hard-fail disqualifier on ``dimension``."""
+        return getattr(self, f"{dimension}_hard_fail")
+
+    def hard_fail_dims(self) -> frozenset[str]:
+        """The set of dimensions this juror hard-failed (a disqualifier on any)."""
+        return frozenset(d for d in DIMENSIONS if self.hard_fail_for(d))
 
 
 class GateResult(BaseModel):
@@ -155,6 +200,7 @@ def derive_decision(
     autonomy: AutonomyMode = AutonomyMode.AUTO,
     safety_verdict: SafetyVerdict = SafetyVerdict.PASS,
     expected_judges: int | None = None,
+    aggregate: "JuryAggregate | None" = None,
 ) -> tuple[RouteDecision, Escalation, float, float]:
     """Derive ``(decision, escalation, pooled_confidence, agreement)`` from signals.
 
@@ -162,18 +208,29 @@ def derive_decision(
 
     1. a deterministic gate failed       -> ``regenerate`` (esc=gate)
     2. safety veto/flag                   -> ``review`` (esc=safety)
-    3. jury split (agreement < min)       -> ``review`` (esc=split)
-    4. degraded (missing judges)          -> ``review`` (esc=degraded)
-    5. pooled confidence < threshold      -> ``review`` (esc=below_threshold)
-    6. channel dial is REVIEW             -> ``review`` (esc=mode)
-    7. otherwise                          -> ``auto`` (esc=none)
+    3. rubric **hard-fail** on any dim    -> ``review`` (esc=gate, hard-fail tag)
+    4. jury split (agreement < min)       -> ``review`` (esc=split)
+    5. degraded (missing judges)          -> ``review`` (esc=degraded)
+    6. pooled confidence < threshold      -> ``review`` (esc=below_threshold)
+    7. channel dial is REVIEW             -> ``review`` (esc=mode)
+    8. otherwise                          -> ``auto`` (esc=none)
 
-    Steps 2–4 are auto-blockers the pure router does not know about; they force
+    Steps 2–5 are auto-blockers the pure router does not know about; they force
     review even when confidence clears the bar.
+
+    When the real ``aggregate`` (ADR Decision 1) is supplied, ``pooled`` and
+    ``agree`` come from its reliability-weighted per-dimension signals (``pooled``,
+    ``worst_agreement``) and the **hard-fail floor** (#3) fires on any per-dimension
+    disqualifier — checked SEPARATELY, never averaged into the mean. Without it, the
+    legacy overall-based pooling is used (the stub path), unchanged.
     """
     gates = gates or []
-    pooled = pool_confidence(votes)
-    agree = agreement(votes)
+    if aggregate is not None:
+        pooled = aggregate.pooled
+        agree = aggregate.worst_agreement
+    else:
+        pooled = pool_confidence(votes)
+        agree = agreement(votes)
 
     # Base decision from the canonical pure-code router (gates + confidence + dial).
     base = route(pooled, threshold, gates, autonomy)
@@ -185,6 +242,39 @@ def derive_decision(
         return (
             RouteDecision.REVIEW,
             Escalation(kind=EscKind.SAFETY, label=f"safety {safety_verdict.value}"),
+            pooled,
+            agree,
+        )
+
+    # The hard-fail FLOOR (ADR Decision 1/4): a tagged rubric disqualifier on ANY
+    # dimension can never be averaged out by a high score elsewhere — it forces
+    # review regardless of the pooled confidence. Checked before split/threshold.
+    # Backstop: read the floor from the aggregate when present, ELSE straight from
+    # the votes' own per-dimension flags — so a caller that passes real votes WITHOUT
+    # building an aggregate can never auto-fire hard-failed content.
+    if aggregate is not None:
+        hard_fail_dims: frozenset[str] = aggregate.hard_fail_dims
+    else:
+        hard_fail_dims = frozenset().union(*(v.hard_fail_dims() for v in votes)) if votes else frozenset()
+    if hard_fail_dims:
+        dims = ", ".join(sorted(hard_fail_dims))
+        return (
+            RouteDecision.REVIEW,
+            Escalation(kind=EscKind.GATE, label=f"rubric hard-fail ({dims})"),
+            pooled,
+            agree,
+        )
+
+    # Insufficient panel (aggregate path): fewer than 2 contributing judges means
+    # no cross-judge agreement can be measured — never AUTO on a lone juror, even if
+    # a custom panel set expected_judges=1. A measured panel needs >= 2 voices.
+    if aggregate is not None and aggregate.n_judges < MIN_JUDGES_FOR_AGREEMENT:
+        return (
+            RouteDecision.REVIEW,
+            Escalation(
+                kind=EscKind.DEGRADED,
+                label=f"insufficient jury ({aggregate.n_judges} < {MIN_JUDGES_FOR_AGREEMENT} judges)",
+            ),
             pooled,
             agree,
         )
