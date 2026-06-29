@@ -7,7 +7,7 @@
  * `screen` state). The shell owns the tenant read (engine state + Review-queue
  * badge count) and the master Pause/Resume.
  */
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
 import { useConsole } from '@/state/console-store';
@@ -18,7 +18,20 @@ import type { EngineState } from '@/lib/data/models';
 
 export function AppShell() {
   const { adapter, tenantId } = useData();
-  const { screen } = useConsole();
+  const { screen, navigate } = useConsole();
+
+  // Optional deep-link: open a screen directly from the URL hash (e.g.
+  // `#command`). No-op in jsdom (empty hash) and when the hash isn't a known
+  // screen, so default routing and tests are unaffected.
+  useEffect(() => {
+    const hash =
+      typeof window !== 'undefined' ? window.location.hash.replace('#', '') : '';
+    if (hash && hash in SCREENS) {
+      navigate(hash as keyof typeof SCREENS);
+    }
+    // run once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Optimistic engine-state cell so Pause/Resume feels instant; reconciled by reload.
   const [engineOverride, setEngineOverride] = useState<EngineState | null>(null);
