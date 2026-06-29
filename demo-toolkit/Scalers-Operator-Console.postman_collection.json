@@ -1,0 +1,370 @@
+{
+  "info": {
+    "name": "Scalers Operator Console \u2014 Demo",
+    "_postman_id": "scalers-demo-0001-0001-0001-000000000001",
+    "description": "Live demo collection for the Scalers operator console backend (GraphQL + SSE over Postgres). Select the 'Scalers Local' environment first. Queries are read-only; the approveAction mutation FIRES THE REAL CONNECTOR (real send). The SSE request streams every internal step live.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1 \u00b7 Queries (read)",
+      "item": [
+        {
+          "name": "Overview (KPIs + attention + recent runs + health + feed)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{graphqlUrl}}",
+              "host": [
+                "{{graphqlUrl}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"query Overview($tenantId: ID!) { overview(tenantId: $tenantId) { kpis { autonomyPct reviewQueueCount outreachToday complaintsPct commentsAuto commentsReview postsPublished postsScheduled } attention { id tenantId type channel worker target createdAt subject context draft confidence threshold escalation { kind label } jury { confidence threshold agreement dimensions { label score } } gates { label ok } recommendation idempotencyKey status } recentRuns { id tenantId type trigger status startedAt duration autoCount reviewCount retries idempotencyKey channels note trajectory { at text state } events { worker text severity ms spans { kind title ms detail } } } systemHealth { emailComplaintRate emailBounceRate gmailWarmupUsed gmailWarmupCap igPublishUsed igPublishCap checkpointStatus } feedPreview { id tenantId worker text at chip severity } } }\",\n  \"variables\": {\n    \"tenantId\": \"{{tenantId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "The Overview screen composite. Shows the autonomy %, review-queue count, attention items, recent runs, system health, and a live-feed preview."
+          },
+          "response": []
+        },
+        {
+          "name": "Review queue (pending actions + jury card)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{graphqlUrl}}",
+              "host": [
+                "{{graphqlUrl}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"query ReviewQueue($tenantId: ID!, $filter: ActionFilter) { reviewQueue(tenantId: $tenantId, filter: $filter) { id tenantId type channel worker target createdAt subject context draft confidence threshold escalation { kind label } jury { confidence threshold agreement dimensions { label score } } gates { label ok } recommendation idempotencyKey status } }\",\n  \"variables\": {\n    \"tenantId\": \"{{tenantId}}\",\n    \"filter\": null\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "The escalated actions awaiting human approval. Each carries the per-dimension jury (voice/safety/appr), pooled confidence + threshold, gate results, and the idempotency key."
+          },
+          "response": []
+        },
+        {
+          "name": "Action detail (one action, full jury card)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{graphqlUrl}}",
+              "host": [
+                "{{graphqlUrl}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"query Action($id: ID!) { action(id: $id) { id tenantId type channel worker target createdAt subject context draft confidence threshold escalation { kind label } jury { confidence threshold agreement dimensions { label score } } gates { label ok } recommendation idempotencyKey status } }\",\n  \"variables\": {\n    \"id\": \"{{sampleActionId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "A single action by id \u2014 the detail pane of the review queue."
+          },
+          "response": []
+        },
+        {
+          "name": "Activity (executed actions: exec-trace + per-judge jury + links)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{graphqlUrl}}",
+              "host": [
+                "{{graphqlUrl}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"query Activity($tenantId: ID!, $filter: ActionFilter) { activity(tenantId: $tenantId, filter: $filter) { id tenantId type channel worker target createdAt subject context draft confidence threshold escalation { kind label } jury { confidence threshold agreement dimensions { label score } } gates { label ok } recommendation idempotencyKey status autonomy content outcome { label kind } engagement { label value } thread { role name text } comments { name text autoReplied } runId trace { id latency model tokens } judges { name score vote reasoning } spans { kind title ms detail } links { label target targetType } } }\",\n  \"variables\": {\n    \"tenantId\": \"{{tenantId}}\",\n    \"filter\": null\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Executed actions (status=sent). Shows the EXECUTION TRACE (spans: llm draft -> jury votes -> gates -> route decision), the 4 cross-family judges with reasoning, and the LINKS to the real post/email."
+          },
+          "response": []
+        },
+        {
+          "name": "Runs (workflow history + per-step span trees)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{graphqlUrl}}",
+              "host": [
+                "{{graphqlUrl}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"query Runs($tenantId: ID!, $filter: RunFilter) { runs(tenantId: $tenantId, filter: $filter) { id tenantId type trigger status startedAt duration autoCount reviewCount retries idempotencyKey channels note trajectory { at text state } events { worker text severity ms spans { kind title ms detail } } } }\",\n  \"variables\": {\n    \"tenantId\": \"{{tenantId}}\",\n    \"filter\": null\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "LangGraph/Temporal run history. `events` is the RUN HISTORY: each step expands to a nested span tree (kind/title/ms/detail) \u2014 the internal trace of each node + cell."
+          },
+          "response": []
+        },
+        {
+          "name": "Run detail (one run)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{graphqlUrl}}",
+              "host": [
+                "{{graphqlUrl}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"query Run($id: ID!) { run(id: $id) { id tenantId type trigger status startedAt duration autoCount reviewCount retries idempotencyKey channels note trajectory { at text state } events { worker text severity ms spans { kind title ms detail } } } }\",\n  \"variables\": {\n    \"id\": \"{{sampleRunId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "A single run by id with its full event/span trajectory."
+          },
+          "response": []
+        },
+        {
+          "name": "Feed (event history)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{graphqlUrl}}",
+              "host": [
+                "{{graphqlUrl}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"query Feed($tenantId: ID!) { feed(tenantId: $tenantId) { id tenantId worker text at chip severity } }\",\n  \"variables\": {\n    \"tenantId\": \"{{tenantId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "The decision/event feed (worker, text, chip, severity)."
+          },
+          "response": []
+        },
+        {
+          "name": "System health",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{graphqlUrl}}",
+              "host": [
+                "{{graphqlUrl}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"query SystemHealth($tenantId: ID!) { systemHealth(tenantId: $tenantId) { emailComplaintRate emailBounceRate gmailWarmupUsed gmailWarmupCap igPublishUsed igPublishCap checkpointStatus } }\",\n  \"variables\": {\n    \"tenantId\": \"{{tenantId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Deliverability + quota health (gmail warmup, IG publish quota, checkpoint status)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2 \u00b7 Mutations (approve-first, real side effects)",
+      "item": [
+        {
+          "name": "Approve action  [FIRES THE REAL CONNECTOR]",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{graphqlUrl}}",
+              "host": [
+                "{{graphqlUrl}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"mutation ApproveAction($id: ID!, $idempotencyKey: String!) { approveAction(id: $id, idempotencyKey: $idempotencyKey) { id tenantId type channel worker target createdAt subject context draft confidence threshold escalation { kind label } jury { confidence threshold agreement dimensions { label score } } gates { label ok } recommendation idempotencyKey status } }\",\n  \"variables\": {\n    \"id\": \"{{sampleActionId}}\",\n    \"idempotencyKey\": \"{{idempotencyKey}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "WARNING: this is the human-authorized side effect. For a GMAIL action it sends a REAL email; for IG/FB it makes a real Graph call. The action flips to status=sent with a real deep_link (or fails with the real provider error \u2014 never a fake success)."
+          },
+          "response": []
+        },
+        {
+          "name": "Reject action",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{graphqlUrl}}",
+              "host": [
+                "{{graphqlUrl}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"mutation RejectAction($id: ID!, $reason: String) { rejectAction(id: $id, reason: $reason) { id tenantId type channel worker target createdAt subject context draft confidence threshold escalation { kind label } jury { confidence threshold agreement dimensions { label score } } gates { label ok } recommendation idempotencyKey status } }\",\n  \"variables\": {\n    \"id\": \"{{sampleActionId}}\",\n    \"reason\": \"not on-brand\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Operator declines the action. No send happens; status=rejected."
+          },
+          "response": []
+        },
+        {
+          "name": "Edit action draft",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{graphqlUrl}}",
+              "host": [
+                "{{graphqlUrl}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"mutation EditActionDraft($id: ID!, $draft: String!) { editActionDraft(id: $id, draft: $draft) { id tenantId type channel worker target createdAt subject context draft confidence threshold escalation { kind label } jury { confidence threshold agreement dimensions { label score } } gates { label ok } recommendation idempotencyKey status } }\",\n  \"variables\": {\n    \"id\": \"{{sampleActionId}}\",\n    \"draft\": \"Edited draft text from Postman.\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Edit the draft in place before approving (benign, no send)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3 \u00b7 SSE (live internal steps)",
+      "item": [
+        {
+          "name": "Live SSE stream  [watch every internal step in real time]",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "text/event-stream"
+              }
+            ],
+            "url": {
+              "raw": "{{sseUrl}}?tenantId={{tenantId}}",
+              "host": [
+                "{{sseUrl}}"
+              ],
+              "query": [
+                {
+                  "key": "tenantId",
+                  "value": "{{tenantId}}"
+                }
+              ]
+            },
+            "description": "Server-Sent Events stream. In Postman, click Send \u2014 the response stays open and streams the canonical events (feed.event, action.created, action.updated, run.updated, kpi.updated, health.updated, toast) as they happen, so you can show the internal steps live. (Postman v10+ renders text/event-stream as an Event Stream.)"
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
