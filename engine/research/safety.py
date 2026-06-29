@@ -44,6 +44,10 @@ OFFICIAL_API_HOSTS: dict[str, frozenset[str]] = {
     # combined 'meta_ad_library' provider above; this row is its standalone provider.
     "exa": frozenset({"api.exa.ai"}),
     "foreplay": frozenset({"api.foreplay.co"}),
+    # Connector scaffolds (xeu): Meta Graph (FB/IG publish + comment replies) and
+    # Gmail + the OAuth token hosts. Connect only to these (sec conn-scaffold req D).
+    "facebook": frozenset({"graph.facebook.com", "graph.instagram.com", "www.facebook.com"}),
+    "gmail": frozenset({"gmail.googleapis.com", "oauth2.googleapis.com", "accounts.google.com"}),
 }
 
 # Hostnames that are never legitimate fetch targets (SSRF / metadata vectors).
