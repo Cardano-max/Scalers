@@ -51,10 +51,11 @@ def test_real_jury_rows_persist_reliability_weight_and_hard_fail(store, dsn):
         produce_and_record_decision_real(
             store, decision_id="d1", run_id="r1", tenant_id="ladies8391",
             channel="instagram", action_kind="post", action="a post",
-            threshold=0.85, judge_runner=_runner(scores),
+            threshold=0.85, judge_runner=_runner(scores), self_consistency=1.0,
         )
     )
-    # The decision honored the floor.
+    # The decision honored the floor (self_consistency given so confidence is
+    # computable and the hard-fail floor is the routing reason, not uncomputable).
     assert rec.decision.value == "review" and "hard-fail" in rec.esc.label
 
     with psycopg.connect(dsn, row_factory=psycopg.rows.dict_row) as conn:
