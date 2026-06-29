@@ -177,5 +177,15 @@ jobs:
         working-directory: engine
         run: uv sync --dev --extra postgres
 
+      # done_gate.py runs the eval gate directly (not via pytest), so the test
+      # conftest that normally applies the schema never runs here. Apply the
+      # initdb chain so the enforced eval gate has the gold_example table.
+      - name: Apply DB schema (eval-KB gold_example) for the enforced eval gate
+        run: |
+          for f in infra/initdb/*.sql; do
+            echo "applying $f"
+            psql "$ENGINE_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+          done
+
       - name: Run done-gate (incl. enforced eval gate)
         run: python3 scripts/done_gate.py
