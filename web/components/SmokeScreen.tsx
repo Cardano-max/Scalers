@@ -15,7 +15,8 @@ import { useData } from '@/lib/data/DataProvider';
 import { useAsync, isEmpty } from '@/lib/useAsync';
 import { AsyncBoundary } from './states';
 import { Dot } from './icons';
-import { CHANNEL_COLOR, SEVERITY_COLOR, WORKER_COLOR } from '@/lib/tokens';
+import { FeedRow } from './FeedRow';
+import { CHANNEL_COLOR } from '@/lib/tokens';
 import type { FeedEvent, Overview } from '@/lib/data/models';
 import type { SSEStatus } from '@/lib/data/sse';
 
@@ -93,36 +94,8 @@ export function SmokeScreen() {
         ) : (
           <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
             {live.map((e) => (
-              <li
-                key={e.id}
-                className="enter"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  padding: '10px 16px',
-                  borderBottom: '1px solid var(--hairline-lighter)',
-                  fontSize: 13,
-                }}
-              >
-                <Dot color={WORKER_COLOR[e.worker] ?? 'var(--text-muted)'} />
-                <span className="mono" style={{ fontSize: 11, color: WORKER_COLOR[e.worker], minWidth: 96 }}>
-                  {e.worker}
-                </span>
-                <span style={{ flex: 1 }}>{e.text}</span>
-                {e.chip ? (
-                  <span
-                    style={{
-                      fontSize: 11,
-                      padding: '1px 8px',
-                      borderRadius: 'var(--radius-chip)',
-                      color: SEVERITY_COLOR[e.severity].text,
-                      background: SEVERITY_COLOR[e.severity].bg,
-                    }}
-                  >
-                    {e.chip}
-                  </span>
-                ) : null}
+              <li key={e.id} className="enter" style={{ padding: 0, borderBottom: 'none' }}>
+                <FeedRow event={e} />
               </li>
             ))}
           </ul>
