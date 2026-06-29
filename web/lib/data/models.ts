@@ -63,11 +63,24 @@ export interface JuryDim {
   threshold: number;
   jurorBreakdown: JurorDimScore[];
 }
+/** B2: raw per-judge per-dimension vote (jury.judges). Maps 1:1 to types.py JudgeVote. */
+export interface JudgeVote {
+  judge: string;
+  family?: string | null;
+  voice: number;
+  safety: number;
+  appr: number;
+  overall: number;
+}
 export interface JuryDecision {
   confidence: number;
   threshold: number;
   agreement: string;
   dimensions: JuryDim[];
+  /** B1: generation-stability component (Phase-5+). null = not captured (pre-Phase-5 row). */
+  selfConsistency?: number | null;
+  /** B2: raw per-judge per-dimension votes from autonomy_jury. */
+  judges?: JudgeVote[];
 }
 export interface Gate {
   label: string; // Suppression, Rate cap, PII redaction, Tenant policy, ...

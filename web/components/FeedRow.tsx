@@ -112,6 +112,30 @@ export function FeedRow({ event }: { event: FeedEvent }) {
             {event.actionId && (
               <button
                 type="button"
+                onClick={() => console.navigate('step_detail', event.actionId)}
+                style={{
+                  fontSize: 11.5,
+                  fontWeight: 700,
+                  color: '#fff',
+                  background: '#0B6F68',
+                  border: '1px solid #0B6F68',
+                  padding: '6px 10px',
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLElement).style.background = '#085F59';
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLElement).style.background = '#0B6F68';
+                }}
+              >
+                Open reasoning →
+              </button>
+            )}
+            {event.actionId && (
+              <button
+                type="button"
                 onClick={() => console.navigate('activity', event.actionId)}
                 style={{
                   fontSize: 11.5,

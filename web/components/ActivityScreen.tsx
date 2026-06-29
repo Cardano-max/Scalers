@@ -19,7 +19,9 @@ import { AsyncBoundary } from './states';
 import { Dot } from './icons';
 import { Chip, Tag, channelLabel, clockTime, matchesFilter, typeLabel, type ChipTone, type QueueFilter } from './console-bits';
 import { AUTONOMY_LABEL, CHANNEL_COLOR, WORKER_COLOR } from '@/lib/tokens';
-import type { ActivityItem, AutonomyMode, Span } from '@/lib/data/models';
+import type { ActivityItem, AutonomyMode } from '@/lib/data/models';
+import { ExecutionTraceCard } from './trace/ExecutionTraceCard';
+import { JuryCard } from './trace/JuryCard';
 
 const FILTERS: Array<{ id: QueueFilter; label: string }> = [
   { id: 'ALL', label: 'All' },
@@ -32,14 +34,6 @@ const OUTCOME_TONE: Record<ActivityItem['outcome']['kind'], ChipTone> = {
   success: 'success',
   teal: 'teal',
   neutral: 'neutral',
-};
-
-const SPAN_KIND_STYLE: Record<Span['kind'], { color: string; bg: string }> = {
-  tool: { color: '#0B6F68', bg: '#E1F1EF' },
-  llm: { color: '#0B6F68', bg: '#E1F1EF' },
-  jury: { color: '#9A6B00', bg: '#FBF0D9' },
-  gate: { color: '#157F4B', bg: '#E6F4EC' },
-  decision: { color: '#157F4B', bg: '#E6F4EC' },
 };
 
 export function ActivityScreen() {
@@ -234,7 +228,7 @@ function ActivityDetail({
   threadOpen: boolean;
   onToggleThread: () => void;
 }) {
-  const [selectedJudge, setSelectedJudge] = useState<string | null>(null);
+  const console = useConsole();
   const hasThread = !!item.thread && item.thread.length > 0;
   const hasComments = !!item.comments && item.comments.length > 0;
   const expandLabel = hasComments ? `View ${item.comments!.length} comments` : 'View conversation';
@@ -281,220 +275,61 @@ function ActivityDetail({
         </div>
       ) : null}
 
-      {/* LINKS row */}
-      {item.links && item.links.length > 0 ? (
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {item.links.map((link, i) => (
-            <button
-              key={i}
-              type="button"
-              onClick={() => {
-                if (link.target) window.open(link.target, '_blank');
-              }}
-              style={{
-                fontSize: 12.5,
-                fontWeight: 500,
-                color: 'var(--accent-dark)',
-                background: '#fff',
-                border: '1px solid var(--hairline)',
-                padding: '8px 13px',
-                borderRadius: 'var(--radius-button)',
-                cursor: 'pointer',
-                textDecoration: 'none',
-              }}
-            >
-              {link.label} →
-            </button>
-          ))}
-        </div>
-      ) : null}
+      {/* LINKS row + Open full trace */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {item.links && item.links.map((link, i) => (
+          <button
+            key={i}
+            type="button"
+            onClick={() => {
+              if (link.target) window.open(link.target, '_blank');
+            }}
+            style={{
+              fontSize: 12.5,
+              fontWeight: 500,
+              color: 'var(--accent-dark)',
+              background: '#fff',
+              border: '1px solid var(--hairline)',
+              padding: '8px 13px',
+              borderRadius: 'var(--radius-button)',
+              cursor: 'pointer',
+              textDecoration: 'none',
+            }}
+          >
+            {link.label} →
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => console.navigate('step_detail', item.id)}
+          style={{
+            fontSize: 12.5,
+            fontWeight: 600,
+            color: '#0B6F68',
+            background: '#fff',
+            border: '1px solid #C9E5E1',
+            padding: '8px 13px',
+            borderRadius: 'var(--radius-button)',
+            cursor: 'pointer',
+          }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLElement).style.background = '#F1EFEA';
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLElement).style.background = '#fff';
+          }}
+        >
+          Open full trace →
+        </button>
+      </div>
 
       {/* EXECUTION TRACE card */}
       {item.trace ? (
-        <div
-          style={{
-            border: '1px solid #CDE7E4',
-            borderRadius: 'var(--radius-card)',
-            background: '#F4FAF9',
-            padding: 'var(--pad-card)',
-            display: 'grid',
-            gap: 12,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 10.5, fontFamily: "'IBM Plex Mono', monospace", color: '#0B6F68', letterSpacing: '0.7px', fontWeight: 600 }}>EXECUTION TRACE</span>
-            <span style={{ flex: 1 }} />
-            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#0B6F68' }}>{item.trace.id}</span>
-          </div>
-          <div
-            style={{
-              display: 'flex',
-              gap: 16,
-              flexWrap: 'wrap',
-              marginBottom: 12,
-              paddingBottom: 12,
-              borderBottom: '1px solid #DCEDEA',
-              fontSize: 11,
-              fontFamily: "'IBM Plex Mono', monospace",
-              color: '#5C7A76',
-            }}
-          >
-            <div>latency {item.trace.latency}</div>
-            <div>model {item.trace.model}</div>
-            <div>tokens {item.trace.tokens}</div>
-          </div>
-          {item.spans && item.spans.length > 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {item.spans.map((span, i) => (
-                <div key={i} style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-                  <span
-                    style={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: '50%',
-                      background: SPAN_KIND_STYLE[span.kind]?.color || '#8C877D',
-                      flex: '0 0 auto',
-                      marginTop: 6,
-                    }}
-                  />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
-                      <span
-                        style={{
-                          fontSize: 9,
-                          fontWeight: 600,
-                          color: SPAN_KIND_STYLE[span.kind]?.color || '#8C877D',
-                          background: SPAN_KIND_STYLE[span.kind]?.bg || '#F1EFEA',
-                          padding: '2px 6px',
-                          borderRadius: 5,
-                          textTransform: 'uppercase',
-                        }}
-                      >
-                        {span.kind}
-                      </span>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: '#1A2E2B' }}>{span.title}</span>
-                      <span style={{ flex: 1 }} />
-                      {span.ms && <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, color: '#9BBFBB', flex: '0 0 auto' }}>{span.ms}ms</span>}
-                    </div>
-                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, color: '#5C7A76', lineHeight: 1.5 }}>{span.detail}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : null}
-        </div>
+        <ExecutionTraceCard trace={item.trace} spans={item.spans ?? []} />
       ) : null}
 
       {/* JURY card with per-dimension verdict summary */}
-      {item.judges && item.judges.length > 0 ? (
-        <div
-          style={{
-            border: '1px solid var(--hairline)',
-            borderRadius: 'var(--radius-card)',
-            background: 'var(--surface)',
-            padding: 'var(--pad-card)',
-            display: 'grid',
-            gap: 14,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span className="label" style={{ color: 'var(--text-secondary)' }}>Jury · {item.judges.length} judges</span>
-            <span style={{ flex: 1 }} />
-            <span className="mono" style={{ fontSize: 11, color: 'var(--teal)' }}>pooled {item.jury.confidence.toFixed(2)}</span>
-          </div>
-
-          {/* per-dimension verdict summary */}
-          {item.jury.dimensions && item.jury.dimensions.length > 0 ? (
-            <div style={{ display: 'grid', gap: 8 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
-                Dimension verdicts
-              </div>
-              <div style={{ display: 'grid', gap: 8 }}>
-                {item.jury.dimensions.map((dim) => {
-                  const dimPassed = dim.verdict === 'pass';
-                  return (
-                    <div
-                      key={dim.label}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 8,
-                        fontSize: 13,
-                        color: 'var(--text-secondary)',
-                      }}
-                    >
-                      <span style={{ flex: 1, minWidth: 0 }}>{dim.label}</span>
-                      <span
-                        style={{
-                          fontSize: 11,
-                          fontWeight: 600,
-                          color: dimPassed ? '#157F4B' : '#B42318',
-                          background: dimPassed ? '#E6F4EC' : '#FBE9E6',
-                          padding: '2px 8px',
-                          borderRadius: 4,
-                          flex: '0 0 auto',
-                        }}
-                      >
-                        {dimPassed ? '✓ Pass' : '✗ Fail'}
-                      </span>
-                      <span className="mono" style={{ fontSize: 11, color: 'var(--text-secondary-2)', flex: '0 0 auto' }}>
-                        ({dim.score.toFixed(2)})
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ) : null}
-
-          {/* per-judge breakdown */}
-          <div style={{ display: 'grid', gap: 10 }}>
-            {item.judges.map((judge, i) => (
-              <button
-                key={i}
-                type="button"
-                onClick={() => setSelectedJudge(judge.name)}
-                style={{
-                  all: 'unset',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  cursor: 'pointer',
-                  padding: '6px 8px',
-                  borderRadius: 6,
-                  fontSize: 12.5,
-                }}
-              >
-                <span style={{ fontSize: 12.5, fontWeight: 600, width: 80, flex: '0 0 auto' }}>{judge.name}</span>
-                <span
-                  style={{
-                    fontSize: 11,
-                    fontWeight: 600,
-                    color: judge.vote === 'pass' ? '#157F4B' : '#B42318',
-                    background: judge.vote === 'pass' ? '#E6F4EC' : '#FBE9E6',
-                    padding: '2px 8px',
-                    borderRadius: 5,
-                    flex: '0 0 auto',
-                  }}
-                >
-                  {judge.vote === 'pass' ? '✓ Pass' : '✗ Fail'}
-                </span>
-                <span style={{ fontSize: 12, color: 'var(--text-secondary)', flex: 1, minWidth: 0 }}>{judge.reasoning}</span>
-                <span className="mono" style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary-2)', flex: '0 0 auto' }}>{judge.score.toFixed(2)}</span>
-              </button>
-            ))}
-          </div>
-
-          {/* Judge Inspector Modal */}
-          {selectedJudge ? (
-            <JudgeInspectorModal
-              judge={item.judges.find((j) => j.name === selectedJudge) || null}
-              isSeeded={item.isSeeded ?? false}
-              onClose={() => setSelectedJudge(null)}
-            />
-          ) : null}
-        </div>
-      ) : null}
+      <JuryCard jury={item.jury} judges={item.judges ?? []} isSeeded={item.isSeeded ?? false} />
 
       {/* AGENT REASONING (teal-tinted) */}
       <div
@@ -661,141 +496,6 @@ function Section({ label, children }: { label: string; children: ReactNode }) {
       <span className="label">{label}</span>
       {children}
     </div>
-  );
-}
-
-function JudgeInspectorModal({
-  judge,
-  isSeeded,
-  onClose,
-}: {
-  judge: { name: string; score: number; vote: string; reasoning: string } | null;
-  isSeeded: boolean;
-  onClose: () => void;
-}) {
-  if (!judge) return null;
-
-  return (
-    <>
-      {/* overlay */}
-      <div
-        role="presentation"
-        onClick={onClose}
-        style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0, 0, 0, 0.4)',
-          zIndex: 999,
-        }}
-      />
-      {/* modal */}
-      <div
-        style={{
-          position: 'fixed',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-          background: 'var(--surface)',
-          border: '1px solid var(--hairline)',
-          borderRadius: 'var(--radius-card)',
-          boxShadow: 'var(--shadow-card)',
-          padding: 'var(--pad-card)',
-          maxWidth: 500,
-          width: 'calc(100% - 32px)',
-          maxHeight: '80vh',
-          overflow: 'auto',
-          zIndex: 1000,
-          display: 'grid',
-          gap: 16,
-        }}
-      >
-        {/* header */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 16, fontWeight: 600, flex: 1 }}>{judge.name}</span>
-          {isSeeded && (
-            <span
-              style={{
-                fontSize: 10,
-                fontWeight: 700,
-                color: '#5D5D5D',
-                background: '#F0F0F0',
-                padding: '3px 8px',
-                borderRadius: 4,
-                textTransform: 'uppercase',
-                letterSpacing: '0.5px',
-              }}
-            >
-              [DEMO]
-            </span>
-          )}
-          <button
-            type="button"
-            onClick={onClose}
-            style={{
-              background: 'transparent',
-              border: 'none',
-              fontSize: 18,
-              color: 'var(--text-secondary)',
-              cursor: 'pointer',
-              padding: '0',
-              display: 'grid',
-              placeItems: 'center',
-              width: 24,
-              height: 24,
-            }}
-          >
-            ✕
-          </button>
-        </div>
-
-        {/* verdict badge */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span
-            style={{
-              fontSize: 11,
-              fontWeight: 600,
-              color: judge.vote === 'pass' ? '#157F4B' : '#B42318',
-              background: judge.vote === 'pass' ? '#E6F4EC' : '#FBE9E6',
-              padding: '4px 10px',
-              borderRadius: 5,
-            }}
-          >
-            {judge.vote === 'pass' ? '✓ Pass' : '✗ Fail'}
-          </span>
-          <span className="mono" style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600 }}>
-            {judge.score.toFixed(2)}
-          </span>
-        </div>
-
-        {/* reasoning section */}
-        <div style={{ display: 'grid', gap: 8 }}>
-          <span className="label" style={{ fontSize: 10 }}>Reasoning</span>
-          <div style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--ink)' }}>
-            {judge.reasoning}
-          </div>
-        </div>
-
-        {/* seeded demo data note */}
-        {isSeeded && (
-          <div
-            style={{
-              fontSize: 12,
-              color: 'var(--text-secondary)',
-              background: '#F9F9F9',
-              border: '1px solid var(--hairline-light)',
-              borderRadius: 'var(--radius-button)',
-              padding: '10px 12px',
-              marginTop: 4,
-            }}
-          >
-            ⓘ Seeded demo data — not a live jury run
-          </div>
-        )}
-      </div>
-    </>
   );
 }
 

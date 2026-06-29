@@ -14,6 +14,8 @@ const TITLES: Record<ScreenId, { title: string; subtitle: string }> = {
   feed: { title: 'Live feed', subtitle: 'Realtime decision stream' },
   runs: { title: 'Runs', subtitle: 'LangGraph / Temporal workflow history' },
   command: { title: 'Command', subtitle: 'Steer the harness in natural language' },
+  // drill-only; reached via navigate('step_detail', actionId), not nav bar
+  step_detail: { title: 'Step detail', subtitle: 'Full trace and jury derivation for this action' },
 };
 
 export function TopBar({

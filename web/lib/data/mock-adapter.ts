@@ -59,6 +59,8 @@ function action(partial: Partial<Action> & Pick<Action, 'id' | 'type' | 'channel
       confidence: partial.confidence,
       threshold: partial.threshold,
       agreement: 'split',
+      // B1: Phase-5 fixture — self_consistency captured (real number).
+      selfConsistency: 0.84,
       dimensions: [
         {
           label: 'Brand voice',
@@ -90,6 +92,11 @@ function action(partial: Partial<Action> & Pick<Action, 'id' | 'type' | 'channel
             { judge: 'Judge B', score: 0.76, vote: 'fail' },
           ],
         },
+      ],
+      // B2: raw per-judge per-dimension votes from autonomy_jury.
+      judges: [
+        { judge: 'Judge A', family: 'claude', voice: 0.85, safety: 0.97, appr: 0.72, overall: 0.85 },
+        { judge: 'Judge B', family: 'gpt', voice: 0.79, safety: 0.93, appr: 0.76, overall: 0.83 },
       ],
     },
     gates: [
@@ -193,6 +200,9 @@ function activityItem(
       confidence,
       threshold,
       agreement: 'unanimous',
+      // B1: Phase-5 default — self_consistency captured (real number).
+      // Individual fixtures may override with null for pre-Phase-5 badge testing.
+      selfConsistency: 0.87,
       dimensions: [
         {
           label: 'Brand voice',
@@ -224,6 +234,12 @@ function activityItem(
             { judge: 'Judge B', score: 0.87, vote: 'pass' },
           ],
         },
+      ],
+      // B2: raw per-judge per-dimension votes from autonomy_jury.
+      judges: [
+        { judge: 'Judge A', family: 'claude', voice: 0.92, safety: 0.98, appr: 0.89, overall: 0.93 },
+        { judge: 'Judge B', family: 'gpt', voice: 0.88, safety: 0.96, appr: 0.87, overall: 0.90 },
+        { judge: 'Judge C', family: 'claude', voice: 0.90, safety: 0.97, appr: 0.88, overall: 0.92 },
       ],
     },
     gates: [
@@ -353,6 +369,51 @@ const ACTIVITY: ActivityItem[] = [
     target: 'Published post · “Beat the heat: 5 AC myths”',
     idempotencyKey: 'nw:post:fb:ac-myths:p12',
     createdAt: '2026-06-29T09:15:00Z',
+    // B1: pre-Phase-5 fixture — selfConsistency probe did not run → null.
+    // This exercises the “not captured (pre-Phase-5)” badge in StepDetailScreen.
+    jury: {
+      confidence: 0.91,
+      threshold: 0.88,
+      agreement: 'unanimous',
+      selfConsistency: null,
+      dimensions: [
+        {
+          label: 'Brand voice',
+          score: 0.9,
+          verdict: 'pass',
+          threshold: 0.8,
+          jurorBreakdown: [
+            { judge: 'Judge A', score: 0.92, vote: 'pass' },
+            { judge: 'Judge B', score: 0.88, vote: 'pass' },
+          ],
+        },
+        {
+          label: 'Safety',
+          score: 0.97,
+          verdict: 'pass',
+          threshold: 0.9,
+          jurorBreakdown: [
+            { judge: 'Judge A', score: 0.98, vote: 'pass' },
+            { judge: 'Judge B', score: 0.96, vote: 'pass' },
+          ],
+        },
+        {
+          label: 'Appropriateness',
+          score: 0.88,
+          verdict: 'pass',
+          threshold: 0.8,
+          jurorBreakdown: [
+            { judge: 'Judge A', score: 0.89, vote: 'pass' },
+            { judge: 'Judge B', score: 0.87, vote: 'pass' },
+          ],
+        },
+      ],
+      judges: [
+        { judge: 'Judge A', family: 'claude', voice: 0.92, safety: 0.98, appr: 0.89, overall: 0.93 },
+        { judge: 'Judge B', family: 'gpt', voice: 0.88, safety: 0.96, appr: 0.87, overall: 0.90 },
+        { judge: 'Judge C', family: 'claude', voice: 0.90, safety: 0.97, appr: 0.88, overall: 0.92 },
+      ],
+    },
     content:
       'Beat the heat: 5 AC myths, busted. Myth #1: bigger = better. Oversizing short-cycles your system, wastes energy, and leaves rooms humid. Right-sizing (a real Manual J load calc) beats raw tonnage every time. Swipe for myths #2–5. ☀️❄️',
     confidence: 0.91,
@@ -417,6 +478,8 @@ const RUNS: Run[] = [
         text: '14 comment events received · deduped',
         severity: 'INFO',
         ms: '0.0s',
+        // B3: runId only (no specific action/decision at this stage)
+        runId: 'run_4821',
         spans: [
           { kind: 'tool', title: 'webhook.ingest', ms: 12, detail: 'Meta webhook · 14 events · deduped on event id → 14 unique' },
         ],
@@ -426,6 +489,7 @@ const RUNS: Run[] = [
         text: 'Sorted 12 routine · 2 ambiguous',
         severity: 'INFO',
         ms: '2.1s',
+        runId: 'run_4821',
         spans: [
           { kind: 'llm', title: 'classify ×14 · small model', ms: 2100, detail: '12 routine-positive · 2 ambiguous questions' },
         ],
@@ -435,6 +499,9 @@ const RUNS: Run[] = [
         text: '12 ≥ 0.88 · auto-approved',
         severity: 'SUCCESS',
         ms: '7.4s',
+        // B3: decisionId set when step JSONB carries it (jury node writes decision_id)
+        runId: 'run_4821',
+        decisionId: 'dec_r4821_01',
         spans: [
           { kind: 'jury', title: 'jury vote ×12 · 3 judges', ms: 7400, detail: 'cross-family · 12 pooled ≥ 0.88' },
           { kind: 'decision', title: 'route', detail: '12 → auto-reply · 2 → review' },
@@ -445,6 +512,9 @@ const RUNS: Run[] = [
         text: 'Replying to 12 via Meta MCP',
         severity: 'SUCCESS',
         ms: 'running',
+        // B3: actionId set — links to the @hvac_homeowner comment reply activity item
+        runId: 'run_4821',
+        actionId: 'evt_77a0b',
         spans: [
           { kind: 'gate', title: 'jitter + rate', detail: '40–90s randomized per reply · IG+FB caps ok' },
           { kind: 'tool', title: 'meta.reply ×12', detail: 'idem nw:reply:ig|fb:<comment_id>' },
@@ -481,6 +551,8 @@ const RUNS: Run[] = [
         text: 'Run started · outreach batch',
         severity: 'INFO',
         ms: '0.0s',
+        // B3: runId only (no specific action/decision at workflow start)
+        runId: 'run_4820',
         spans: [
           { kind: 'tool', title: 'temporal.start', detail: 'durable workflow · idem nw:out:batch:wk26-d4' },
         ],
@@ -490,6 +562,7 @@ const RUNS: Run[] = [
         text: 'Ingested 24 contacts from silver',
         severity: 'INFO',
         ms: '0.3s',
+        runId: 'run_4820',
         spans: [
           { kind: 'tool', title: 'silver.contacts.query', ms: 310, detail: 'tenant=northwind · segment=property-mgr → 24 rows' },
           { kind: 'gate', title: 'suppression filter', ms: 20, detail: '0 on do-not-contact list' },
@@ -500,6 +573,7 @@ const RUNS: Run[] = [
         text: 'Drafted 24 personalized emails',
         severity: 'INFO',
         ms: '41s',
+        runId: 'run_4820',
         spans: [
           { kind: 'llm', title: 'draft ×24 · strong model', ms: 38000, detail: 'avg 1.6s each · personalized on unit count + building age' },
         ],
@@ -509,6 +583,9 @@ const RUNS: Run[] = [
         text: 'Scored 24 · 19 ≥ 0.85 · 5 below',
         severity: 'WARN',
         ms: '18s',
+        // B3: decisionId set when step JSONB carries it (jury node writes decision_id)
+        runId: 'run_4820',
+        decisionId: 'dec_r4820_01',
         spans: [
           { kind: 'jury', title: 'jury vote ×24 · 3 judges', ms: 18000, detail: '19 pooled ≥ 0.85 threshold' },
           { kind: 'decision', title: 'route', detail: '19 → auto-send · 5 → review' },
@@ -519,6 +596,9 @@ const RUNS: Run[] = [
         text: 'Sent 19 via Gmail',
         severity: 'SUCCESS',
         ms: '6s',
+        // B3: actionId set — links to the Marina Bay Dental outreach activity item
+        runId: 'run_4820',
+        actionId: 'evt_91c4d',
         spans: [
           { kind: 'gate', title: 'rate cap', detail: '12/60 warmup window ok' },
           { kind: 'tool', title: 'mailbox.send ×19', ms: 5900, detail: 'warmup pacing · all 250 OK · idem keys recorded' },

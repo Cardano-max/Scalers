@@ -2,12 +2,15 @@ import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { ActivityScreen } from '../ActivityScreen';
 import { DataProvider } from '@/lib/data/DataProvider';
+import { ConsoleProvider } from '@/state/console-store';
 import { MockAdapter } from '@/lib/data/mock-adapter';
 
 function renderActivity() {
   return render(
     <DataProvider adapter={new MockAdapter()} tenantId="northwind">
-      <ActivityScreen />
+      <ConsoleProvider>
+        <ActivityScreen />
+      </ConsoleProvider>
     </DataProvider>,
   );
 }

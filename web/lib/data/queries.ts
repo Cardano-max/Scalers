@@ -9,7 +9,11 @@ const ACTION_FIELDS = `
   id tenantId type channel worker target createdAt subject context draft
   confidence threshold
   escalation { kind label }
-  jury { confidence threshold agreement dimensions { label score verdict threshold jurorBreakdown { judge score vote } } }
+  jury {
+    confidence threshold agreement selfConsistency
+    dimensions { label score verdict threshold jurorBreakdown { judge score vote } }
+    judges { judge family voice safety appr overall }
+  }
   gates { label ok }
   recommendation idempotencyKey status
   judges { name score vote reasoning }
@@ -37,7 +41,7 @@ const ACTIVITY_FIELDS = `
 const RUN_FIELDS = `
   id tenantId type trigger status startedAt duration autoCount reviewCount
   retries idempotencyKey channels trajectory { at text state } note traceUrl
-  events { worker text severity ms spans { kind title ms detail } }
+  events { worker text severity ms actionId runId decisionId spans { kind title ms detail } }
 `;
 
 const FEED_FIELDS = `id tenantId worker text at chip severity actionId runId decisionId`;

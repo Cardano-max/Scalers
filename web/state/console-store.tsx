@@ -21,7 +21,8 @@ export type ScreenId =
   | 'activity'
   | 'feed'
   | 'runs'
-  | 'command';
+  | 'command'
+  | 'step_detail';
 
 export interface NavItemDef {
   id: ScreenId;
