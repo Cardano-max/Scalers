@@ -212,6 +212,8 @@ def derive_decision(
     safety_verdict: SafetyVerdict = SafetyVerdict.PASS,
     expected_judges: int | None = None,
     aggregate: "JuryAggregate | None" = None,
+    catalog_drift: bool = False,
+    catalog_drift_reason: str = "",
 ) -> tuple[RouteDecision, Escalation, float, float]:
     """Derive ``(decision, escalation, pooled_confidence, agreement)`` from signals.
 
@@ -253,6 +255,18 @@ def derive_decision(
         return (
             RouteDecision.REVIEW,
             Escalation(kind=EscKind.SAFETY, label=f"safety {safety_verdict.value}"),
+            pooled,
+            agree,
+        )
+
+    # FAIL-SAFE on rubric catalog drift (#81): a judge emitted an unknown hard-fail
+    # code or scored against a different catalog_version — the floor can't be trusted,
+    # so escalate to a human rather than risk a silent pass. Sits with the floors,
+    # after safety.
+    if catalog_drift:
+        return (
+            RouteDecision.REVIEW,
+            Escalation(kind=EscKind.GATE, label=f"jury catalog drift ({catalog_drift_reason})"),
             pooled,
             agree,
         )

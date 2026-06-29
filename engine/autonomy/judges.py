@@ -28,13 +28,25 @@ The live model wiring (the Ollama provider extra; real Opus calls) is gated; the
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field
 
 from autonomy.decision import JudgeVote
+from autonomy.rubric import (
+    EXPECTED_CATALOG_VERSION,
+    HardFailCatalog,
+    load_hard_fail_catalog,
+    resolve_codes,
+)
 from cells.base import Cell
+
+# Local Ollama endpoint (OpenAI-compatible). Override via env for a remote/in-docker
+# Ollama. The client provides only an Anthropic key, so this LOCAL juror (no key) is
+# what makes the panel cross-family.
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 
 # Weight applied to a judge that responded normally (default uniform; gold-calibrated
 # later). A dropped judge contributes NO vote (absent), so it can never be counted as
@@ -61,6 +73,12 @@ class JudgeScore(BaseModel):
     voice_hard_fail: bool = False
     safety_hard_fail: bool = False
     appr_hard_fail: bool = False
+    # The rubric hard-fail / soft-cap codes this judge detected, from the CLOSED
+    # catalog (rubric.code_catalog). The aggregator maps them to per-dimension floors
+    # and fails safe on an unknown code. catalog_version is the version the judge
+    # scored against — a mismatch with the aggregator's pinned version fails safe.
+    hard_fail_codes: list[str] = Field(default_factory=list)
+    catalog_version: int = EXPECTED_CATALOG_VERSION
     rationale: str = Field(default="", description="One-line reason (audit; never gates).")
 
 
@@ -113,13 +131,36 @@ def expected_judge_count(panel: tuple[JudgeSpec, ...] = DEFAULT_PANEL) -> int:
     return len(panel)
 
 
+def _model_for(spec: JudgeSpec):
+    """Resolve a panel seat's model. Anthropic seats use the pinned model id string
+    (pydantic-ai resolves it natively). The Ollama (local, cross-family) seat is built
+    against the OpenAI-compatible Ollama endpoint via a LAZY import, so the core engine
+    needs no extra provider package until an Ollama juror is actually run live — tests
+    inject a ``judge_runner`` and never hit this path."""
+    if spec.family != "ollama":
+        return spec.model
+    # Lazy: only import the OpenAI provider when actually constructing a live Ollama
+    # judge. Missing extra -> ImportError, surfaced to the caller (the smoke skips).
+    from pydantic_ai.models.openai import OpenAIModel
+    from pydantic_ai.providers.openai import OpenAIProvider
+
+    model_name = spec.model.split(":", 1)[1] if ":" in spec.model else spec.model
+    return OpenAIModel(
+        model_name,
+        provider=OpenAIProvider(base_url=OLLAMA_BASE_URL, api_key="ollama"),
+    )
+
+
 def build_judge_cell(spec: JudgeSpec, **overrides) -> Cell[JudgeScore]:
-    """A typed judge cell for one panel seat (temp-0, pinned to the seat's model)."""
+    """A typed judge cell for one panel seat (temp-0, pinned to the seat's model).
+
+    The Ollama seat is wired to the local Ollama OpenAI-compatible endpoint; provide a
+    ``model=`` override (e.g. a ``FunctionModel``) to run any seat deterministically."""
     params = dict(
         name=f"judge-{spec.name}",
         schema=JudgeScore,
         instructions=_JUDGE_INSTRUCTIONS.format(framing=spec.framing),
-        model=spec.model,
+        model=_model_for(spec),
     )
     params.update(overrides)
     return Cell(**params)
@@ -134,28 +175,40 @@ async def _default_runner(spec: JudgeSpec, action: str) -> JudgeScore:
     return await build_judge_cell(spec).run(action)
 
 
-def _to_vote(spec: JudgeSpec, score: JudgeScore) -> JudgeVote:
-    return JudgeVote(
+def _to_vote(spec: JudgeSpec, score: JudgeScore, catalog: HardFailCatalog) -> tuple[JudgeVote, bool, str]:
+    """Map a judge's typed score to a vote, folding the resolved rubric CODES into
+    per-dimension hard-fail floors and soft-cap score caps. Returns ``(vote,
+    fail_safe, reason)`` — ``fail_safe`` (unknown code / version drift) forces REVIEW.
+    Per-dimension bools the judge set directly are OR'd with the code-derived ones."""
+    res = resolve_codes(score.hard_fail_codes, catalog=catalog, judge_catalog_version=score.catalog_version)
+    scores = {"voice": score.voice, "safety": score.safety, "appr": score.appr}
+    for dim, cap in res.soft_cap.items():  # soft-cap caps the dimension's score
+        scores[dim] = min(scores[dim], cap)
+    vote = JudgeVote(
         judge=spec.name,
         family=spec.family,
-        voice=score.voice,
-        safety=score.safety,
-        appr=score.appr,
+        voice=scores["voice"],
+        safety=scores["safety"],
+        appr=scores["appr"],
         on_voice=score.on_voice,
-        voice_hard_fail=score.voice_hard_fail,
-        safety_hard_fail=score.safety_hard_fail,
-        appr_hard_fail=score.appr_hard_fail,
+        voice_hard_fail=score.voice_hard_fail or ("voice" in res.hard_fail_dims),
+        safety_hard_fail=score.safety_hard_fail or ("safety" in res.hard_fail_dims),
+        appr_hard_fail=score.appr_hard_fail or ("appr" in res.hard_fail_dims),
         reliability_weight=DEFAULT_WEIGHT,
     )
+    return vote, res.fail_safe, res.reason
 
 
 @dataclass(frozen=True)
 class JuryRun:
-    """The outcome of running the panel: who voted, who was dropped, expected size."""
+    """The outcome of running the panel: who voted, who was dropped, expected size,
+    and whether any judge tripped a catalog FAIL-SAFE (unknown code / version drift)."""
 
     votes: list[JudgeVote]
     expected_judges: int
     dropped: list[tuple[str, str]] = field(default_factory=list)  # (judge_name, reason)
+    catalog_drift: bool = False
+    drift_reason: str = ""
 
 
 async def run_jury(
@@ -164,6 +217,7 @@ async def run_jury(
     panel: tuple[JudgeSpec, ...] = DEFAULT_PANEL,
     judge_runner: JudgeRunner | None = None,
     timeout_s: float = 30.0,
+    catalog: HardFailCatalog | None = None,
 ) -> JuryRun:
     """Run every panel seat on ``action`` concurrently and collect the votes.
 
@@ -172,8 +226,14 @@ async def run_jury(
     expected count is the full panel size, so the decision layer's degraded check
     sees the reduced coverage. If every seat fails, ``votes`` is empty and the
     decision layer fails safe to review (no confidence).
+
+    Each judge's emitted rubric CODES are resolved against the closed ``catalog``:
+    hard-fail codes become per-dimension floors, soft-caps cap the score, and an
+    unknown code or a catalog_version drift sets ``catalog_drift`` so the decision
+    layer fails safe to REVIEW (#81). The catalog is loaded once if not injected.
     """
     runner = judge_runner or _default_runner
+    cat = catalog or load_hard_fail_catalog()
 
     async def _one(spec: JudgeSpec) -> tuple[JudgeSpec, JudgeScore | None, str | None]:
         try:
@@ -188,9 +248,17 @@ async def run_jury(
 
     votes: list[JudgeVote] = []
     dropped: list[tuple[str, str]] = []
+    catalog_drift = False
+    drift_reason = ""
     for spec, score, reason in results:
         if score is None:
             dropped.append((spec.name, reason or "error"))
-        else:
-            votes.append(_to_vote(spec, score))
-    return JuryRun(votes=votes, expected_judges=len(panel), dropped=dropped)
+            continue
+        vote, fail_safe, fs_reason = _to_vote(spec, score, cat)
+        votes.append(vote)
+        if fail_safe and not catalog_drift:
+            catalog_drift, drift_reason = True, f"{spec.name}: {fs_reason}"
+    return JuryRun(
+        votes=votes, expected_judges=len(panel), dropped=dropped,
+        catalog_drift=catalog_drift, drift_reason=drift_reason,
+    )

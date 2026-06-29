@@ -133,6 +133,8 @@ async def produce_and_record_decision_real(
         safety_verdict=safety_verdict,
         expected_judges=jury.expected_judges,
         aggregate=aggregate,
+        catalog_drift=jury.catalog_drift,
+        catalog_drift_reason=jury.drift_reason,
     )
     record = DecisionRecord(
         decision_id=decision_id,

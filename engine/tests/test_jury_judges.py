@@ -147,3 +147,53 @@ def test_judge_cell_emits_typed_score():
     out = cell.run_sync("Score this post: ...", model=tool_model(payload))
     assert isinstance(out, JudgeScore)
     assert out.appr == 0.2 and out.appr_hard_fail is True and out.on_voice is True
+
+
+# ── rubric CODE integration (#80 catalog) ────────────────────────────────────
+
+
+def _score_codes(codes, *, version=None, **kw):
+    from autonomy.rubric import EXPECTED_CATALOG_VERSION
+    base = dict(voice=0.95, safety=0.95, appr=0.95, on_voice=True,
+                hard_fail_codes=codes, catalog_version=version or EXPECTED_CATALOG_VERSION)
+    base.update(kw)
+    return JudgeScore(**base)
+
+
+def test_hard_fail_code_becomes_per_dimension_floor():
+    # A judge emits an appropriateness hard-fail CODE (high numeric appr) -> the
+    # aggregator maps it to an appr floor -> review, even at high scores.
+    scores = {n: _score_codes(["APPR_HF_COMMERCIALIZE_TRAUMA"]) for n in
+              ("opus-strict", "opus-charitable", "ollama-cross")}
+    run = asyncio.run(run_jury("x", judge_runner=_runner(scores)))
+    assert not run.catalog_drift
+    agg = aggregate_jury(run.votes)
+    assert agg.hard_fail["appr"] is True
+    decision, esc, _, _ = derive_decision(votes=run.votes, aggregate=agg, threshold=0.85)
+    assert decision is RouteDecision.REVIEW and esc.kind is EscKind.GATE
+
+
+def test_soft_cap_code_caps_the_score():
+    scores = {n: _score_codes(["APPR_SC_OUT_OF_SCOPE"]) for n in
+              ("opus-strict", "opus-charitable", "ollama-cross")}
+    run = asyncio.run(run_jury("x", judge_runner=_runner(scores)))
+    assert all(v.appr == 0.5 for v in run.votes)  # capped from 0.95 to the 2/4 anchor
+    assert aggregate_jury(run.votes).hard_fail["appr"] is False  # cap, not a floor
+
+
+def test_unknown_code_trips_catalog_drift_fail_safe():
+    scores = {n: _score_codes([]) for n in ("opus-strict", "opus-charitable", "ollama-cross")}
+    scores["opus-strict"] = _score_codes(["NOT_A_REAL_CODE"])
+    run = asyncio.run(run_jury("x", judge_runner=_runner(scores)))
+    assert run.catalog_drift and "unknown" in run.drift_reason.lower()
+    decision, esc, _, _ = derive_decision(
+        votes=run.votes, aggregate=aggregate_jury(run.votes), threshold=0.85,
+        catalog_drift=run.catalog_drift, catalog_drift_reason=run.drift_reason,
+    )
+    assert decision is RouteDecision.REVIEW and "catalog drift" in esc.label
+
+
+def test_catalog_version_drift_fail_safe():
+    scores = {n: _score_codes([], version=2) for n in ("opus-strict", "opus-charitable", "ollama-cross")}
+    run = asyncio.run(run_jury("x", judge_runner=_runner(scores)))
+    assert run.catalog_drift and "version" in run.drift_reason.lower()
