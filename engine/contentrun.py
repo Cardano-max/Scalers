@@ -94,16 +94,32 @@ def _render_post(brief: ContentBrief) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
-def _build_prompt(tenant_id: str, brief: str, platform: Platform) -> str:
-    """Campaign context for the content cell (grounding before task)."""
-    return (
+def _build_prompt(
+    tenant_id: str, brief: str, platform: Platform, strategy: str | None = None
+) -> str:
+    """Campaign context for the content cell (grounding before task).
+
+    When a real campaign strategy was produced upstream (slice-2 strategy agent),
+    it is composed into the prompt between the brief and the task so the draft is
+    grounded by the strategy — the angle/positioning/messages the draft must carry,
+    not decoration.
+    """
+    parts = [
         f"Studio/account: @{tenant_id} — a women-led tattoo studio with a warm, "
-        f"concrete, human voice.\n"
-        f"Platform: {platform.value}\n"
-        f"Campaign brief: {brief}\n"
+        f"concrete, human voice.",
+        f"Platform: {platform.value}",
+        f"Campaign brief: {brief}",
+    ]
+    if strategy and strategy.strip():
+        parts.append(
+            "Campaign strategy (produced upstream by the strategy agent — lead with "
+            "this angle and land these messages):\n" + strategy.strip()
+        )
+    parts.append(
         "Produce ONE organic social post brief in the studio's brand voice. Write "
         "like a real person, not a brand — no AI boilerplate, no placeholders."
     )
+    return "\n".join(parts)
 
 
 def run_content_to_review(
@@ -113,6 +129,7 @@ def run_content_to_review(
     action_kind: str,
     *,
     target: str | None = None,
+    strategy: str | None = None,
     threshold: float = DEFAULT_THRESHOLD,
     probe_k: int = DEFAULT_K,
     panel: tuple[JudgeSpec, ...] = DEFAULT_PANEL,
@@ -122,7 +139,10 @@ def run_content_to_review(
     JSON-serializable summary (decision id, real jury scores, route, action id,
     judges ran vs degraded). Drives the async pipeline via :func:`asyncio.run`, so
     it must NOT be called from inside a running event loop — an in-loop caller (e.g.
-    the FastAPI obs-API) awaits :func:`run_content_to_review_async` instead."""
+    the FastAPI obs-API) awaits :func:`run_content_to_review_async` instead.
+
+    ``strategy`` is the rendered upstream campaign strategy (slice-2 strategy agent),
+    folded into the draft prompt so the draft is grounded by the real plan."""
     return asyncio.run(
         run_content_to_review_async(
             tenant_id,
@@ -130,6 +150,7 @@ def run_content_to_review(
             channel,
             action_kind,
             target=target,
+            strategy=strategy,
             threshold=threshold,
             probe_k=probe_k,
             panel=panel,
@@ -145,6 +166,7 @@ async def run_content_to_review_async(
     action_kind: str,
     *,
     target: str | None = None,
+    strategy: str | None = None,
     threshold: float = DEFAULT_THRESHOLD,
     probe_k: int = DEFAULT_K,
     panel: tuple[JudgeSpec, ...] = DEFAULT_PANEL,
@@ -174,7 +196,7 @@ async def run_content_to_review_async(
 
     run_id = f"contentrun-{tenant_id}-{uuid.uuid4().hex[:12]}"
     decision_id = f"{run_id}-decision"
-    prompt = _build_prompt(tenant_id, brief, platform)
+    prompt = _build_prompt(tenant_id, brief, platform, strategy)
 
     # 1. REAL draft (temp-0, the decision artifact).
     content_cell = build_content_brief_cell()

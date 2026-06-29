@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from actions import store as actions_store
+from cells.strategy import build_strategy_cell, build_strategy_prompt, render_strategy
 from contentrun import run_content_to_review
 from harness.runstore import PostgresRunStore, RunStatus
 from harness.spans import Span, summarize
@@ -134,21 +135,54 @@ def start_campaign(
     steps.append(research_span)
     step_seq += 1
 
-    # Step 2: Strategy — STUB today (no strategy agent yet). Same honesty gate:
-    # left null/not-captured, never fabricated.
-    now = _now_iso()
+    # Step 2: Strategy — REAL strategy agent (slice 2). Runs ONCE per campaign from
+    # the brief, BEFORE the draft, producing a typed CampaignStrategy (target angle,
+    # positioning, key messages, channel rationale). The rendered plan is fed forward
+    # into every channel's draft prompt so the draft is grounded by a real strategy.
+    # The strategy span carries the REAL prompt / model output / model pin (same as
+    # the slice-1 draft + jury spans). If the strategy call fails, we degrade (drafts
+    # proceed without it) and leave input/output/model NULL — never fabricated.
+    strategy_prompt = build_strategy_prompt(tenant_id, brief_text)
+    strategy_text: str | None = None
+    strategy_payload: dict[str, Any] | None = None
+    strategy_model: str | None = None
+    strategy_error: str | None = None
+    strategy_start = _now_iso()
+    try:
+        strategy_cell = build_strategy_cell()
+        # The pinned model id the strategy cell actually runs against, read off the
+        # cell (default "anthropic:claude-sonnet-4-6") — never hardcoded.
+        strategy_model = str(strategy_cell.model)
+        strategy_obj = strategy_cell.run_sync(strategy_prompt)
+        strategy_text = render_strategy(strategy_obj)
+        strategy_payload = strategy_obj.model_dump(mode="json")
+    except Exception as exc:  # noqa: BLE001 — record real error, degrade (no strategy)
+        strategy_error = f"{type(exc).__name__}: {exc}"
+
     strategy_span = Span(
         span_id=uuid.uuid4().hex,
         run_id=run_id,
         node="strategy",
         kind="node",
-        start_ts=now,
-        end_ts=now,
+        start_ts=strategy_start,
+        end_ts=_now_iso(),
         status="ok",
         seq=step_seq,
-        text="STUB — no strategy agent yet; input/output not captured (P0 instruments only real steps)",
+        text="Real campaign strategy (target angle, positioning, key messages, channel rationale)",
         state="strategy",
     )
+    if strategy_payload is not None:
+        # Real captured I/O + model pin (honesty gate: only set together, on success).
+        strategy_span.input, strategy_span.input_truncated = summarize(strategy_prompt)
+        strategy_span.output, strategy_span.output_truncated = summarize(strategy_payload)
+        strategy_span.model = strategy_model
+    else:
+        strategy_span.status = "failed"
+        strategy_span.text = (
+            f"Strategy not captured ({strategy_error})"
+            if strategy_error
+            else "Strategy not captured"
+        )
     steps.append(strategy_span)
     step_seq += 1
 
@@ -186,6 +220,7 @@ def start_campaign(
                 brief=brief_text,
                 channel=channel,
                 action_kind="post",  # Studio generates posts
+                strategy=strategy_text,  # real upstream plan grounds the draft
                 dsn=dsn,
             )
 
