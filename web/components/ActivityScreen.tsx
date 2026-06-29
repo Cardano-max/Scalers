@@ -18,7 +18,7 @@ import { AsyncBoundary } from './states';
 import { Dot } from './icons';
 import { Chip, Tag, channelLabel, clockTime, matchesFilter, typeLabel, type ChipTone, type QueueFilter } from './console-bits';
 import { AUTONOMY_LABEL, CHANNEL_COLOR, WORKER_COLOR } from '@/lib/tokens';
-import type { ActivityItem, AutonomyMode } from '@/lib/data/models';
+import type { ActivityItem, AutonomyMode, Span } from '@/lib/data/models';
 
 const FILTERS: Array<{ id: QueueFilter; label: string }> = [
   { id: 'ALL', label: 'All' },
@@ -31,6 +31,14 @@ const OUTCOME_TONE: Record<ActivityItem['outcome']['kind'], ChipTone> = {
   success: 'success',
   teal: 'teal',
   neutral: 'neutral',
+};
+
+const SPAN_KIND_STYLE: Record<Span['kind'], { color: string; bg: string }> = {
+  tool: { color: '#0B6F68', bg: '#E1F1EF' },
+  llm: { color: '#0B6F68', bg: '#E1F1EF' },
+  jury: { color: '#9A6B00', bg: '#FBF0D9' },
+  gate: { color: '#157F4B', bg: '#E6F4EC' },
+  decision: { color: '#157F4B', bg: '#E6F4EC' },
 };
 
 export function ActivityScreen() {
@@ -259,6 +267,152 @@ function ActivityDetail({
               <div style={{ fontSize: 17, fontWeight: 600, marginTop: 3 }}>{t.value}</div>
             </div>
           ))}
+        </div>
+      ) : null}
+
+      {/* LINKS row */}
+      {item.links && item.links.length > 0 ? (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {item.links.map((link, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => {
+                if (link.target) window.open(link.target, '_blank');
+              }}
+              style={{
+                fontSize: 12.5,
+                fontWeight: 500,
+                color: 'var(--accent-dark)',
+                background: '#fff',
+                border: '1px solid var(--hairline)',
+                padding: '8px 13px',
+                borderRadius: 'var(--radius-button)',
+                cursor: 'pointer',
+                textDecoration: 'none',
+              }}
+            >
+              {link.label} →
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {/* EXECUTION TRACE card */}
+      {item.trace ? (
+        <div
+          style={{
+            border: '1px solid #CDE7E4',
+            borderRadius: 'var(--radius-card)',
+            background: '#F4FAF9',
+            padding: 'var(--pad-card)',
+            display: 'grid',
+            gap: 12,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 10.5, fontFamily: "'IBM Plex Mono', monospace", color: '#0B6F68', letterSpacing: '0.7px', fontWeight: 600 }}>EXECUTION TRACE</span>
+            <span style={{ flex: 1 }} />
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#0B6F68' }}>{item.trace.id}</span>
+          </div>
+          <div
+            style={{
+              display: 'flex',
+              gap: 16,
+              flexWrap: 'wrap',
+              marginBottom: 12,
+              paddingBottom: 12,
+              borderBottom: '1px solid #DCEDEA',
+              fontSize: 11,
+              fontFamily: "'IBM Plex Mono', monospace",
+              color: '#5C7A76',
+            }}
+          >
+            <div>latency {item.trace.latency}</div>
+            <div>model {item.trace.model}</div>
+            <div>tokens {item.trace.tokens}</div>
+          </div>
+          {item.spans && item.spans.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {item.spans.map((span, i) => (
+                <div key={i} style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                  <span
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: '50%',
+                      background: SPAN_KIND_STYLE[span.kind]?.color || '#8C877D',
+                      flex: '0 0 auto',
+                      marginTop: 6,
+                    }}
+                  />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
+                      <span
+                        style={{
+                          fontSize: 9,
+                          fontWeight: 600,
+                          color: SPAN_KIND_STYLE[span.kind]?.color || '#8C877D',
+                          background: SPAN_KIND_STYLE[span.kind]?.bg || '#F1EFEA',
+                          padding: '2px 6px',
+                          borderRadius: 5,
+                          textTransform: 'uppercase',
+                        }}
+                      >
+                        {span.kind}
+                      </span>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: '#1A2E2B' }}>{span.title}</span>
+                      <span style={{ flex: 1 }} />
+                      {span.ms && <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, color: '#9BBFBB', flex: '0 0 auto' }}>{span.ms}ms</span>}
+                    </div>
+                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, color: '#5C7A76', lineHeight: 1.5 }}>{span.detail}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* JURY card */}
+      {item.judges && item.judges.length > 0 ? (
+        <div
+          style={{
+            border: '1px solid var(--hairline)',
+            borderRadius: 'var(--radius-card)',
+            background: 'var(--surface)',
+            padding: 'var(--pad-card)',
+            display: 'grid',
+            gap: 11,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span className="label" style={{ color: 'var(--text-secondary)' }}>Jury · {item.judges.length} judges</span>
+            <span style={{ flex: 1 }} />
+            <span className="mono" style={{ fontSize: 11, color: 'var(--teal)' }}>pooled {item.jury.confidence.toFixed(2)}</span>
+          </div>
+          <div style={{ display: 'grid', gap: 10 }}>
+            {item.judges.map((judge, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 12.5, fontWeight: 600, width: 80, flex: '0 0 auto' }}>{judge.name}</span>
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: judge.vote === 'pass' ? '#157F4B' : '#B42318',
+                    background: judge.vote === 'pass' ? '#E6F4EC' : '#FBE9E6',
+                    padding: '2px 8px',
+                    borderRadius: 5,
+                    flex: '0 0 auto',
+                  }}
+                >
+                  {judge.vote === 'pass' ? '✓ Pass' : '✗ Fail'}
+                </span>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)', flex: 1, minWidth: 0 }}>{judge.reasoning}</span>
+                <span className="mono" style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary-2)', flex: '0 0 auto' }}>{judge.score.toFixed(2)}</span>
+              </div>
+            ))}
+          </div>
         </div>
       ) : null}
 

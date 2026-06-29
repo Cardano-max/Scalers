@@ -44,6 +44,7 @@ export type RunStatus = 'RUNNING' | 'SUCCESS' | 'FAILED';
 export type Severity = 'INFO' | 'SUCCESS' | 'WARN' | 'ERROR';
 export type Role = 'OPERATOR' | 'ASSISTANT';
 export type EngineState = 'RUNNING' | 'PAUSED';
+export type SpanKind = 'tool' | 'llm' | 'jury' | 'gate' | 'decision';
 
 // --- decision sub-objects ---
 export interface Escalation {
@@ -63,6 +64,36 @@ export interface JuryDecision {
 export interface Gate {
   label: string; // Suppression, Rate cap, PII redaction, Tenant policy, ...
   ok: boolean;
+}
+export interface Span {
+  kind: SpanKind; // tool | llm | jury | gate | decision
+  title: string;
+  ms?: number;
+  detail: string;
+}
+export interface RunEvent {
+  worker: Worker;
+  text: string;
+  severity: Severity;
+  ms: string;
+  spans: Span[];
+}
+export interface Judge {
+  name: string;
+  score: number;
+  vote: string; // 'pass' | 'fail'
+  reasoning: string;
+}
+export interface ExecutionTrace {
+  id: string;
+  latency: string;
+  model: string;
+  tokens: string;
+}
+export interface ActivityLink {
+  label: string;
+  target: string;
+  targetType: string; // 'POST' | 'COMMENT' | 'DM' | 'EMAIL'
 }
 
 // --- core entities ---
@@ -129,6 +160,7 @@ export interface Run {
   channels: Channel[];
   trajectory: RunStep[];
   note?: string | null;
+  events?: RunEvent[];
 }
 
 export interface FeedEvent {
@@ -207,6 +239,11 @@ export interface ActivityItem extends Action {
   engagement: EngagementTile[];
   thread?: ThreadMessage[];
   comments?: CommentItem[];
+  runId?: string | null;
+  trace?: ExecutionTrace | null;
+  judges: Judge[];
+  spans: Span[];
+  links: ActivityLink[];
 }
 
 // --- filter inputs (mirror ActionFilter / RunFilter / FeedFilter) ---

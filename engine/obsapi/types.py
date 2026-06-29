@@ -158,6 +158,12 @@ class ActivityItem:
     engagement: list[EngagementTile]
     thread: list[ThreadMessage]
     comments: list[CommentItem]
+    # --- v2 observability ---
+    run_id: Optional[strawberry.ID]
+    trace: Optional[ExecutionTrace]
+    judges: list[Judge]
+    spans: list[Span]
+    links: list[ActivityLink]
 
 
 @strawberry.type
@@ -183,6 +189,7 @@ class Run:
     channels: list[str]
     trajectory: list[RunStep]
     note: Optional[str]
+    events: list[RunEvent]
 
 
 @strawberry.type
@@ -268,3 +275,48 @@ class RunFilter:
 @strawberry.input
 class FeedFilter:
     worker: Optional[str] = None
+
+
+@strawberry.type
+class Span:
+    """A trace span: a unit of work with timing and output detail."""
+    kind: str  # tool|llm|jury|gate|decision
+    title: str
+    ms: Optional[int]
+    detail: str
+
+
+@strawberry.type
+class RunEvent:
+    """A top-level event in a run, with nested child spans."""
+    worker: str
+    text: str
+    severity: str  # info|warn|error
+    ms: str
+    spans: list[Span]
+
+
+@strawberry.type
+class Judge:
+    """Per-judge vote detail: name, aggregated score, pass/fail, per-dimension reasoning."""
+    name: str
+    score: float
+    vote: str  # 'pass'|'fail'
+    reasoning: str
+
+
+@strawberry.type
+class ExecutionTrace:
+    """Execution metadata: decision ID, latency, model used, tokens."""
+    id: strawberry.ID
+    latency: str
+    model: str
+    tokens: str
+
+
+@strawberry.type
+class ActivityLink:
+    """A clickable link to the sent post/comment/email."""
+    label: str
+    target: str
+    target_type: str  # POST|COMMENT|EMAIL|DM

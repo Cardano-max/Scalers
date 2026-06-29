@@ -24,11 +24,16 @@ const ACTIVITY_FIELDS = `
   engagement { label value }
   thread { role name text }
   comments { name text autoReplied }
+  runId trace { id latency model tokens }
+  judges { name score vote reasoning }
+  spans { kind title ms detail }
+  links { label target targetType }
 `;
 
 const RUN_FIELDS = `
   id tenantId type trigger status startedAt duration autoCount reviewCount
   retries idempotencyKey channels trajectory { at text state } note
+  events { worker text severity ms spans { kind title ms detail } }
 `;
 
 const FEED_FIELDS = `id tenantId worker text at chip severity`;

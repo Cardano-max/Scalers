@@ -24,11 +24,14 @@ from .db import connect
 from .types import (
     Action,
     ActivityItem,
+    ActivityLink,
     AutonomyConfig,
     EngagementTile,
     Escalation,
+    ExecutionTrace,
     FeedEvent,
     Gate,
+    Judge,
     JudgeVote,
     JuryDecision,
     JuryDim,
@@ -36,7 +39,9 @@ from .types import (
     Outcome,
     Overview,
     Run,
+    RunEvent,
     RunStep,
+    Span,
     SystemHealth,
     Tenant,
 )
@@ -62,6 +67,217 @@ def _decision_for(conn: Any, decision_id: str) -> dict[str, Any] | None:
     return conn.execute(
         "SELECT * FROM autonomy_decisions WHERE decision_id=%s", (decision_id,)
     ).fetchone()
+
+
+# --------------------------------------------------------------------------- #
+# v2 observability: spans, events, judges, traces, links
+# --------------------------------------------------------------------------- #
+def _kind_for_node(node_name: str) -> str:
+    """Map node/cell name to span kind: tool|llm."""
+    node_lower = (node_name or "").lower()
+    # LLM cells (Claude models) and llm-ish nodes
+    if any(x in node_lower for x in ["claude", "llm", "model", "cell:"]):
+        return "llm"
+    # Default: tool
+    return "tool"
+
+
+def _build_span(step: dict[str, Any]) -> Span:
+    """Convert a step JSONB dict to a Span (one of: tool|llm)."""
+    node_name = step.get("node") or step.get("cell") or ""
+    kind = _kind_for_node(node_name)
+    title = step.get("text") or node_name or "Unknown"
+    ms = step.get("duration_ms")
+    # Detail: prefer output, fall back to input; mark truncation if needed.
+    detail = step.get("output") or step.get("input") or "—"
+    if step.get("output_truncated"):
+        detail = detail[:200] + "…" if len(str(detail)) > 200 else detail
+    return Span(kind=kind, title=title, ms=int(ms) if ms else None, detail=str(detail))
+
+
+def _build_run_events(steps_jsonb: list[dict[str, Any]] | None) -> list[RunEvent]:
+    """Convert runs.steps JSONB (array of spans with parent_span_id) into RunEvent list.
+
+    Groups top-level spans (parent_span_id=null) into RunEvent objects.
+    Each event contains its own children as nested Span objects.
+    """
+    if not steps_jsonb:
+        return []
+
+    events: list[RunEvent] = []
+
+    # Build a span lookup for finding children
+    span_map: dict[str, dict[str, Any]] = {}
+    top_level: list[dict[str, Any]] = []
+
+    for step in steps_jsonb:
+        if not isinstance(step, dict):
+            continue
+        span_id = step.get("span_id")
+        if span_id:
+            span_map[span_id] = step
+        if step.get("parent_span_id") is None:
+            top_level.append(step)
+
+    # For each top-level span, create a RunEvent
+    for top_step in top_level:
+        worker = mappers.worker(top_step.get("node"))
+        text = top_step.get("text") or top_step.get("node") or ""
+        status = top_step.get("status") or "ok"
+        severity = "error" if status.lower() in ("failed", "error") else "info"
+        duration_ms = top_step.get("duration_ms")
+        ms_str = f"{duration_ms/1000:.1f}s" if duration_ms is not None else "—"
+
+        # Build nested spans from children
+        child_spans: list[Span] = []
+        for child_step in top_step.get("children") or []:
+            if isinstance(child_step, dict):
+                child_spans.append(_build_span(child_step))
+
+        events.append(
+            RunEvent(
+                worker=worker,
+                text=text,
+                severity=severity,
+                ms=ms_str,
+                spans=child_spans,
+            )
+        )
+
+    return events
+
+
+def _build_judges_from_jury(conn: Any, decision_id: str) -> tuple[list[Judge], str]:
+    """Build Judge objects from autonomy_jury rows + decision metadata.
+
+    Returns (judges list, latency string).
+    Latency is computed from autonomy_decisions.created_at if available.
+    """
+    jury_rows = _jury_for(conn, decision_id)
+
+    judges: list[Judge] = []
+    for row in jury_rows:
+        voice = float(row.get("voice", 0.5))
+        safety = float(row.get("safety", 0.5))
+        appr = float(row.get("appr", 0.5))
+        score = (voice + safety + appr) / 3.0
+        # Hard fail if any dimension flagged a disqualifier
+        hard_fail = any([
+            row.get("voice_hard_fail", False),
+            row.get("safety_hard_fail", False),
+            row.get("appr_hard_fail", False),
+        ])
+        vote = "fail" if hard_fail else "pass"
+        reasoning = f"voice {voice:.2f} · safety {safety:.2f} · appr {appr:.2f}"
+        judges.append(
+            Judge(
+                name=row.get("judge", "Unknown"),
+                score=score,
+                vote=vote,
+                reasoning=reasoning,
+            )
+        )
+
+    # Latency: for now use "—" unless we can extract from decision timing
+    latency = "—"
+
+    return judges, latency
+
+
+def _build_activity_spans_from_decision(
+    conn: Any, decision_id: str
+) -> tuple[list[Span], str]:
+    """Build spans from autonomy_decisions + autonomy_jury when action has no run.
+
+    Synthesizes: one 'llm' span (draft), one 'jury' span per judge,
+    one 'gate' span per gate, one 'decision' span.
+    Returns (spans list, latency).
+    """
+    decision = _decision_for(conn, decision_id)
+    if not decision:
+        return [], "—"
+
+    spans: list[Span] = []
+
+    # LLM draft span
+    spans.append(
+        Span(kind="llm", title="Draft", ms=None, detail="—")
+    )
+
+    # Jury spans: one per judge
+    jury_rows = _jury_for(conn, decision_id)
+    for row in jury_rows:
+        voice = float(row.get("voice", 0.5))
+        safety = float(row.get("safety", 0.5))
+        appr = float(row.get("appr", 0.5))
+        detail = f"voice {voice:.2f} · safety {safety:.2f} · appr {appr:.2f}"
+        spans.append(
+            Span(kind="jury", title=f"Judge: {row.get('judge', 'Unknown')}", ms=None, detail=detail)
+        )
+
+    # Gate spans: one per gate result
+    gates_jsonb = decision.get("gates") or []
+    for gate in gates_jsonb:
+        if isinstance(gate, dict):
+            gate_label = gate.get("label", "Gate")
+            gate_ok = gate.get("ok", False)
+            detail = "ok" if gate_ok else "blocked"
+            spans.append(
+                Span(kind="gate", title=gate_label, ms=None, detail=detail)
+            )
+
+    # Decision span: route + confidence
+    route = decision.get("decision") or "unknown"
+    confidence = float(decision.get("pooled_confidence", 0.0))
+    decision_detail = f"{route.upper()} @ {confidence:.2f}"
+    spans.append(
+        Span(kind="decision", title="Route", ms=None, detail=decision_detail)
+    )
+
+    latency = "—"  # No timing captured in autonomy_decisions
+
+    return spans, latency
+
+
+def _build_activity_links(action_row: dict[str, Any]) -> list[ActivityLink]:
+    """Build ActivityLink objects from action deep_link + channel/type.
+
+    Only populated when status='sent'. Returns [] otherwise.
+    """
+    if action_row.get("status") != "sent":
+        return []
+
+    deep_link = action_row.get("deep_link")
+    if not deep_link:
+        return []
+
+    channel = (action_row.get("channel") or "").lower()
+    action_type = (action_row.get("type") or "").lower()
+
+    # Determine targetType and label based on channel/type
+    target_type = "POST"  # default
+    label = "View"
+
+    if channel == "gmail":
+        target_type = "EMAIL"
+        label = "View email"
+    elif action_type == "comment":
+        target_type = "COMMENT"
+        label = "View reply"
+    elif action_type == "dm":
+        target_type = "DM"
+        label = "View message"
+    elif action_type == "post":
+        target_type = "POST"
+        label = "View post"
+
+    return [
+        ActivityLink(
+            label=label,
+            target=deep_link,
+            target_type=target_type,
+        )
+    ]
 
 
 def _build_action(conn: Any, row: dict[str, Any]) -> Action:
@@ -182,6 +398,51 @@ def _build_activity(conn: Any, row: dict[str, Any]) -> ActivityItem:
         for e in (row.get("engagement") or [])
         if isinstance(e, dict)
     ]
+
+    # v2 observability: runId, trace, judges, spans, links
+    run_id = row.get("run_id")
+    decision_id = row.get("decision_id")
+
+    # Judges: from autonomy_jury if we have a decision_id
+    judges: list[Judge] = []
+    trace_latency = "—"
+    if decision_id:
+        judges, trace_latency = _build_judges_from_jury(conn, decision_id)
+
+    # Spans: if we have a run_id, fetch from its steps; else synthesize from decision
+    activity_spans: list[Span] = []
+    if run_id:
+        # Fetch the run and build spans from its steps
+        run_row = conn.execute(
+            "SELECT steps FROM runs WHERE run_id=%s", (run_id,)
+        ).fetchone()
+        if run_row:
+            # Convert steps to flat span list (not events)
+            steps_jsonb = run_row.get("steps") or []
+            for step in steps_jsonb:
+                if isinstance(step, dict) and step.get("parent_span_id") is None:
+                    # Top-level span only (no nesting for activity view)
+                    activity_spans.append(_build_span(step))
+        # If run exists but has no steps, synthesize from decision as fallback
+        if not activity_spans and decision_id:
+            activity_spans, _ = _build_activity_spans_from_decision(conn, decision_id)
+    elif decision_id:
+        # No run: synthesize spans from decision
+        activity_spans, _ = _build_activity_spans_from_decision(conn, decision_id)
+
+    # ExecutionTrace: id + latency
+    trace = None
+    if decision_id:
+        trace = ExecutionTrace(
+            id=decision_id,
+            latency=trace_latency,
+            model="—",  # Unknown unless explicitly tracked
+            tokens="—",  # Unknown unless explicitly tracked
+        )
+
+    # Links: from deep_link when sent
+    links = _build_activity_links(row)
+
     return ActivityItem(
         id=core.id,
         tenant_id=core.tenant_id,
@@ -210,6 +471,12 @@ def _build_activity(conn: Any, row: dict[str, Any]) -> ActivityItem:
         engagement=engagement,
         thread=[],
         comments=[],
+        # v2 observability
+        run_id=run_id,
+        trace=trace,
+        judges=judges,
+        spans=activity_spans,
+        links=links,
     )
 
 
@@ -257,6 +524,9 @@ def _build_run(conn: Any, row: dict[str, Any]) -> Run:
             )
         )
 
+    # v2 observability: build events from steps JSONB
+    events = _build_run_events(row.get("steps"))
+
     return Run(
         id=row["run_id"],
         tenant_id=row["tenant_id"],
@@ -272,6 +542,7 @@ def _build_run(conn: Any, row: dict[str, Any]) -> Run:
         channels=channels,
         trajectory=trajectory,
         note=None,
+        events=events,
     )
 
 

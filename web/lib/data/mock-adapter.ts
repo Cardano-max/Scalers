@@ -178,6 +178,29 @@ function activityItem(
       { label: 'PII redaction', ok: true },
       { label: 'Tenant policy', ok: true },
     ],
+    // v2 observability fields
+    runId: `run_${Math.floor(Math.random() * 5000)}`,
+    trace: {
+      id: `tr_${Math.random().toString(36).slice(2, 8)}`,
+      latency: `${(Math.random() * 5 + 0.5).toFixed(1)}s`,
+      model: 'strong (draft) · small (route)',
+      tokens: `${Math.floor(Math.random() * 2000 + 500)} in · ${Math.floor(Math.random() * 500 + 100)} out`,
+    },
+    judges: [
+      { name: 'Judge A', score: 0.9, vote: 'pass', reasoning: 'on-brand, clear value' },
+      { name: 'Judge B', score: 0.96, vote: 'pass', reasoning: 'no safety issues' },
+      { name: 'Judge C', score: 0.88, vote: 'pass', reasoning: 'appropriate tone' },
+    ],
+    spans: [
+      { kind: 'tool', title: 'ingest.data', ms: 120, detail: 'Fetched contact · verified contact details' },
+      { kind: 'llm', title: 'select angle', ms: 600, detail: 'Routing: problem→solution personalization strategy' },
+      { kind: 'llm', title: 'draft · strong model', ms: 2100, detail: 'Personalized on property size and age; tone direct, no hard sell' },
+      { kind: 'jury', title: 'jury vote', ms: 900, detail: '3/3 pass · pooled 0.91 ≥ 0.85 threshold' },
+      { kind: 'gate', title: 'pre-action hooks', ms: 40, detail: 'suppression ✓ · rate-cap ✓ · PII redaction ✓' },
+      { kind: 'tool', title: 'send · MCP', ms: 310, detail: 'warmup pacing · 250 OK · idem recorded' },
+      { kind: 'decision', title: 'auto-executed', detail: 'confidence cleared threshold, no veto → sent' },
+    ],
+    links: [],
     ...partial,
   };
 }
@@ -334,6 +357,46 @@ const RUNS: Run[] = [
       { at: '13:31:02', text: 'Responder · draft reply', state: 'done' },
       { at: '13:31:03', text: 'Jury · split → escalate', state: 'done' },
     ],
+    events: [
+      {
+        worker: 'WEBHOOK',
+        text: '14 comment events received · deduped',
+        severity: 'INFO',
+        ms: '0.0s',
+        spans: [
+          { kind: 'tool', title: 'webhook.ingest', ms: 12, detail: 'Meta webhook · 14 events · deduped on event id → 14 unique' },
+        ],
+      },
+      {
+        worker: 'CLASSIFIER',
+        text: 'Sorted 12 routine · 2 ambiguous',
+        severity: 'INFO',
+        ms: '2.1s',
+        spans: [
+          { kind: 'llm', title: 'classify ×14 · small model', ms: 2100, detail: '12 routine-positive · 2 ambiguous questions' },
+        ],
+      },
+      {
+        worker: 'JURY',
+        text: '12 ≥ 0.88 · auto-approved',
+        severity: 'SUCCESS',
+        ms: '7.4s',
+        spans: [
+          { kind: 'jury', title: 'jury vote ×12 · 3 judges', ms: 7400, detail: 'cross-family · 12 pooled ≥ 0.88' },
+          { kind: 'decision', title: 'route', detail: '12 → auto-reply · 2 → review' },
+        ],
+      },
+      {
+        worker: 'RESPONDER',
+        text: 'Replying to 12 via Meta MCP',
+        severity: 'SUCCESS',
+        ms: 'running',
+        spans: [
+          { kind: 'gate', title: 'jitter + rate', detail: '40–90s randomized per reply · IG+FB caps ok' },
+          { kind: 'tool', title: 'meta.reply ×12', detail: 'idem nw:reply:ig|fb:<comment_id>' },
+        ],
+      },
+    ],
   },
   {
     id: 'run_4820',
@@ -357,6 +420,56 @@ const RUNS: Run[] = [
       { at: '09:00:05', text: 'Suppression · filter list', state: 'done' },
       { at: '09:01:40', text: 'Outreach · 6 drafts → review', state: 'done' },
       { at: '09:02:11', text: 'Rate cap · 6 deferred', state: 'warn' },
+    ],
+    events: [
+      {
+        worker: 'TEMPORAL',
+        text: 'Run started · outreach batch',
+        severity: 'INFO',
+        ms: '0.0s',
+        spans: [
+          { kind: 'tool', title: 'temporal.start', detail: 'durable workflow · idem nw:out:batch:wk26-d4' },
+        ],
+      },
+      {
+        worker: 'OUTREACH',
+        text: 'Ingested 24 contacts from silver',
+        severity: 'INFO',
+        ms: '0.3s',
+        spans: [
+          { kind: 'tool', title: 'silver.contacts.query', ms: 310, detail: 'tenant=northwind · segment=property-mgr → 24 rows' },
+          { kind: 'gate', title: 'suppression filter', ms: 20, detail: '0 on do-not-contact list' },
+        ],
+      },
+      {
+        worker: 'OUTREACH',
+        text: 'Drafted 24 personalized emails',
+        severity: 'INFO',
+        ms: '41s',
+        spans: [
+          { kind: 'llm', title: 'draft ×24 · strong model', ms: 38000, detail: 'avg 1.6s each · personalized on unit count + building age' },
+        ],
+      },
+      {
+        worker: 'JURY',
+        text: 'Scored 24 · 19 ≥ 0.85 · 5 below',
+        severity: 'WARN',
+        ms: '18s',
+        spans: [
+          { kind: 'jury', title: 'jury vote ×24 · 3 judges', ms: 18000, detail: '19 pooled ≥ 0.85 threshold' },
+          { kind: 'decision', title: 'route', detail: '19 → auto-send · 5 → review' },
+        ],
+      },
+      {
+        worker: 'MAILBOX_MCP',
+        text: 'Sent 19 via Gmail',
+        severity: 'SUCCESS',
+        ms: '6s',
+        spans: [
+          { kind: 'gate', title: 'rate cap', detail: '12/60 warmup window ok' },
+          { kind: 'tool', title: 'mailbox.send ×19', ms: 5900, detail: 'warmup pacing · all 250 OK · idem keys recorded' },
+        ],
+      },
     ],
   },
 ];
