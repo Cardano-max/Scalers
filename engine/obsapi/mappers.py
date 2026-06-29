@@ -84,6 +84,15 @@ def status(v: str | None) -> str:
     return (v or "").upper()
 
 
+def activity_autonomy(v: str | None) -> str:
+    """``actions.autonomy`` ('auto' | 'approved') → contract form. Auto-fired vs
+    operator-approved; uppercased like the other enum-ish fields."""
+
+    return {"auto": "AUTO", "approved": "APPROVED"}.get(
+        (v or "").lower(), (v or "").upper()
+    )
+
+
 def esc_kind(v: str | None) -> str:
     return _ESC.get((v or "").lower(), (v or "").upper() or "NONE")
 

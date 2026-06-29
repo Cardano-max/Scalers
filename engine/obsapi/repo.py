@@ -23,7 +23,9 @@ from . import mappers
 from .db import connect
 from .types import (
     Action,
+    ActivityItem,
     AutonomyConfig,
+    EngagementTile,
     Escalation,
     FeedEvent,
     Gate,
@@ -31,6 +33,7 @@ from .types import (
     JuryDecision,
     JuryDim,
     Kpis,
+    Outcome,
     Overview,
     Run,
     RunStep,
@@ -166,6 +169,70 @@ def action(action_id: str, tenant_id: str | None = None) -> Action | None:
         if not row:
             return None
         return _build_action(conn, row)
+
+
+# --------------------------------------------------------------------------- #
+# Activity — EXECUTED actions (status='sent'); Action core + handoff extensions
+# --------------------------------------------------------------------------- #
+def _build_activity(conn: Any, row: dict[str, Any]) -> ActivityItem:
+    core = _build_action(conn, row)  # identical core mapping, reused verbatim
+    thinking = [str(x) for x in (row.get("thinking") or [])]
+    engagement = [
+        EngagementTile(label=str(e.get("label", "")), value=str(e.get("value", "")))
+        for e in (row.get("engagement") or [])
+        if isinstance(e, dict)
+    ]
+    return ActivityItem(
+        id=core.id,
+        tenant_id=core.tenant_id,
+        type=core.type,
+        channel=core.channel,
+        worker=core.worker,
+        target=core.target,
+        created_at=core.created_at,
+        subject=core.subject,
+        context=core.context,
+        draft=core.draft,
+        confidence=core.confidence,
+        threshold=core.threshold,
+        escalation=core.escalation,
+        jury=core.jury,
+        gates=core.gates,
+        recommendation=core.recommendation,
+        idempotency_key=core.idempotency_key,
+        status=core.status,
+        autonomy=mappers.activity_autonomy(row.get("autonomy")),
+        content=row.get("draft") or "",
+        outcome=Outcome(
+            label=row.get("outcome_label") or "", kind=row.get("outcome_kind") or ""
+        ),
+        thinking=thinking,
+        engagement=engagement,
+        thread=[],
+        comments=[],
+    )
+
+
+def activity(tenant_id: str, type_filter: str | None = None) -> list[ActivityItem]:
+    with connect() as conn:
+        sql = "SELECT * FROM actions WHERE tenant_id=%s AND status='sent'"
+        params: list[Any] = [tenant_id]
+        if type_filter:
+            sql += " AND lower(type)=%s"
+            params.append(type_filter.lower())
+        sql += " ORDER BY created_at DESC"
+        rows = conn.execute(sql, params).fetchall()
+        return [_build_activity(conn, r) for r in rows]
+
+
+def activity_item(action_id: str) -> ActivityItem | None:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM actions WHERE id=%s", (action_id,)
+        ).fetchone()
+        if not row:
+            return None
+        return _build_activity(conn, row)
 
 
 # --------------------------------------------------------------------------- #

@@ -8,6 +8,8 @@ in-memory so these run DB-free in the unit lane.
 
 from __future__ import annotations
 
+import types
+
 import pytest
 
 import actions.publish as publish
@@ -58,6 +60,26 @@ class _FakeFacebook:
         if self._exc:
             raise self._exc
         return self._result
+
+
+class _FakeInstagram:
+    """Mirrors the real IG connector: post() + reply_to_comment()."""
+
+    def __init__(self, *, post_result=None, reply_result=None, exc=None):
+        self.calls: list[tuple] = []
+        self._post, self._reply, self._exc = post_result, reply_result, exc
+
+    def post(self, image_url, caption):
+        self.calls.append(("post", image_url, caption))
+        if self._exc:
+            raise self._exc
+        return self._post
+
+    def reply_to_comment(self, comment_id, message):
+        self.calls.append(("reply", comment_id, message))
+        if self._exc:
+            raise self._exc
+        return self._reply
 
 
 @pytest.fixture
@@ -151,11 +173,39 @@ def test_facebook_success_path_marks_published(patched_store):
     assert out.deep_link == "https://www.facebook.com/1789_456"
 
 
-def test_instagram_marks_failed_ig_pending(patched_store):
-    patched_store(_pending(channel="instagram", id="act_ig"))
+def test_instagram_post_without_image_fails_honestly(patched_store, monkeypatch):
+    # IG is wired to the real connector now. A post with no public image source
+    # fails HONESTLY with a clear blocker (no network touched), never a fake send.
+    monkeypatch.delenv("DEMO_IG_IMAGE_URL", raising=False)
+    patched_store(_pending(channel="instagram", type="post", id="act_ig"))
     out = approve_and_publish("act_ig")
     assert out.status == "failed"
-    assert out.last_error == "ig connector pending"
+    assert "jpeg" in out.last_error.lower() or "image" in out.last_error.lower()
+    assert out.outcome_kind != "success"
+
+
+def test_instagram_comment_reply_sent_via_connector(patched_store):
+    patched_store(_pending(channel="instagram", type="comment", id="act_igr",
+                           target="ig_comment:123", draft="thanks! dm us to book"))
+    ig = _FakeInstagram(reply_result=types.SimpleNamespace(
+        reply_id="r_999", comment_id="ig_comment:123"))
+    out = approve_and_publish("act_igr", connectors={"instagram": ig})
+    assert out.status == "sent"
+    assert out.outcome_label == "Replied"
+    assert ig.calls == [("reply", "ig_comment:123", "thanks! dm us to book")]
+    assert out.deep_link == "r_999"
+
+
+def test_instagram_post_real_error_marks_failed(patched_store, monkeypatch):
+    # With an image set but the (real) connector raising the Graph error, the
+    # action is marked failed with the real error — never a fabricated success.
+    monkeypatch.setenv("DEMO_IG_IMAGE_URL", "https://example.com/x.jpg")
+    patched_store(_pending(channel="instagram", type="post", id="act_igp", draft="cap"))
+    ig = _FakeInstagram(exc=RuntimeError("Graph OAuthException code 190 (expired)"))
+    out = approve_and_publish("act_igp", connectors={"instagram": ig})
+    assert out.status == "failed"
+    assert "190" in out.last_error
+    assert out.outcome_kind != "success"
 
 
 def test_reject_marks_rejected_no_send(patched_store):

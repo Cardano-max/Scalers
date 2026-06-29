@@ -9,8 +9,12 @@ calls :func:`reject`. Connector selection is by the action's ``channel``:
 * ``facebook``  → :class:`connectors.fb.FacebookConnector` (enabled, real creds
   from env). The Meta page token is currently expired, so this raises the REAL
   Graph error → ``status='failed'`` + ``last_error``. **Never a fake success.**
-* ``instagram`` → no connector yet → ``status='failed'``,
-  ``last_error='ig connector pending'`` (honest, not a fake send).
+* ``instagram`` → :class:`connectors.ig.InstagramConnector` — ``post`` (the
+  2-step media→media_publish flow) for posts, ``reply_to_comment`` for comment
+  replies. The Meta token is currently expired, so a live call raises the REAL
+  Graph error → ``status='failed'`` + ``last_error``. **Never a fake publish.**
+  (An IG post additionally needs a public JPEG ``DEMO_IG_IMAGE_URL`` and, for a
+  non-test user, Meta App Review of ``instagram_content_publish``.)
 
 **Exactly-once.** A real external send (a Gmail message) is not transactional, so
 the guarantee is the durable status: if the action is already ``sent`` we return
@@ -70,15 +74,20 @@ def approve_and_publish(
     )
 
     channel = (action.channel or "").lower()
+    atype = (action.type or "").lower()
     if channel == "gmail":
         return _publish_gmail(action, connectors.get("gmail"), dsn)
     if channel == "facebook":
+        if atype == "comment":
+            return update_status(
+                action.id, "failed", dsn=dsn,
+                last_error="fb comment reply not implemented (post /{comment_id}/comments) — pending",
+            )
         return _publish_facebook(action, connectors.get("facebook"), dsn)
     if channel == "instagram":
-        # No real IG connector yet — fail honestly, never a fake publish.
-        return update_status(
-            action.id, "failed", dsn=dsn, last_error="ig connector pending"
-        )
+        if atype == "comment":
+            return _reply_instagram(action, connectors.get("instagram"), dsn)
+        return _publish_instagram(action, connectors.get("instagram"), dsn)
     return update_status(
         action.id, "failed", dsn=dsn, last_error=f"unknown channel {action.channel!r}"
     )
@@ -145,6 +154,46 @@ def _facebook_from_env(env: dict[str, str] | None = None):
         page_token=e.get("LADIES8391_FB_PAGE_TOKEN"),
         app_secret=e.get("META_APP_SECRET"),
         page_id=e.get("LADIES8391_FB_PAGE_ID") or e.get("META_PAGE_ID"),
+    )
+
+
+def _instagram_from_env():
+    from connectors.ig import InstagramConnector
+
+    return InstagramConnector.from_env(enabled=True)
+
+
+def _publish_instagram(action: ActionRow, connector: Any | None, dsn: str | None) -> ActionRow:
+    conn = connector or _instagram_from_env()
+    image_url = os.environ.get("DEMO_IG_IMAGE_URL")
+    if not image_url:
+        # IG content publishing requires a public JPEG container source. Fail
+        # honestly rather than attempt a publish that cannot carry media.
+        return update_status(
+            action.id, "failed", dsn=dsn,
+            last_error="ig post needs a public JPEG (set DEMO_IG_IMAGE_URL) + a valid re-minted token + Meta app review",
+        )
+    try:
+        result = _resolve(conn.post(image_url=image_url, caption=action.draft))
+    except Exception as exc:  # noqa: BLE001 — surface the REAL Graph error, never fake success
+        return update_status(action.id, "failed", dsn=dsn, last_error=str(exc))
+    return update_status(
+        action.id, "sent", dsn=dsn,
+        deep_link=getattr(result, "permalink", None),
+        sent_at=_now(), outcome_label="Published", outcome_kind="success",
+    )
+
+
+def _reply_instagram(action: ActionRow, connector: Any | None, dsn: str | None) -> ActionRow:
+    conn = connector or _instagram_from_env()
+    try:
+        result = _resolve(conn.reply_to_comment(comment_id=action.target or "", message=action.draft))
+    except Exception as exc:  # noqa: BLE001 — surface the REAL Graph error, never fake success
+        return update_status(action.id, "failed", dsn=dsn, last_error=str(exc))
+    return update_status(
+        action.id, "sent", dsn=dsn,
+        deep_link=getattr(result, "permalink", None) or getattr(result, "reply_id", None),
+        sent_at=_now(), outcome_label="Replied", outcome_kind="success",
     )
 
 

@@ -100,6 +100,67 @@ class Action:
 
 
 @strawberry.type
+class Outcome:
+    label: str
+    kind: str
+
+
+@strawberry.type
+class EngagementTile:
+    label: str
+    value: str
+
+
+@strawberry.type
+class ThreadMessage:
+    role: str
+    name: Optional[str]
+    text: str
+
+
+@strawberry.type
+class CommentItem:
+    name: str
+    text: str
+    auto_replied: bool
+
+
+@strawberry.type
+class ActivityItem:
+    """An EXECUTED action (status='sent') for the Activity screen — the Action
+    core plus the handoff reasoning/engagement extensions. Mirrors the console's
+    ``ActivityItem`` model field-for-field."""
+
+    # --- Action core (identical mapping to Action) ---
+    id: strawberry.ID
+    tenant_id: str
+    type: str
+    channel: str
+    worker: str
+    target: str
+    created_at: str
+    subject: Optional[str]
+    context: Optional[str]
+    draft: str
+    confidence: float
+    threshold: float
+    escalation: Escalation
+    jury: JuryDecision
+    gates: list[Gate]
+    recommendation: Optional[str]
+    idempotency_key: str
+    status: str
+    # --- Activity extensions ---
+    autonomy: str
+    content: str
+    outcome: Outcome
+    thinking: list[str]
+    engagement: list[EngagementTile]
+    thread: list[ThreadMessage]
+    comments: list[CommentItem]
+
+
+@strawberry.type
 class RunStep:
     at: str
     text: str

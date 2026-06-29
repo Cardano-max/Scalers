@@ -20,6 +20,7 @@ from . import repo
 from .types import (
     Action,
     ActionFilter,
+    ActivityItem,
     AutonomyConfig,
     AutonomyMode,
     Channel,
@@ -97,6 +98,17 @@ class Query:
     @strawberry.field
     async def system_health(self, tenant_id: strawberry.ID) -> SystemHealth:
         return await asyncio.to_thread(repo.system_health, str(tenant_id))
+
+    @strawberry.field
+    async def activity(
+        self, tenant_id: strawberry.ID, filter: Optional[ActionFilter] = None
+    ) -> list[ActivityItem]:
+        type_filter = filter.type if filter else None
+        return await asyncio.to_thread(repo.activity, str(tenant_id), type_filter)
+
+    @strawberry.field
+    async def activity_item(self, id: strawberry.ID) -> Optional[ActivityItem]:
+        return await asyncio.to_thread(repo.activity_item, str(id))
 
 
 @strawberry.type
