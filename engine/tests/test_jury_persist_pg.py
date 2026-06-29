@@ -59,8 +59,8 @@ def test_real_jury_rows_persist_reliability_weight_and_hard_fail(store, dsn):
 
     with psycopg.connect(dsn, row_factory=psycopg.rows.dict_row) as conn:
         jury = conn.execute(
-            "SELECT judge, reliability_weight, hard_fail FROM autonomy_jury "
-            "WHERE decision_id='d1' ORDER BY judge"
+            "SELECT judge, reliability_weight, voice_hard_fail, safety_hard_fail, appr_hard_fail "
+            "FROM autonomy_jury WHERE decision_id='d1' ORDER BY judge"
         ).fetchall()
         dec = conn.execute(
             "SELECT self_consistency FROM autonomy_decisions WHERE decision_id='d1'"
@@ -68,8 +68,10 @@ def test_real_jury_rows_persist_reliability_weight_and_hard_fail(store, dsn):
 
     assert len(jury) == 3
     by_judge = {r["judge"]: r for r in jury}
-    assert by_judge["opus-strict"]["hard_fail"] is True        # the per-judge floor flag
-    assert by_judge["opus-charitable"]["hard_fail"] is False
+    # opus-strict hard-failed appropriateness; the per-dimension floor flag persists.
+    assert by_judge["opus-strict"]["appr_hard_fail"] is True
+    assert by_judge["opus-strict"]["voice_hard_fail"] is False
+    assert by_judge["opus-charitable"]["appr_hard_fail"] is False
     assert all(r["reliability_weight"] == 1.0 for r in jury)    # real weights, not NULL
     # self_consistency column exists + is writable (None until 4jx.3 computes it).
     assert "self_consistency" in dec

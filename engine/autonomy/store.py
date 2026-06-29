@@ -189,11 +189,12 @@ class PostgresDecisionStore:
                 conn.execute(
                     "INSERT INTO autonomy_jury "
                     "(decision_id, judge, family, voice, safety, appr,"
-                    " reliability_weight, hard_fail) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                    " reliability_weight, voice_hard_fail, safety_hard_fail, appr_hard_fail) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                     (
                         record.decision_id, v.judge, v.family, v.voice, v.safety, v.appr,
-                        v.reliability_weight, v.hard_fail,
+                        v.reliability_weight,
+                        v.hard_fail_for("voice"), v.hard_fail_for("safety"), v.hard_fail_for("appr"),
                     ),
                 )
 
@@ -206,7 +207,7 @@ class PostgresDecisionStore:
                 return None
             jury = conn.execute(
                 "SELECT judge, family, voice, safety, appr,"
-                " reliability_weight, hard_fail FROM autonomy_jury "
+                " reliability_weight FROM autonomy_jury "
                 "WHERE decision_id=%s ORDER BY judge",
                 (decision_id,),
             ).fetchall()
