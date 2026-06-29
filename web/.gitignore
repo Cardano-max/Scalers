@@ -1,0 +1,17 @@
+/node_modules
+/.next
+/out
+/coverage
+next-env.d.ts
+*.tsbuildinfo
+
+# local env (never commit real secrets)
+.env
+.env.local
+.env*.local
+
+# The repo-root .gitignore ignores any dir named `data/`. Our typed data layer
+# legitimately lives at lib/data — re-include it (and its contents) here so it
+# is NOT silently dropped from commits.
+!lib/data/
+!lib/data/**

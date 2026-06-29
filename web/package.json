@@ -1,0 +1,36 @@
+{
+  "name": "scalers-operator-console",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Scalers Operator Console — Next.js + CopilotKit/AG-UI app shell + data layer bound to the kkg.4 GraphQL+SSE contract (bead CustomerAcq-45v.1).",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@copilotkit/react-core": "1.8.14",
+    "@copilotkit/react-ui": "1.8.14",
+    "graphql": "16.9.0",
+    "next": "14.2.15",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "urql": "4.2.1"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "6.5.0",
+    "@testing-library/react": "16.0.1",
+    "@testing-library/user-event": "14.5.2",
+    "@types/node": "20.16.11",
+    "@types/react": "18.3.11",
+    "@types/react-dom": "18.3.0",
+    "@vitejs/plugin-react": "4.3.2",
+    "jsdom": "25.0.1",
+    "typescript": "5.6.3",
+    "vitest": "2.1.3"
+  }
+}
