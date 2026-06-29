@@ -357,7 +357,7 @@ function DetailPane({
   onSaveEdit: () => void;
 }) {
   return (
-    <div style={{ padding: 'var(--pad-section)', maxWidth: 760, display: 'grid', gap: 18 }}>
+    <div style={{ padding: 'var(--pad-section)', maxWidth: 1100, marginInline: 'auto', display: 'grid', gap: 18 }}>
       {/* header */}
       <div style={{ display: 'grid', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
