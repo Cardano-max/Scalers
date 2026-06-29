@@ -28,6 +28,7 @@ dependencies = [
     # durable checkpointer/run-store (the [postgres] extra), so the extra does
     # not re-declare psycopg.
     "psycopg[binary,pool]>=3.2",
+    "strawberry-graphql[fastapi]>=0.320.0",
 ]
 
 [project.optional-dependencies]

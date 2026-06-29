@@ -14,6 +14,7 @@ import type { DataAdapter } from './adapter';
 import type { SSEClient, SSEHandlers, SSEStatus } from './sse';
 import type {
   Action,
+  ActivityItem,
   AutonomyConfig,
   AutonomyMode,
   Channel,
@@ -118,6 +119,196 @@ const REVIEW_QUEUE: Action[] = [
       { label: 'Rate cap', ok: true },
       { label: 'Pricing claim', ok: false },
       { label: 'Media format', ok: true },
+    ],
+  }),
+];
+
+/**
+ * Executed-action seed for the Activity screen. These are HISTORICAL completed
+ * actions — the reasoning trace, engagement, outcome, and thread/comments the
+ * `ActivityItem` model carries. The auto-executed comment reply mirrors the
+ * Overview "58 auto · 6 review" comments KPI; outreach + posts went out as
+ * human-approved ("You approved"), consistent with the 439 HOLD on live flips.
+ */
+function activityItem(
+  partial: Partial<ActivityItem> &
+    Pick<
+      ActivityItem,
+      | 'id'
+      | 'type'
+      | 'channel'
+      | 'worker'
+      | 'target'
+      | 'content'
+      | 'confidence'
+      | 'autonomy'
+      | 'outcome'
+      | 'thinking'
+      | 'engagement'
+      | 'idempotencyKey'
+    >,
+): ActivityItem {
+  const confidence = partial.confidence;
+  const threshold = partial.threshold ?? 0.85;
+  return {
+    tenantId: TENANT_ID,
+    createdAt: '2026-06-29T13:20:00Z',
+    subject: null,
+    context: null,
+    recommendation: null,
+    status: 'SENT',
+    draft: partial.content,
+    threshold,
+    // Activity items already cleared the gate path; escalation is unused by the
+    // Activity screen but required by the Action core — set a benign cleared value.
+    escalation: { kind: 'CONFIDENCE', label: 'Cleared' },
+    jury: {
+      confidence,
+      threshold,
+      agreement: 'unanimous',
+      dimensions: [
+        { label: 'Brand voice', score: 0.9 },
+        { label: 'Safety', score: 0.97 },
+        { label: 'Appropriateness', score: 0.88 },
+      ],
+    },
+    gates: [
+      { label: 'Suppression', ok: true },
+      { label: 'Rate cap', ok: true },
+      { label: 'PII redaction', ok: true },
+      { label: 'Tenant policy', ok: true },
+    ],
+    ...partial,
+  };
+}
+
+const ACTIVITY: ActivityItem[] = [
+  activityItem({
+    id: 'evt_91c4d',
+    type: 'OUTREACH',
+    channel: 'GMAIL',
+    worker: 'OUTREACH',
+    autonomy: 'APPROVE_FIRST',
+    target: 'Marina Bay Dental · Dr. Priya Anand, Owner',
+    idempotencyKey: 'nw:outreach:marina-bay-dental:d4417',
+    createdAt: '2026-06-29T11:42:00Z',
+    subject: 'A quieter, more efficient HVAC for Marina Bay Dental',
+    content:
+      'Hi Dr. Anand — patient comfort is everything in a dental practice, and an aging rooftop unit can make the waiting room uneven and noisy. We help East Bay practices cut runtime cost ~18% with a right-sized, quiet system and a maintenance plan that keeps it that way. Open to a 15-minute look at your current setup next week?',
+    confidence: 0.88,
+    threshold: 0.85,
+    outcome: { label: 'Sent', kind: 'success' },
+    engagement: [
+      { label: 'Opened', value: '3×' },
+      { label: 'Replied', value: '18m' },
+      { label: 'Sentiment', value: 'Positive' },
+    ],
+    thinking: [
+      'Ingest silver.contacts → Marina Bay Dental (verified owner, East Bay).',
+      'HVAC pack voice: lead with patient comfort + quiet operation, not specs.',
+      'Personalized on practice type (dental) + regional climate (East Bay summer).',
+      'Jury 0.88 ≥ 0.85 threshold, gates clear → drafted for operator sign-off.',
+      'Operator approved → Mailbox MCP users.messages.send (idempotency-guarded).',
+    ],
+    thread: [
+      {
+        role: 'out',
+        name: 'Northwind · agent',
+        text: 'Hi Dr. Anand — open to a 15-minute look at your current HVAC setup next week?',
+      },
+      {
+        role: 'in',
+        name: 'Dr. Priya Anand',
+        text: 'Yes — the waiting room has been a problem all summer. Thursday afternoon?',
+      },
+      {
+        role: 'out',
+        name: 'Northwind · agent',
+        text: 'Thursday works. I’ll send a calendar hold for 2pm with our service lead.',
+      },
+    ],
+  }),
+  activityItem({
+    id: 'evt_77a0b',
+    type: 'COMMENT',
+    channel: 'INSTAGRAM',
+    worker: 'RESPONDER',
+    autonomy: 'AUTO',
+    target: '@hvac_homeowner · comment on Reel “Summer AC tune-up”',
+    idempotencyKey: 'nw:comment:ig:hvac-homeowner:r88',
+    createdAt: '2026-06-29T12:58:00Z',
+    context: 'How often should I actually change my filter? Getting mixed advice online.',
+    content:
+      'Great question! For most homes a 1-inch filter every 30–60 days, or every 90 days for 4–5 inch media filters. Pets or allergies? Lean toward the shorter end. A clean filter is the cheapest way to protect your system this summer. 🔧',
+    confidence: 0.93,
+    threshold: 0.9,
+    outcome: { label: 'Replied', kind: 'teal' },
+    engagement: [
+      { label: 'Likes', value: '12' },
+      { label: 'Reply', value: 'auto' },
+      { label: 'Sentiment', value: 'Positive' },
+    ],
+    thinking: [
+      'Webhook → comment received on “Summer AC tune-up” Reel.',
+      'Classifier: intent=question, topic=maintenance, no pricing/medical claim.',
+      'Responder drafted from HVAC pack FAQ (filter cadence) + friendly voice.',
+      'Jury 0.93 ≥ 0.90 IG threshold, safety clear, all gates pass → auto-replied.',
+    ],
+    thread: [
+      {
+        role: 'in',
+        name: '@hvac_homeowner',
+        text: 'How often should I actually change my filter? Getting mixed advice online.',
+      },
+      {
+        role: 'out',
+        name: 'Northwind · agent',
+        text: 'Great question! 1-inch filters every 30–60 days, 4–5 inch media every 90. Pets/allergies → shorter end. 🔧',
+      },
+    ],
+  }),
+  activityItem({
+    id: 'evt_4b2e8',
+    type: 'POST',
+    channel: 'FACEBOOK',
+    worker: 'PUBLISHER',
+    autonomy: 'APPROVE_FIRST',
+    target: 'Published post · “Beat the heat: 5 AC myths”',
+    idempotencyKey: 'nw:post:fb:ac-myths:p12',
+    createdAt: '2026-06-29T09:15:00Z',
+    content:
+      'Beat the heat: 5 AC myths, busted. Myth #1: bigger = better. Oversizing short-cycles your system, wastes energy, and leaves rooms humid. Right-sizing (a real Manual J load calc) beats raw tonnage every time. Swipe for myths #2–5. ☀️❄️',
+    confidence: 0.91,
+    threshold: 0.88,
+    outcome: { label: 'Published', kind: 'success' },
+    engagement: [
+      { label: 'Likes', value: '142' },
+      { label: 'Comments', value: '11' },
+      { label: 'Reach', value: '3.4k' },
+      { label: 'Saves', value: '27' },
+    ],
+    thinking: [
+      'Strategist scheduled an educational “myth-busting” post (HVAC pack calendar).',
+      'Copywriter drafted; Publisher checked Meta media/format + pricing-claim gate.',
+      'Jury 0.91 ≥ 0.88 FB threshold; operator approved the publish.',
+      'Meta MCP published; engagement agent now watching the comment thread.',
+    ],
+    comments: [
+      {
+        name: 'Dana R.',
+        text: 'So a bigger unit isn’t better? My neighbor swears by his huge one.',
+        autoReplied: true,
+      },
+      {
+        name: 'Marcus T.',
+        text: 'What’s a Manual J load calc and do you do them?',
+        autoReplied: true,
+      },
+      {
+        name: 'Priya S.',
+        text: 'Saved this — our upstairs is always humid in July.',
+        autoReplied: false,
+      },
     ],
   }),
 ];
@@ -241,6 +432,12 @@ export class MockAdapter implements DataAdapter {
   }
   async getAction(id: string) {
     return REVIEW_QUEUE.find((a) => a.id === id) ?? null;
+  }
+  async getActivity(_tenantId: string, filter?: ActionFilter) {
+    return filterByType(ACTIVITY, filter);
+  }
+  async getActivityItem(id: string) {
+    return ACTIVITY.find((a) => a.id === id) ?? null;
   }
   async getRuns(_tenantId: string, filter?: RunFilter) {
     if (!filter || !filter.status) return RUNS;

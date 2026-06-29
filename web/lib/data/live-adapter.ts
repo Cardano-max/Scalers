@@ -11,6 +11,7 @@ import * as Q from './queries';
 import type { DataAdapter } from './adapter';
 import type {
   Action,
+  ActivityItem,
   AutonomyConfig,
   AutonomyMode,
   Channel,
@@ -73,6 +74,18 @@ export class LiveAdapter implements DataAdapter {
     return this.query<{ action: Action | null }>(Q.ACTION_QUERY, { id }).then(
       (d) => d.action,
     );
+  }
+  getActivity(tenantId: string, filter?: ActionFilter) {
+    return this.query<{ activity: ActivityItem[] }>(Q.ACTIVITY_QUERY, {
+      tenantId,
+      filter: filter ?? null,
+    }).then((d) => d.activity);
+  }
+  getActivityItem(id: string) {
+    return this.query<{ activityItem: ActivityItem | null }>(
+      Q.ACTIVITY_ITEM_QUERY,
+      { id },
+    ).then((d) => d.activityItem);
   }
   getRuns(tenantId: string, filter?: RunFilter) {
     return this.query<{ runs: Run[] }>(Q.RUNS_QUERY, {

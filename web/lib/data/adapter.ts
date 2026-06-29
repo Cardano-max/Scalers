@@ -8,6 +8,7 @@
  */
 import type {
   Action,
+  ActivityItem,
   AutonomyConfig,
   AutonomyMode,
   Channel,
@@ -33,6 +34,16 @@ export interface DataAdapter {
   getOverview(tenantId: string): Promise<Overview>;
   getReviewQueue(tenantId: string, filter?: ActionFilter): Promise<Action[]>;
   getAction(id: string): Promise<Action | null>;
+  /**
+   * Executed (completed) actions for the Activity screen — the reasoning trace,
+   * engagement, outcome, and thread/comments deep-links resolved alongside the
+   * Action core. Same `ActionFilter` (by type) as the review queue.
+   */
+  getActivity(
+    tenantId: string,
+    filter?: ActionFilter,
+  ): Promise<ActivityItem[]>;
+  getActivityItem(id: string): Promise<ActivityItem | null>;
   getRuns(tenantId: string, filter?: RunFilter): Promise<Run[]>;
   getRun(id: string): Promise<Run | null>;
   getFeed(

@@ -14,6 +14,18 @@ const ACTION_FIELDS = `
   recommendation idempotencyKey status
 `;
 
+// Activity (executed actions) = the Action core + the handoff reasoning/engagement
+// extensions. Mirrors the `ActivityItem` model field-for-field.
+const ACTIVITY_FIELDS = `
+  ${ACTION_FIELDS}
+  autonomy content
+  outcome { label kind }
+  thinking
+  engagement { label value }
+  thread { role name text }
+  comments { name text autoReplied }
+`;
+
 const RUN_FIELDS = `
   id tenantId type trigger status startedAt duration autoCount reviewCount
   retries idempotencyKey channels trajectory { at text state } note
@@ -52,6 +64,16 @@ export const REVIEW_QUEUE_QUERY = `
 
 export const ACTION_QUERY = `
   query Action($id: ID!) { action(id: $id) { ${ACTION_FIELDS} } }
+`;
+
+export const ACTIVITY_QUERY = `
+  query Activity($tenantId: ID!, $filter: ActionFilter) {
+    activity(tenantId: $tenantId, filter: $filter) { ${ACTIVITY_FIELDS} }
+  }
+`;
+
+export const ACTIVITY_ITEM_QUERY = `
+  query ActivityItem($id: ID!) { activityItem(id: $id) { ${ACTIVITY_FIELDS} } }
 `;
 
 export const RUNS_QUERY = `

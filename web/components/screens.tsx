@@ -10,6 +10,8 @@
 import type { ComponentType } from 'react';
 import type { ScreenId } from '@/state/console-store';
 import { SmokeScreen } from './SmokeScreen';
+import { ReviewScreen } from './ReviewScreen';
+import { ActivityScreen } from './ActivityScreen';
 import { EmptyState } from './states';
 
 function pending(name: string, bead: string): ComponentType {
@@ -24,8 +26,8 @@ function pending(name: string, bead: string): ComponentType {
 
 export const SCREENS: Record<ScreenId, ComponentType> = {
   overview: SmokeScreen,
-  review: pending('Review queue', '45v.3'),
-  activity: pending('Activity', '45v.4'),
+  review: ReviewScreen,
+  activity: ActivityScreen,
   feed: pending('Live feed', '45v.7'),
   runs: pending('Runs', '45v.5'),
   command: pending('Command', '45v.9'),

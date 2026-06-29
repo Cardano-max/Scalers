@@ -28,6 +28,13 @@ from harness.state import AutonomyMode, GraphState, RouteDecision
 
 app = FastAPI(title="Scalers Growth Engine — portal", version="0.1.0")
 
+# Mount the operator-console obs-API (OBS-04): GraphQL at POST /graphql, SSE at
+# GET /sse/stream, CORS for the Next.js console on :3000. Kept in its own package
+# (engine/obsapi) so the thin portal above stays focused on the engine ingress.
+from obsapi import mount_obsapi  # noqa: E402
+
+mount_obsapi(app)
+
 
 @app.get("/metrics")
 def metrics_endpoint() -> Response:
