@@ -444,6 +444,7 @@ function DetailPane({
 function AutonomyCard({ action }: { action: Action }) {
   const { confidence, threshold, jury } = action;
   const [expandedDims, setExpandedDims] = useState<Set<string>>(new Set());
+  const [selectedJudge, setSelectedJudge] = useState<string | null>(null);
 
   const toggleDimension = (label: string) => {
     const next = new Set(expandedDims);
@@ -453,6 +454,12 @@ function AutonomyCard({ action }: { action: Action }) {
       next.add(label);
     }
     setExpandedDims(next);
+  };
+
+  const getJudgeDetails = (judgeName: string) => {
+    // Find judge in full judges list to get full reasoning
+    const judge = action.judges?.find((j) => j.name === judgeName);
+    return judge || null;
   };
 
   return (
@@ -563,14 +570,20 @@ function AutonomyCard({ action }: { action: Action }) {
                   {d.jurorBreakdown.map((juror) => {
                     const jurorPassed = juror.vote === 'pass';
                     return (
-                      <div
+                      <button
                         key={juror.judge}
+                        type="button"
+                        onClick={() => setSelectedJudge(juror.judge)}
                         style={{
+                          all: 'unset',
                           display: 'flex',
                           alignItems: 'center',
                           gap: 8,
                           fontSize: 12,
                           color: 'var(--text-secondary)',
+                          cursor: 'pointer',
+                          padding: '4px 0',
+                          borderRadius: 4,
                         }}
                       >
                         <span style={{ flex: 1, minWidth: 0 }}>{juror.judge}</span>
@@ -590,7 +603,7 @@ function AutonomyCard({ action }: { action: Action }) {
                         <span className="mono" style={{ fontSize: 11, color: 'var(--text-secondary)', flex: '0 0 auto' }}>
                           {fmt(juror.score)}
                         </span>
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -610,6 +623,15 @@ function AutonomyCard({ action }: { action: Action }) {
           </Chip>
         ))}
       </div>
+
+      {/* Judge Inspector Modal */}
+      {selectedJudge ? (
+        <JudgeInspectorModal
+          judge={getJudgeDetails(selectedJudge)}
+          isSeeded={action.isSeeded ?? false}
+          onClose={() => setSelectedJudge(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -694,6 +716,141 @@ function Toast({ toast }: { toast: ToastState }) {
       <Dot color={tone.dot} />
       <span>{toast.text}</span>
     </div>
+  );
+}
+
+function JudgeInspectorModal({
+  judge,
+  isSeeded,
+  onClose,
+}: {
+  judge: { name: string; score: number; vote: string; reasoning: string } | null;
+  isSeeded: boolean;
+  onClose: () => void;
+}) {
+  if (!judge) return null;
+
+  return (
+    <>
+      {/* overlay */}
+      <div
+        role="presentation"
+        onClick={onClose}
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.4)',
+          zIndex: 999,
+        }}
+      />
+      {/* modal */}
+      <div
+        style={{
+          position: 'fixed',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          background: 'var(--surface)',
+          border: '1px solid var(--hairline)',
+          borderRadius: 'var(--radius-card)',
+          boxShadow: 'var(--shadow-card)',
+          padding: 'var(--pad-card)',
+          maxWidth: 500,
+          width: 'calc(100% - 32px)',
+          maxHeight: '80vh',
+          overflow: 'auto',
+          zIndex: 1000,
+          display: 'grid',
+          gap: 16,
+        }}
+      >
+        {/* header */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 16, fontWeight: 600, flex: 1 }}>{judge.name}</span>
+          {isSeeded && (
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                color: '#5D5D5D',
+                background: '#F0F0F0',
+                padding: '3px 8px',
+                borderRadius: 4,
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px',
+              }}
+            >
+              [DEMO]
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              fontSize: 18,
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+              padding: '0',
+              display: 'grid',
+              placeItems: 'center',
+              width: 24,
+              height: 24,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* verdict badge */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              color: judge.vote === 'pass' ? '#157F4B' : '#B42318',
+              background: judge.vote === 'pass' ? '#E6F4EC' : '#FBE9E6',
+              padding: '4px 10px',
+              borderRadius: 5,
+            }}
+          >
+            {judge.vote === 'pass' ? '✓ Pass' : '✗ Fail'}
+          </span>
+          <span className="mono" style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600 }}>
+            {fmt(judge.score)}
+          </span>
+        </div>
+
+        {/* reasoning section */}
+        <div style={{ display: 'grid', gap: 8 }}>
+          <span className="label" style={{ fontSize: 10 }}>Reasoning</span>
+          <div style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--ink)' }}>
+            {judge.reasoning}
+          </div>
+        </div>
+
+        {/* seeded demo data note */}
+        {isSeeded && (
+          <div
+            style={{
+              fontSize: 12,
+              color: 'var(--text-secondary)',
+              background: '#F9F9F9',
+              border: '1px solid var(--hairline-light)',
+              borderRadius: 'var(--radius-button)',
+              padding: '10px 12px',
+              marginTop: 4,
+            }}
+          >
+            ⓘ Seeded demo data — not a live jury run
+          </div>
+        )}
+      </div>
+    </>
   );
 }
 

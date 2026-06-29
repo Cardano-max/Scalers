@@ -111,6 +111,8 @@ class Action:
     recommendation: Optional[str]
     idempotency_key: str
     status: str
+    judges: list[Judge] = field(default_factory=list)
+    is_seeded: bool = False
 
 
 @strawberry.type

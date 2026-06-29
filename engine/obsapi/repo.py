@@ -58,10 +58,12 @@ IG_PUBLISH_CAP = 25
 # Action + jury-card assembly
 # --------------------------------------------------------------------------- #
 def _jury_for(conn: Any, decision_id: str) -> list[dict[str, Any]]:
-    # Only the columns guaranteed across both jury schema versions.
+    # judge_rationale + *_hard_fail are added by additive migration (ADD COLUMN
+    # IF NOT EXISTS); NULL on pre-migration rows, so the read path falls back safely.
     return conn.execute(
-        "SELECT judge, family, voice, safety, appr FROM autonomy_jury "
-        "WHERE decision_id=%s ORDER BY judge",
+        "SELECT judge, family, voice, safety, appr, "
+        "voice_hard_fail, safety_hard_fail, appr_hard_fail, judge_rationale "
+        "FROM autonomy_jury WHERE decision_id=%s ORDER BY judge",
         (decision_id,),
     ).fetchall()
 
@@ -367,6 +369,13 @@ def _build_action(conn: Any, row: dict[str, Any]) -> Action:
     esc_kind = row.get("esc_kind") or (decision.get("esc_kind") if decision else None)
     esc_label = row.get("esc_label") or (decision.get("esc_label") if decision else None)
 
+    # Build judges list with real rationale (same logic as ActivityItem)
+    action_judges: list[Judge] = []
+    action_is_seeded: bool = False
+    if row.get("decision_id"):
+        action_judges, _ = _build_judges_from_jury(conn, row["decision_id"])
+        action_is_seeded = (decision.get("run_id", "").startswith("demo-") if decision else False)
+
     return Action(
         id=row["id"],
         tenant_id=row["tenant_id"],
@@ -395,6 +404,8 @@ def _build_action(conn: Any, row: dict[str, Any]) -> Action:
         recommendation=row.get("recommend"),
         idempotency_key=row.get("idempotency_key") or "",
         status=mappers.status(row.get("status")),
+        judges=action_judges,
+        is_seeded=action_is_seeded,
     )
 
 

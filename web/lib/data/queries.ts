@@ -12,7 +12,11 @@ const ACTION_FIELDS = `
   jury { confidence threshold agreement dimensions { label score verdict threshold jurorBreakdown { judge score vote } } }
   gates { label ok }
   recommendation idempotencyKey status
+  judges { name score vote reasoning }
 `;
+// isSeeded lives only on the Action type (review queue / action detail), NOT on
+// ActivityItem — keep it out of the shared fragment so the Activity query (which
+// embeds ACTION_FIELDS) doesn't request a field ActivityItem lacks.
 
 // Activity (executed actions) = the Action core + the handoff reasoning/engagement
 // extensions. Mirrors the `ActivityItem` model field-for-field.
@@ -63,12 +67,12 @@ export const OVERVIEW_QUERY = `
 
 export const REVIEW_QUEUE_QUERY = `
   query ReviewQueue($tenantId: ID!, $filter: ActionFilter) {
-    reviewQueue(tenantId: $tenantId, filter: $filter) { ${ACTION_FIELDS} }
+    reviewQueue(tenantId: $tenantId, filter: $filter) { ${ACTION_FIELDS} isSeeded }
   }
 `;
 
 export const ACTION_QUERY = `
-  query Action($id: ID!) { action(id: $id) { ${ACTION_FIELDS} } }
+  query Action($id: ID!) { action(id: $id) { ${ACTION_FIELDS} isSeeded } }
 `;
 
 export const ACTIVITY_QUERY = `

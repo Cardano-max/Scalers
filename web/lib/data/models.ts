@@ -148,6 +148,8 @@ export interface Action {
   recommendation?: string | null;
   idempotencyKey: string;
   status: ActionStatus;
+  judges?: Judge[];
+  isSeeded?: boolean;
 }
 
 export interface RunStep {
