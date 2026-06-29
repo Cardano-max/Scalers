@@ -110,7 +110,9 @@ class PostgresDecisionStore:
                     safety      DOUBLE PRECISION NOT NULL,
                     appr        DOUBLE PRECISION NOT NULL,
                     reliability_weight DOUBLE PRECISION,
-                    hard_fail   BOOLEAN NOT NULL DEFAULT false,
+                    voice_hard_fail  BOOLEAN NOT NULL DEFAULT false,
+                    safety_hard_fail BOOLEAN NOT NULL DEFAULT false,
+                    appr_hard_fail   BOOLEAN NOT NULL DEFAULT false,
                     PRIMARY KEY (decision_id, judge)
                 );
 
@@ -140,8 +142,16 @@ class PostgresDecisionStore:
                     ADD COLUMN IF NOT EXISTS self_consistency DOUBLE PRECISION;
                 ALTER TABLE autonomy_jury
                     ADD COLUMN IF NOT EXISTS reliability_weight DOUBLE PRECISION;
+                -- Per-dimension hard-fail (independent dimensions). Drop the
+                -- earlier single-bool (never written; eng4 reconcile) and add one
+                -- flag per dimension to match voice/safety/appr scores.
+                ALTER TABLE autonomy_jury DROP COLUMN IF EXISTS hard_fail;
                 ALTER TABLE autonomy_jury
-                    ADD COLUMN IF NOT EXISTS hard_fail BOOLEAN NOT NULL DEFAULT false;
+                    ADD COLUMN IF NOT EXISTS voice_hard_fail BOOLEAN NOT NULL DEFAULT false;
+                ALTER TABLE autonomy_jury
+                    ADD COLUMN IF NOT EXISTS safety_hard_fail BOOLEAN NOT NULL DEFAULT false;
+                ALTER TABLE autonomy_jury
+                    ADD COLUMN IF NOT EXISTS appr_hard_fail BOOLEAN NOT NULL DEFAULT false;
                 """
             )
 
