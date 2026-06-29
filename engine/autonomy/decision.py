@@ -50,6 +50,7 @@ class EscKind(str, Enum):
     SAFETY = "safety"                   # safety classifier veto/flag
     SPLIT = "split"                     # jury disagreement (low agreement)
     DEGRADED = "degraded"              # fewer judges responded than expected
+    HELD = "held"                       # bead-439 autonomy HOLD; channel not lifted (Phase-5 / 4jx.8)
     BELOW_THRESHOLD = "below_threshold"  # pooled confidence under the auto bar
     MODE = "mode"                       # channel dial forces approve-first
 
