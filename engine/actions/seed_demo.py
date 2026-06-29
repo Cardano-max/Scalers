@@ -250,6 +250,8 @@ def seed_demo_actions(
             idempotency_key=idem,
             run_id=run_id,
             dsn=dsn,
+            is_seeded=True,  # Slice-5: PERSIST the seed marker so the console
+            # badges these rows and they can never masquerade as a live action.
         )
         action_ids.append(action_id)
 

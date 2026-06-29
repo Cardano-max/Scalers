@@ -45,6 +45,18 @@ CREATE TABLE IF NOT EXISTS actions (
         status IN ('pending','approved','sending','sent','rejected','failed'))
 );
 
+-- is_seeded (Slice-5 honesty gate): demo/seed rows are PERSISTED as seeded so
+-- nothing fabricated can masquerade as a live action. The live decision path
+-- (contentrun / engagement) leaves this false; actions.seed_demo sets it true;
+-- the console badges true rows as "Seeded demo data — not a live jury run".
+-- Additive + idempotent so it is safe to (re)apply over an existing table.
+ALTER TABLE actions ADD COLUMN IF NOT EXISTS is_seeded BOOLEAN NOT NULL DEFAULT false;
+
+-- Backfill legacy rows: a 'demo-…' run_id is seed_demo's signature, so mark those
+-- seeded. Bounded to the demo prefix — it never re-labels a live (non-demo) row.
+UPDATE actions SET is_seeded = true WHERE run_id LIKE 'demo-%' AND is_seeded = false;
+
 CREATE INDEX IF NOT EXISTS actions_tenant_status_idx ON actions (tenant_id, status);
 CREATE INDEX IF NOT EXISTS actions_decision_idx      ON actions (decision_id);
 CREATE INDEX IF NOT EXISTS actions_created_idx       ON actions (created_at);
+CREATE INDEX IF NOT EXISTS actions_seeded_idx        ON actions (is_seeded);

@@ -81,6 +81,27 @@ def test_list_filters_by_status():
     assert {r.id for r in store.list_actions(tenant)} == {a_pending, a_other}
 
 
+def test_is_seeded_defaults_false_and_persists_true():
+    # Slice-5 honesty gate: a live row is is_seeded=false; a seed row persists true.
+    tenant = f"t-{uuid.uuid4().hex[:8]}"
+    live = _record(tenant)
+    seeded = _record(tenant, is_seeded=True)
+
+    assert store.get_action(live).is_seeded is False
+    assert store.get_action(seeded).is_seeded is True
+
+    # The persisted column is queryable directly (the verify-gate query shape).
+    import psycopg
+
+    with psycopg.connect(store._dsn()) as conn:
+        (n,) = conn.execute(
+            "SELECT count(*) FROM actions WHERE tenant_id=%s "
+            "AND COALESCE(is_seeded,false)=true AND status IN ('sent','approved','pending')",
+            (tenant,),
+        ).fetchone()
+    assert n == 1  # only the explicitly-seeded row counts; the live row does not
+
+
 def test_update_status_sets_fields_and_rejects_unknown():
     tenant = f"t-{uuid.uuid4().hex[:8]}"
     aid = _record(tenant)

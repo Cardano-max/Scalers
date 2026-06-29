@@ -208,6 +208,45 @@ def test_instagram_post_real_error_marks_failed(patched_store, monkeypatch):
     assert out.outcome_kind != "success"
 
 
+# ── real-only: a mock connector can never live-send (Slice-5) ────────────────────
+
+
+class _MockGmail:
+    """A connector that declares itself a mock (``is_mock = True``) like
+    ``sideeffects.posting.MockPostingConnector``. It must be REFUSED on the live
+    path before any send happens."""
+
+    is_mock = True
+
+    def __init__(self):
+        self.calls: list[tuple] = []
+
+    def send(self, to, subject, body, *, from_addr=None):
+        self.calls.append((to, subject, body))  # must never be reached
+        return types.SimpleNamespace(deep_link="dl")
+
+
+def test_live_path_refuses_mock_connector_never_fake_send(patched_store):
+    patched_store(_pending())
+    mock = _MockGmail()
+    out = approve_and_publish("act_test1", connectors={"gmail": mock})
+
+    assert out.status == "failed"
+    assert mock.calls == []  # the send was refused BEFORE any external effect
+    assert "mock" in out.last_error.lower()
+    assert out.outcome_kind != "success"
+
+
+def test_real_test_fake_is_not_treated_as_mock(patched_store):
+    # The unit-test fakes do NOT set is_mock, so the guard leaves them alone and
+    # the normal send path runs (regression guard for the is_mock check).
+    patched_store(_pending())
+    gmail = _FakeGmail(result=GmailSendResult(message_id="m1", deep_link="dl"))
+    out = approve_and_publish("act_test1", connectors={"gmail": gmail})
+    assert out.status == "sent"
+    assert len(gmail.calls) == 1
+
+
 def test_reject_marks_rejected_no_send(patched_store):
     patched_store(_pending(id="act_rej"))
     out = reject("act_rej")

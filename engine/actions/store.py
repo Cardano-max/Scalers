@@ -34,6 +34,7 @@ _COLUMNS: tuple[str, ...] = (
     "threshold", "esc_kind", "esc_label", "idempotency_key", "deep_link",
     "outcome_label", "outcome_kind", "recommend", "thinking", "engagement",
     "last_error", "created_at", "updated_at", "approved_at", "sent_at",
+    "is_seeded",
 )
 
 # Columns :func:`update_status` is allowed to set (whitelist — the **kwargs keys
@@ -79,6 +80,11 @@ class ActionRow:
     updated_at: datetime | None = None
     approved_at: datetime | None = None
     sent_at: datetime | None = None
+    # PERSISTED seed marker (Slice-5 honesty gate): true only for demo/seed rows
+    # (actions.seed_demo). The live decision path leaves it false; the console
+    # badges true rows as "Seeded demo data — not a live jury run" so nothing
+    # fabricated can masquerade as a live action.
+    is_seeded: bool = False
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> "ActionRow":
@@ -120,9 +126,15 @@ def record_pending_action(
     idempotency_key: str,
     run_id: str | None = None,
     dsn: str | None = None,
+    is_seeded: bool = False,
 ) -> str:
     """Insert a PENDING action and return its id. Idempotent on ``idempotency_key``:
-    a duplicate insert returns the existing row's id (so re-seeding never dupes)."""
+    a duplicate insert returns the existing row's id (so re-seeding never dupes).
+
+    ``is_seeded`` PERSISTS whether this row is demo/seed data (Slice-5 honesty
+    gate). The live decision path (contentrun / engagement) leaves it False; only
+    :mod:`actions.seed_demo` passes True. A True row is badged in the console and
+    never silently shown as a live action."""
     action_id = f"act_{uuid.uuid4().hex[:16]}"
     with _connect(dsn) as conn:
         row = conn.execute(
@@ -130,15 +142,15 @@ def record_pending_action(
             INSERT INTO actions (
                 id, tenant_id, decision_id, run_id, type, channel, worker,
                 target, subject, context, draft, status, conf, threshold,
-                esc_kind, esc_label, idempotency_key)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s,%s,%s)
+                esc_kind, esc_label, idempotency_key, is_seeded)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s,%s,%s,%s)
             ON CONFLICT (idempotency_key) DO NOTHING
             RETURNING id
             """,
             (
                 action_id, tenant_id, decision_id, run_id, type, channel, worker,
                 target, subject, context, draft, conf, threshold,
-                esc_kind, esc_label, idempotency_key,
+                esc_kind, esc_label, idempotency_key, is_seeded,
             ),
         ).fetchone()
         if row is not None:

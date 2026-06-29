@@ -27,6 +27,12 @@ the same process.)
 For testability the connectors can be injected (``connectors={"gmail": fake}``);
 left to the default, real env-backed connectors are built — so the live path is
 genuinely live and the tests never touch the network.
+
+**Real-only (Slice-5).** The live path selects a connector purely by channel and
+builds a real env-backed connector when none is injected — no mock is wired in. As
+defense-in-depth, :func:`_ensure_real` refuses to send through any connector that
+declares ``is_mock = True`` (e.g. :class:`sideeffects.posting.MockPostingConnector`)
+so a mock can never perform a real IG/Gmail/FB send: it fails honestly instead.
 """
 
 from __future__ import annotations
@@ -43,8 +49,32 @@ class ActionNotFoundError(LookupError):
     """``approve_and_publish``/``reject`` was given an unknown action id."""
 
 
+class MockOnLivePathError(RuntimeError):
+    """A mock/stub connector was about to perform a REAL send on the live
+    approve→publish path. Refused: a live action MUST use a real connector
+    (mocks are test-only). The action is marked ``failed`` with this error —
+    never a fake/silent success."""
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _ensure_real(conn: Any) -> None:
+    """Defense-in-depth real-only guard for the live send path (Slice-5).
+
+    ``approve_and_publish`` already builds real env-backed connectors by
+    construction (no mock is wired into the live path), but this makes ``real-only``
+    *enforced at runtime* rather than merely conventional: a connector that declares
+    ``is_mock = True`` (e.g. :class:`sideeffects.posting.MockPostingConnector`) can
+    NEVER perform a real IG/Gmail/FB send here. Real connectors and the unit-test
+    fakes do not set ``is_mock``, so the test seam is unaffected — only an actual
+    mock is refused, and the action fails honestly instead of faking a send."""
+    if getattr(conn, "is_mock", False):
+        raise MockOnLivePathError(
+            f"refusing to publish via a mock connector ({type(conn).__name__}) on the "
+            "live path; a live send requires a real connector (mocks are test-only)"
+        )
 
 
 def approve_and_publish(
@@ -109,6 +139,7 @@ def _publish_gmail(action: ActionRow, connector: Any | None, dsn: str | None) ->
 
     conn = connector or GmailConnector.from_env(enabled=True)
     try:
+        _ensure_real(conn)  # real-only: a mock never live-sends
         result = conn.send(
             to=action.target or "",
             subject=action.subject or "",
@@ -128,6 +159,7 @@ def _publish_gmail(action: ActionRow, connector: Any | None, dsn: str | None) ->
 def _publish_facebook(action: ActionRow, connector: Any | None, dsn: str | None) -> ActionRow:
     conn = connector or _facebook_from_env()
     try:
+        _ensure_real(conn)  # real-only: a mock never live-sends
         raw = conn.send(
             action.idempotency_key or action.id,
             "facebook_feed",
@@ -174,6 +206,7 @@ def _publish_instagram(action: ActionRow, connector: Any | None, dsn: str | None
             last_error="ig post needs a public JPEG (set DEMO_IG_IMAGE_URL) + a valid re-minted token + Meta app review",
         )
     try:
+        _ensure_real(conn)  # real-only: a mock never live-sends
         result = _resolve(conn.post(image_url=image_url, caption=action.draft))
     except Exception as exc:  # noqa: BLE001 — surface the REAL Graph error, never fake success
         return update_status(action.id, "failed", dsn=dsn, last_error=str(exc))
@@ -187,6 +220,7 @@ def _publish_instagram(action: ActionRow, connector: Any | None, dsn: str | None
 def _reply_instagram(action: ActionRow, connector: Any | None, dsn: str | None) -> ActionRow:
     conn = connector or _instagram_from_env()
     try:
+        _ensure_real(conn)  # real-only: a mock never live-sends
         result = _resolve(conn.reply_to_comment(comment_id=action.target or "", message=action.draft))
     except Exception as exc:  # noqa: BLE001 — surface the REAL Graph error, never fake success
         return update_status(action.id, "failed", dsn=dsn, last_error=str(exc))

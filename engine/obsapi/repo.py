@@ -377,10 +377,16 @@ def _build_action(conn: Any, row: dict[str, Any]) -> Action:
 
     # Build judges list with real rationale (same logic as ActivityItem)
     action_judges: list[Judge] = []
-    action_is_seeded: bool = False
+    # is_seeded: prefer the PERSISTED column (Slice-5); fall back to the run_id
+    # heuristic only for legacy rows written before the column existed. A live
+    # (non-seeded) row is is_seeded=false and is NEVER badged as a real jury run.
+    persisted_seeded = bool(row.get("is_seeded"))
+    action_is_seeded: bool = persisted_seeded
     if row.get("decision_id"):
         action_judges, _ = _build_judges_from_jury(conn, row["decision_id"])
-        action_is_seeded = (decision.get("run_id", "").startswith("demo-") if decision else False)
+        action_is_seeded = persisted_seeded or (
+            decision.get("run_id", "").startswith("demo-") if decision else False
+        )
 
     return Action(
         id=row["id"],
@@ -404,7 +410,7 @@ def _build_action(conn: Any, row: dict[str, Any]) -> Action:
             agreement=agree,
             dimensions=dimensions,
             judges=judges,
-            is_seeded=(decision.get("run_id", "").startswith("demo-") if decision else False),
+            is_seeded=action_is_seeded,
             # B1: read directly from autonomy_decisions; None on pre-Phase-5 rows
             # where the probe did not run. NEVER default null→0.
             self_consistency=decision.get("self_consistency") if decision else None,
