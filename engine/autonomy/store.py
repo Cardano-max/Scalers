@@ -163,9 +163,9 @@ class PostgresDecisionStore:
                 """
                 INSERT INTO autonomy_decisions (
                     decision_id, run_id, tenant_id, channel, action_kind,
-                    pooled_confidence, threshold, agreement, decision,
+                    pooled_confidence, threshold, agreement, self_consistency, decision,
                     safety_verdict, esc_kind, esc_label, gates, created_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
                 (
                     record.decision_id,
@@ -176,6 +176,7 @@ class PostgresDecisionStore:
                     record.pooled_confidence,
                     record.threshold,
                     record.agreement,
+                    record.self_consistency,
                     record.decision.value,
                     record.safety_verdict.value,
                     record.esc.kind.value,
@@ -187,9 +188,13 @@ class PostgresDecisionStore:
             for v in record.jury:
                 conn.execute(
                     "INSERT INTO autonomy_jury "
-                    "(decision_id, judge, family, voice, safety, appr) "
-                    "VALUES (%s,%s,%s,%s,%s,%s)",
-                    (record.decision_id, v.judge, v.family, v.voice, v.safety, v.appr),
+                    "(decision_id, judge, family, voice, safety, appr,"
+                    " reliability_weight, hard_fail) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                    (
+                        record.decision_id, v.judge, v.family, v.voice, v.safety, v.appr,
+                        v.reliability_weight, v.hard_fail,
+                    ),
                 )
 
     def get_decision(self, decision_id: str) -> DecisionRecord | None:
@@ -200,7 +205,8 @@ class PostgresDecisionStore:
             if row is None:
                 return None
             jury = conn.execute(
-                "SELECT judge, family, voice, safety, appr FROM autonomy_jury "
+                "SELECT judge, family, voice, safety, appr,"
+                " reliability_weight, hard_fail FROM autonomy_jury "
                 "WHERE decision_id=%s ORDER BY judge",
                 (decision_id,),
             ).fetchall()
@@ -230,10 +236,24 @@ class PostgresDecisionStore:
             tenant_id=row["tenant_id"],
             channel=row["channel"],
             action_kind=row["action_kind"],
-            jury=[JudgeVote(**v) for v in jury],
+            # reliability_weight is restored; the single per-judge hard_fail column is
+            # the queryable "this judge flagged a disqualifier" signal — the WHICH-
+            # dimension detail lives on the decision's esc_label, so per-dimension
+            # hard-fail is intentionally not re-hydrated onto each JudgeVote here.
+            jury=[
+                JudgeVote(
+                    judge=v["judge"], family=v["family"],
+                    voice=v["voice"], safety=v["safety"], appr=v["appr"],
+                    reliability_weight=(
+                        v["reliability_weight"] if v.get("reliability_weight") is not None else 1.0
+                    ),
+                )
+                for v in jury
+            ],
             pooled_confidence=row["pooled_confidence"],
             threshold=row["threshold"],
             agreement=row["agreement"],
+            self_consistency=row.get("self_consistency"),
             gates=[GateResult(**g) for g in row["gates"]],
             safety_verdict=SafetyVerdict(row["safety_verdict"]),
             decision=RouteDecision(row["decision"]),

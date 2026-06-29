@@ -120,6 +120,13 @@ class JudgeVote(BaseModel):
         """The set of dimensions this juror hard-failed (a disqualifier on any)."""
         return frozenset(d for d in DIMENSIONS if self.hard_fail_for(d))
 
+    @property
+    def hard_fail(self) -> bool:
+        """Per-judge disqualifier flag = a hard-fail on ANY dimension. This is the
+        queryable signal persisted to ``autonomy_jury.hard_fail`` (4jx.10); WHICH
+        dimension is recorded on the decision's ``esc_label``."""
+        return bool(self.hard_fail_dims())
+
 
 class GateResult(BaseModel):
     """A deterministic gate result in the console's ``{label, ok}`` shape."""
@@ -158,6 +165,10 @@ class DecisionRecord(BaseModel):
     pooled_confidence: float
     threshold: float
     agreement: float
+    # The generation-stability half of confidence (self-consistency, 4jx.3); None
+    # until that bead computes it. Persisted to autonomy_decisions.self_consistency
+    # (4jx.10) so the console/eval can show both confidence inputs.
+    self_consistency: float | None = None
     gates: list[GateResult] = Field(default_factory=list)
     safety_verdict: SafetyVerdict = SafetyVerdict.PASS
     decision: RouteDecision
