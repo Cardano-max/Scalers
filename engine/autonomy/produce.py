@@ -9,6 +9,7 @@ jury for the real cross-family panel here — the produced record shape is uncha
 from __future__ import annotations
 
 from autonomy.aggregate import aggregate_jury
+from autonomy.confidence import IDENTITY_CALIBRATION, Calibration, compute_confidence
 from autonomy.decision import (
     DecisionRecord,
     GateResult,
@@ -98,6 +99,8 @@ async def produce_and_record_decision_real(
     safety_verdict: SafetyVerdict = SafetyVerdict.PASS,
     panel: tuple[JudgeSpec, ...] = DEFAULT_PANEL,
     judge_runner: JudgeRunner | None = None,
+    self_consistency: float | None = None,
+    calibration: Calibration = IDENTITY_CALIBRATION,
 ) -> DecisionRecord:
     """The REAL-jury write path (AUTON-01 / 4jx.2) — replaces the stub on the live
     path. Runs the cross-family panel on ``action``, aggregates per dimension
@@ -125,6 +128,14 @@ async def produce_and_record_decision_real(
     gates = gates or []
     jury = await run_jury(action, panel=panel, judge_runner=judge_runner)
     aggregate = aggregate_jury(jury.votes)
+    # COMPUTED confidence (4jx.3): jury quality pooled conservatively with the
+    # generator's self-consistency, calibrated. self_consistency=None (no probe ran /
+    # too few samples) -> uncomputable -> the decision fails safe to review.
+    conf = compute_confidence(
+        jury_quality=aggregate.pooled,
+        self_consistency_score=self_consistency,
+        calibration=calibration,
+    )
     decision, esc, pooled, agreement = derive_decision(
         votes=jury.votes,
         threshold=threshold,
@@ -135,6 +146,8 @@ async def produce_and_record_decision_real(
         aggregate=aggregate,
         catalog_drift=jury.catalog_drift,
         catalog_drift_reason=jury.drift_reason,
+        confidence=conf.confidence,
+        confidence_uncomputable=conf.uncomputable,
     )
     record = DecisionRecord(
         decision_id=decision_id,
@@ -146,6 +159,7 @@ async def produce_and_record_decision_real(
         pooled_confidence=pooled,
         threshold=threshold,
         agreement=agreement,
+        self_consistency=conf.self_consistency,
         gates=[GateResult.from_gate(g) for g in gates],
         safety_verdict=safety_verdict,
         decision=decision,

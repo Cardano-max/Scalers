@@ -214,6 +214,8 @@ def derive_decision(
     aggregate: "JuryAggregate | None" = None,
     catalog_drift: bool = False,
     catalog_drift_reason: str = "",
+    confidence: float | None = None,
+    confidence_uncomputable: bool = False,
 ) -> tuple[RouteDecision, Escalation, float, float]:
     """Derive ``(decision, escalation, pooled_confidence, agreement)`` from signals.
 
@@ -244,6 +246,11 @@ def derive_decision(
     else:
         pooled = pool_confidence(votes)
         agree = agreement(votes)
+    # The COMPUTED confidence (4jx.3) — jury_quality pooled with self-consistency,
+    # calibrated — is the router's confidence when supplied (replaces the hardcoded
+    # 0.9 / jury-only pooling on the real decision path).
+    if confidence is not None:
+        pooled = confidence
 
     # Base decision from the canonical pure-code router (gates + confidence + dial).
     base = route(pooled, threshold, gates, autonomy)
@@ -267,6 +274,16 @@ def derive_decision(
         return (
             RouteDecision.REVIEW,
             Escalation(kind=EscKind.GATE, label=f"jury catalog drift ({catalog_drift_reason})"),
+            pooled,
+            agree,
+        )
+
+    # FAIL-SAFE on uncomputable confidence (4jx.3): too few probe samples to estimate
+    # self-consistency -> review. "Couldn't compute" is never treated as high confidence.
+    if confidence_uncomputable:
+        return (
+            RouteDecision.REVIEW,
+            Escalation(kind=EscKind.BELOW_THRESHOLD, label="confidence uncomputable (insufficient samples)"),
             pooled,
             agree,
         )
