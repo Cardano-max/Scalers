@@ -178,6 +178,10 @@ async def run_content_to_review_async(
 
     # 1. REAL draft (temp-0, the decision artifact).
     content_cell = build_content_brief_cell()
+    # The pinned model id the draft cell actually runs against (default
+    # "anthropic:claude-sonnet-4-6"). Read off the cell, never hardcoded — if the
+    # cell is routed to another model the captured pin follows it.
+    draft_model = str(content_cell.model)
     drafted: ContentBrief = await content_cell.run(prompt)
     draft = _render_post(drafted)
 
@@ -196,6 +200,10 @@ async def run_content_to_review_async(
     # unreachable local Ollama juror) without re-running the panel.
     ran: dict[str, str] = {}
     dropped: dict[str, str] = {}
+    # Capture each REAL judge call's pinned model + typed JudgeScore at the call
+    # site, keyed by seat. Only seats that actually returned a score land here —
+    # a dropped/unavailable seat (e.g. local Ollama) is absent, never fabricated.
+    judge_captures: dict[str, dict] = {}
 
     async def _runner(spec: JudgeSpec, action: str) -> JudgeScore:
         try:
@@ -204,6 +212,13 @@ async def run_content_to_review_async(
             dropped[spec.name] = f"{type(exc).__name__}: {exc}"
             raise
         ran[spec.name] = spec.family
+        judge_captures[spec.name] = {
+            "judge": spec.name,
+            "family": spec.family,
+            "model": spec.model,
+            "framing": spec.framing,
+            "score": score.model_dump(mode="json"),
+        }
         return score
 
     record = await produce_and_record_decision_real(
@@ -293,4 +308,13 @@ async def run_content_to_review_async(
         "families_reachable": families_reachable,
         "jury_fully_ran": len(record.jury) == len(panel),
         "degraded": len(record.jury) < len(panel),
+        # --- Captured REAL per-step I/O for span instrumentation (P0 make-real) ---
+        # The actual prompt/output of the model calls this run made (not a summary),
+        # so the Studio orchestrator can populate runs.steps[].input/.output/.model
+        # for the draft + jury steps with real content + the real model pins.
+        "draft_prompt": prompt,            # exact prompt sent to the content cell
+        "draft_model": draft_model,        # e.g. "anthropic:claude-sonnet-4-6"
+        "content_brief": drafted.model_dump(mode="json"),  # the typed ContentBrief
+        "jury_action": draft,              # exact text scored by every juror
+        "judge_outputs": list(judge_captures.values()),    # per-seat model + JudgeScore
     }

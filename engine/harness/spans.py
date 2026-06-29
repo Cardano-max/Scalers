@@ -55,6 +55,13 @@ class Span(BaseModel):
     input_truncated: bool = False
     output_truncated: bool = False
 
+    # The pinned model id that produced this span's output, for a model-backed
+    # span (e.g. ``"anthropic:claude-sonnet-4-6"`` for the draft cell,
+    # ``"anthropic:claude-opus-4-8"`` for the Opus jurors). ``None`` for a
+    # structural/stub span where no model was called — never invented. Queryable
+    # from ``runs.steps`` as ``s->>'model'``.
+    model: str | None = None
+
     status: str = "ok"  # ok | failed
     error: str | None = None
 
@@ -130,6 +137,18 @@ def _summarize(value: Any) -> tuple[str | None, bool]:
     if len(text) > MAX_IO_CHARS:
         return text[:MAX_IO_CHARS] + f"…(+{len(text) - MAX_IO_CHARS} chars)", True
     return text, False
+
+
+def summarize(value: Any) -> tuple[str | None, bool]:
+    """Public redact+truncate summarizer for callers that build spans manually.
+
+    The orchestrator populates the draft/jury node spans with the REAL captured
+    cell prompt + model output, so it needs the same redaction/truncation a span
+    context manager applies. Returns ``(text, truncated)``; ``None`` in → ``None`` out
+    (an honestly-uncaptured value stays null, never a fabricated string).
+    """
+
+    return _summarize(value)
 
 
 # --- per-run span collection ------------------------------------------------
