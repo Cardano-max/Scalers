@@ -110,7 +110,9 @@ class PostgresDecisionStore:
                     safety      DOUBLE PRECISION NOT NULL,
                     appr        DOUBLE PRECISION NOT NULL,
                     reliability_weight DOUBLE PRECISION,
-                    hard_fail   BOOLEAN NOT NULL DEFAULT false,
+                    voice_hard_fail  BOOLEAN NOT NULL DEFAULT false,
+                    safety_hard_fail BOOLEAN NOT NULL DEFAULT false,
+                    appr_hard_fail   BOOLEAN NOT NULL DEFAULT false,
                     PRIMARY KEY (decision_id, judge)
                 );
 
@@ -141,7 +143,11 @@ class PostgresDecisionStore:
                 ALTER TABLE autonomy_jury
                     ADD COLUMN IF NOT EXISTS reliability_weight DOUBLE PRECISION;
                 ALTER TABLE autonomy_jury
-                    ADD COLUMN IF NOT EXISTS hard_fail BOOLEAN NOT NULL DEFAULT false;
+                    ADD COLUMN IF NOT EXISTS voice_hard_fail BOOLEAN NOT NULL DEFAULT false;
+                ALTER TABLE autonomy_jury
+                    ADD COLUMN IF NOT EXISTS safety_hard_fail BOOLEAN NOT NULL DEFAULT false;
+                ALTER TABLE autonomy_jury
+                    ADD COLUMN IF NOT EXISTS appr_hard_fail BOOLEAN NOT NULL DEFAULT false;
                 """
             )
 
