@@ -52,6 +52,14 @@ observability = [
 eval = [
     "deepeval>=1.0",
 ]
+# Cross-family JURY Ollama juror (AUTON-01 / 4jx.2). The local open-model juror talks
+# to Ollama's OpenAI-compatible endpoint, so it needs pydantic-ai's openai provider.
+# OPT-IN + lazily imported (autonomy/judges.py:_model_for): the core engine + the
+# deterministic test panel (FunctionModel) never require it; install for a live Ollama
+# panel. The same provider also serves any future GPT juror (keys permitting).
+jury-ollama = [
+    "pydantic-ai-slim[openai]==2.0.0",
+]
 
 [dependency-groups]
 dev = [

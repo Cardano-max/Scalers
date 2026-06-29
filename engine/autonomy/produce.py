@@ -8,12 +8,15 @@ jury for the real cross-family panel here — the produced record shape is uncha
 
 from __future__ import annotations
 
+from autonomy.aggregate import aggregate_jury
+from autonomy.confidence import IDENTITY_CALIBRATION, Calibration, compute_confidence
 from autonomy.decision import (
     DecisionRecord,
     GateResult,
     SafetyVerdict,
     derive_decision,
 )
+from autonomy.judges import DEFAULT_PANEL, JudgeRunner, JudgeSpec, is_cross_family, run_jury
 from autonomy.jury import expected_judge_count, stub_jury
 from harness.router import DEFAULT_THRESHOLD
 from harness.state import AutonomyMode, Gate
@@ -72,6 +75,91 @@ def produce_and_record_decision(
         pooled_confidence=pooled,
         threshold=threshold,
         agreement=agreement,
+        gates=[GateResult.from_gate(g) for g in gates],
+        safety_verdict=safety_verdict,
+        decision=decision,
+        esc=esc,
+    )
+    store.record_decision(record)
+    return record
+
+
+async def produce_and_record_decision_real(
+    store,
+    *,
+    decision_id: str,
+    run_id: str,
+    tenant_id: str,
+    channel: str,
+    action_kind: str,
+    action: str,
+    threshold: float = DEFAULT_THRESHOLD,
+    gates: list[Gate] | None = None,
+    autonomy: AutonomyMode = AutonomyMode.AUTO,
+    safety_verdict: SafetyVerdict = SafetyVerdict.PASS,
+    panel: tuple[JudgeSpec, ...] = DEFAULT_PANEL,
+    judge_runner: JudgeRunner | None = None,
+    self_consistency: float | None = None,
+    calibration: Calibration = IDENTITY_CALIBRATION,
+) -> DecisionRecord:
+    """The REAL-jury write path (AUTON-01 / 4jx.2) — replaces the stub on the live
+    path. Runs the cross-family panel on ``action``, aggregates per dimension
+    (reliability-weighted means + the **hard-fail floor** + real per-dimension
+    agreement), derives the route, and persists one decision record.
+
+    Safety invariant (ADR monotonic composition): the jury only ever **blocks** an
+    auto-fire (low score / split / hard-fail / degraded), never enables one — and a
+    held channel's ``autonomy`` already forces review upstream, so no jury outcome
+    can produce AUTO on a held channel. Auto stays OFF under 439.
+
+    NOTE (gated): the new per-judge signals (``reliability_weight``, per-dimension
+    ``hard_fail``, ``on_voice``) live on the in-memory record now but are dropped on
+    DB persist until the 4jx.10 migration adds the columns; the decision itself
+    (which already honors the hard-fail floor) is unaffected.
+    """
+    # Cross-family is a hard requirement (stack-decision): a single-family panel
+    # cannot judge itself. Refuse a misconfigured panel loudly rather than silently
+    # auto-firing on a single family.
+    if not is_cross_family(panel):
+        raise ValueError(
+            f"jury panel is not cross-family (families={sorted({s.family for s in panel})}); "
+            "need >= 2 distinct model families"
+        )
+    gates = gates or []
+    jury = await run_jury(action, panel=panel, judge_runner=judge_runner)
+    aggregate = aggregate_jury(jury.votes)
+    # COMPUTED confidence (4jx.3): jury quality pooled conservatively with the
+    # generator's self-consistency, calibrated. self_consistency=None (no probe ran /
+    # too few samples) -> uncomputable -> the decision fails safe to review.
+    conf = compute_confidence(
+        jury_quality=aggregate.pooled,
+        self_consistency_score=self_consistency,
+        calibration=calibration,
+    )
+    decision, esc, pooled, agreement = derive_decision(
+        votes=jury.votes,
+        threshold=threshold,
+        gates=gates,
+        autonomy=autonomy,
+        safety_verdict=safety_verdict,
+        expected_judges=jury.expected_judges,
+        aggregate=aggregate,
+        catalog_drift=jury.catalog_drift,
+        catalog_drift_reason=jury.drift_reason,
+        confidence=conf.confidence,
+        confidence_uncomputable=conf.uncomputable,
+    )
+    record = DecisionRecord(
+        decision_id=decision_id,
+        run_id=run_id,
+        tenant_id=tenant_id,
+        channel=channel,
+        action_kind=action_kind,
+        jury=jury.votes,
+        pooled_confidence=pooled,
+        threshold=threshold,
+        agreement=agreement,
+        self_consistency=conf.self_consistency,
         gates=[GateResult.from_gate(g) for g in gates],
         safety_verdict=safety_verdict,
         decision=decision,
