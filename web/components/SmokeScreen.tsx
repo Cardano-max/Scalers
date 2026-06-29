@@ -41,7 +41,7 @@ export function SmokeScreen() {
   }, [adapter, tenantId]);
 
   return (
-    <div style={{ padding: 'var(--pad-section)', display: 'grid', gap: 20, maxWidth: 1400, marginInline: 'auto' }}>
+    <div style={{ padding: 'var(--pad-section)', display: 'grid', gap: 20, maxWidth: 1180, marginInline: 'auto' }}>
       {/* KPI strip from the overview query */}
       <AsyncBoundary
         loading={overview.loading}
