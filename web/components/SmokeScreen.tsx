@@ -41,22 +41,6 @@ export function SmokeScreen() {
 
   return (
     <div style={{ padding: 'var(--pad-section)', display: 'grid', gap: 20, maxWidth: 960 }}>
-      <div
-        style={{
-          fontSize: 12,
-          color: 'var(--text-muted)',
-          background: 'var(--reasoning-bg)',
-          border: '1px solid var(--reasoning-border)',
-          borderRadius: 'var(--radius-card)',
-          padding: 'var(--pad-card)',
-        }}
-      >
-        Foundation smoke view — adapter:{' '}
-        <strong className="mono">{adapter.source}</strong>. Reads the kkg.4{' '}
-        <span className="mono">overview</span> query + subscribes to the SSE
-        stream. Real screens land per their beads.
-      </div>
-
       {/* KPI strip from the overview query */}
       <AsyncBoundary
         loading={overview.loading}

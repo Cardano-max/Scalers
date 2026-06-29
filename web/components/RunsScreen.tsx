@@ -147,10 +147,6 @@ export function RunsScreen() {
               <span style={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: '#A8A299', letterSpacing: '0.5px' }}>RETRIES</span>
               <span style={{ fontSize: 13, fontWeight: 500 }}>{selected.retries}</span>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
-              <span style={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: '#A8A299', letterSpacing: '0.5px' }}>IDEMPOTENCY</span>
-              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#5C584F', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{selected.idempotencyKey}</span>
-            </div>
           </div>
 
           {/* Langfuse trace link */}

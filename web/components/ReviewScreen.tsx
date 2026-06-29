@@ -320,8 +320,8 @@ function QueueRow({
           <span className="mono" style={{ fontSize: 11, color: WORKER_COLOR[action.worker] }}>
             {action.worker}
           </span>
-          <span className="mono" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-muted)' }}>
-            conf {fmt(action.confidence)} / {fmt(action.threshold)}
+          <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-muted)' }}>
+            Confidence {pct(action.confidence)}%
           </span>
         </div>
       </button>
@@ -433,9 +433,6 @@ function DetailPane({
             <Btn kind="reject" onClick={onReject} disabled={busy}>Reject</Btn>
           </>
         )}
-        <span className="mono" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-faint)' }}>
-          {action.idempotencyKey}
-        </span>
       </div>
     </div>
   );
@@ -483,8 +480,8 @@ function AutonomyCard({ action }: { action: Action }) {
       <div style={{ display: 'grid', gap: 6 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
           <span className="label">Confidence</span>
-          <span className="mono" style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-secondary)' }}>
-            conf {fmt(confidence)} / {fmt(threshold)}
+          <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-secondary)' }}>
+            {pct(confidence)}%
           </span>
         </div>
         <div style={{ position: 'relative', height: 8, borderRadius: 999, background: 'var(--hairline-light)' }}>
@@ -613,7 +610,7 @@ function AutonomyCard({ action }: { action: Action }) {
         })}
       </div>
 
-      <div className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }}>jury · {jury.agreement}</div>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Reviewer panel · {jury.agreement}</div>
 
       {/* deterministic gate chips */}
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
