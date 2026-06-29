@@ -82,6 +82,7 @@ class JuryDecision:
     agreement: str
     dimensions: list[JuryDim]
     judges: list[JudgeVote]
+    is_seeded: bool = False
 
 
 @strawberry.type

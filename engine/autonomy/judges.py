@@ -195,6 +195,7 @@ def _to_vote(spec: JudgeSpec, score: JudgeScore, catalog: HardFailCatalog) -> tu
         safety_hard_fail=score.safety_hard_fail or ("safety" in res.hard_fail_dims),
         appr_hard_fail=score.appr_hard_fail or ("appr" in res.hard_fail_dims),
         reliability_weight=DEFAULT_WEIGHT,
+        judge_rationale=score.rationale,
     )
     return vote, res.fail_safe, res.reason
 

@@ -152,6 +152,9 @@ class PostgresDecisionStore:
                     ADD COLUMN IF NOT EXISTS safety_hard_fail BOOLEAN NOT NULL DEFAULT false;
                 ALTER TABLE autonomy_jury
                     ADD COLUMN IF NOT EXISTS appr_hard_fail BOOLEAN NOT NULL DEFAULT false;
+                -- Real per-judge rationale capture (kill fabricated score-string).
+                ALTER TABLE autonomy_jury
+                    ADD COLUMN IF NOT EXISTS judge_rationale TEXT;
                 """
             )
 
@@ -189,12 +192,13 @@ class PostgresDecisionStore:
                 conn.execute(
                     "INSERT INTO autonomy_jury "
                     "(decision_id, judge, family, voice, safety, appr,"
-                    " reliability_weight, voice_hard_fail, safety_hard_fail, appr_hard_fail) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    " reliability_weight, voice_hard_fail, safety_hard_fail, appr_hard_fail, judge_rationale) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                     (
                         record.decision_id, v.judge, v.family, v.voice, v.safety, v.appr,
                         v.reliability_weight,
                         v.hard_fail_for("voice"), v.hard_fail_for("safety"), v.hard_fail_for("appr"),
+                        v.judge_rationale,
                     ),
                 )
 
@@ -207,7 +211,7 @@ class PostgresDecisionStore:
                 return None
             jury = conn.execute(
                 "SELECT judge, family, voice, safety, appr,"
-                " reliability_weight FROM autonomy_jury "
+                " reliability_weight, judge_rationale FROM autonomy_jury "
                 "WHERE decision_id=%s ORDER BY judge",
                 (decision_id,),
             ).fetchall()
@@ -222,7 +226,7 @@ class PostgresDecisionStore:
             out: list[DecisionRecord] = []
             for row in rows:
                 jury = conn.execute(
-                    "SELECT judge, family, voice, safety, appr FROM autonomy_jury "
+                    "SELECT judge, family, voice, safety, appr, judge_rationale FROM autonomy_jury "
                     "WHERE decision_id=%s ORDER BY judge",
                     (row["decision_id"],),
                 ).fetchall()
@@ -231,9 +235,10 @@ class PostgresDecisionStore:
 
     @staticmethod
     def _to_record(row: dict[str, Any], jury: list[dict[str, Any]]) -> DecisionRecord:
+        run_id = row["run_id"]
         return DecisionRecord(
             decision_id=row["decision_id"],
-            run_id=row["run_id"],
+            run_id=run_id,
             tenant_id=row["tenant_id"],
             channel=row["channel"],
             action_kind=row["action_kind"],
@@ -248,6 +253,7 @@ class PostgresDecisionStore:
                     reliability_weight=(
                         v["reliability_weight"] if v.get("reliability_weight") is not None else 1.0
                     ),
+                    judge_rationale=v.get("judge_rationale", ""),
                 )
                 for v in jury
             ],
@@ -262,4 +268,5 @@ class PostgresDecisionStore:
             created_at=row["created_at"].isoformat()
             if hasattr(row["created_at"], "isoformat")
             else str(row["created_at"]),
+            is_seeded=run_id.startswith("demo-") if run_id else False,
         )

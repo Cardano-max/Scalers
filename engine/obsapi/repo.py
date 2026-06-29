@@ -171,7 +171,8 @@ def _build_judges_from_jury(conn: Any, decision_id: str) -> tuple[list[Judge], s
             row.get("appr_hard_fail", False),
         ])
         vote = "fail" if hard_fail else "pass"
-        reasoning = f"voice {voice:.2f} · safety {safety:.2f} · appr {appr:.2f}"
+        # Use real judge rationale if available; fallback to score-string for pre-migration rows
+        reasoning = row.get("judge_rationale") or f"voice {voice:.2f} · safety {safety:.2f} · appr {appr:.2f}"
         judges.append(
             Judge(
                 name=row.get("judge", "Unknown"),
@@ -388,6 +389,7 @@ def _build_action(conn: Any, row: dict[str, Any]) -> Action:
             agreement=agree,
             dimensions=dimensions,
             judges=judges,
+            is_seeded=(decision.get("run_id", "").startswith("demo-") if decision else False),
         ),
         gates=gates,
         recommendation=row.get("recommend"),

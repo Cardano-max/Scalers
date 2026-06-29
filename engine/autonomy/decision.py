@@ -88,6 +88,8 @@ class JudgeVote(BaseModel):
     * ``reliability_weight`` — this judge's aggregation weight (default uniform;
       gold-calibrated when available). A judge dropped for timeout/error is given a
       reduced weight, never silently counted as agreement.
+    * ``judge_rationale`` — the real per-judge reasoning from the judge's score
+      (audit-only; never gates). Captured from JudgeScore.rationale.
     """
 
     model_config = {"frozen": True}
@@ -102,6 +104,7 @@ class JudgeVote(BaseModel):
     safety_hard_fail: bool = False
     appr_hard_fail: bool = False
     reliability_weight: float = Field(default=1.0, ge=0.0)
+    judge_rationale: str = ""
 
     @property
     def overall(self) -> float:
@@ -174,6 +177,8 @@ class DecisionRecord(BaseModel):
     decision: RouteDecision
     esc: Escalation
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    # Flag to indicate if this decision was seeded with demo data (run_id starts with "demo-")
+    is_seeded: bool = False
 
 
 # --------------------------------------------------------------------------- #
