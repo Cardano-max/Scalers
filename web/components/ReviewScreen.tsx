@@ -16,7 +16,7 @@ import { useData } from '@/lib/data/DataProvider';
 import { useAsync } from '@/lib/useAsync';
 import { AsyncBoundary } from './states';
 import { Dot } from './icons';
-import { Chip, Tag, channelLabel, clockTime, matchesFilter, typeLabel, type QueueFilter } from './console-bits';
+import { Chip, ProviderErrorPanel, Tag, channelLabel, clockTime, matchesFilter, typeLabel, type QueueFilter } from './console-bits';
 import { CHANNEL_COLOR, WORKER_COLOR } from '@/lib/tokens';
 import type { Action, ActionType } from '@/lib/data/models';
 
@@ -98,7 +98,21 @@ export function ReviewScreen() {
   const onApprove = async (a: Action) => {
     setBusy(true);
     try {
-      await adapter.approveAction(a.id, a.idempotencyKey);
+      const result = await adapter.approveAction(a.id, a.idempotencyKey);
+      // HONEST OUTCOME: approve→publish can come back FAILED with the REAL
+      // provider error (e.g. an expired Meta token → Graph HTTP 400). Do NOT
+      // claim "sent" and do NOT silently drop it — keep the row, flip it to
+      // failed in place, and let the detail render the verbatim error so the
+      // operator sees WHY. Never a fake success.
+      if (result.status === 'FAILED') {
+        setItems((prev) =>
+          (prev ?? []).map((x) =>
+            x.id === a.id ? { ...x, status: 'FAILED', lastError: result.lastError ?? null } : x,
+          ),
+        );
+        showToast(`Send failed — ${truncate(result.lastError ?? 'provider error', 60)}`, 'amber');
+        return;
+      }
       removeAndAdvance(a.id);
       showToast(`${approveVerb(a.type)} — ${truncate(a.target, 40)}`, 'success');
     } catch (e) {
@@ -373,6 +387,11 @@ function DetailPane({
         </div>
         <div style={{ fontSize: 13.5, color: 'var(--text-secondary-2)' }}>{action.target}</div>
       </div>
+
+      {/* FAILED approve→publish — show the REAL provider error, not a bare "Failed". */}
+      {action.status === 'FAILED' && action.lastError ? (
+        <ProviderErrorPanel error={action.lastError} />
+      ) : null}
 
       <AutonomyCard action={action} />
 

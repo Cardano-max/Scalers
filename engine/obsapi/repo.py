@@ -419,6 +419,9 @@ def _build_action(conn: Any, row: dict[str, Any]) -> Action:
         recommendation=row.get("recommend"),
         idempotency_key=row.get("idempotency_key") or "",
         status=mappers.status(row.get("status")),
+        # The REAL provider error, verbatim from the row — surfaced so a failed
+        # send shows WHY, not a bare "Failed". None on non-failed rows.
+        last_error=row.get("last_error"),
         judges=action_judges,
         is_seeded=action_is_seeded,
     )
@@ -539,12 +542,20 @@ def _build_activity(conn: Any, row: dict[str, Any]) -> ActivityItem:
         judges=judges,
         spans=activity_spans,
         links=links,
+        # Carry the real provider error through verbatim (set only when the send
+        # failed); the Activity detail renders it as an honest error panel.
+        last_error=core.last_error,
     )
 
 
 def activity(tenant_id: str, type_filter: str | None = None) -> list[ActivityItem]:
     with connect() as conn:
-        sql = "SELECT * FROM actions WHERE tenant_id=%s AND status='sent'"
+        # Activity is "what the agents actually did" — a FAILED send is an executed
+        # attempt that produced a real provider error, so it belongs here next to
+        # the sent work. Including 'failed' makes a failed action navigable (the
+        # feed's "Open in Activity" + the detail's error panel) instead of silently
+        # absent. The detail renders the real last_error for the failed ones.
+        sql = "SELECT * FROM actions WHERE tenant_id=%s AND status IN ('sent','failed')"
         params: list[Any] = [tenant_id]
         if type_filter:
             sql += " AND lower(type)=%s"

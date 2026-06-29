@@ -114,6 +114,11 @@ class Action:
     recommendation: Optional[str]
     idempotency_key: str
     status: str
+    # The REAL provider error captured when a send FAILED (actions.last_error),
+    # e.g. a Meta/Graph "HTTP 400 #145 …" body. None unless status='failed'.
+    # Surfaced verbatim so the operator sees WHY a send failed, never a bare
+    # "Failed". Never fabricated — it is the connector's own error string.
+    last_error: Optional[str] = None
     judges: list[Judge] = field(default_factory=list)
     is_seeded: bool = False
 
@@ -183,6 +188,11 @@ class ActivityItem:
     judges: list[Judge]
     spans: list[Span]
     links: list[ActivityLink]
+    # The REAL provider error on a FAILED send (actions.last_error). A failed
+    # action IS executed work, so it appears on the Activity screen; this carries
+    # the verbatim Meta/Graph/Gmail error so the detail can say WHY it failed.
+    # None unless status='failed'. Never fabricated.
+    last_error: Optional[str] = None
 
 
 @strawberry.type

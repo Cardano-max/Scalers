@@ -15,9 +15,13 @@ const ACTION_FIELDS = `
     judges { judge family voice safety appr overall }
   }
   gates { label ok }
-  recommendation idempotencyKey status
+  recommendation idempotencyKey status lastError
   judges { name score vote reasoning }
 `;
+// lastError carries the REAL provider error on a FAILED send (null otherwise).
+// It lives on BOTH Action and ActivityItem, so keeping it in the shared fragment
+// resolves for the review queue / action detail AND the Activity query (which
+// embeds ACTION_FIELDS) — unlike isSeeded, which is Action-only.
 // isSeeded lives only on the Action type (review queue / action detail), NOT on
 // ActivityItem — keep it out of the shared fragment so the Activity query (which
 // embeds ACTION_FIELDS) doesn't request a field ActivityItem lacks.

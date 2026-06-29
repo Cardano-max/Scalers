@@ -17,7 +17,7 @@ import { useAsync } from '@/lib/useAsync';
 import { useConsole } from '@/state/console-store';
 import { AsyncBoundary } from './states';
 import { Dot } from './icons';
-import { Chip, Tag, channelLabel, clockTime, matchesFilter, typeLabel, type ChipTone, type QueueFilter } from './console-bits';
+import { Chip, ProviderErrorPanel, Tag, channelLabel, clockTime, matchesFilter, typeLabel, type ChipTone, type QueueFilter } from './console-bits';
 import { AUTONOMY_LABEL, CHANNEL_COLOR, WORKER_COLOR } from '@/lib/tokens';
 import type { ActivityItem, AutonomyMode } from '@/lib/data/models';
 import { ExecutionTraceCard } from './trace/ExecutionTraceCard';
@@ -198,9 +198,13 @@ function ActivityRow({
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
           <Tag>{typeLabel(item.type)}</Tag>
           <Dot color={CHANNEL_COLOR[item.channel]} size={7} />
-          <Chip tone={OUTCOME_TONE[item.outcome.kind]} style={{ marginLeft: 'auto' }}>
-            {item.outcome.label}
-          </Chip>
+          {item.status === 'FAILED' ? (
+            <Chip tone="danger" style={{ marginLeft: 'auto' }}>Failed</Chip>
+          ) : (
+            <Chip tone={OUTCOME_TONE[item.outcome.kind]} style={{ marginLeft: 'auto' }}>
+              {item.outcome.label}
+            </Chip>
+          )}
         </div>
         <div
           style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
@@ -232,6 +236,7 @@ function ActivityDetail({
   const hasThread = !!item.thread && item.thread.length > 0;
   const hasComments = !!item.comments && item.comments.length > 0;
   const expandLabel = hasComments ? `View ${item.comments!.length} comments` : 'View conversation';
+  const isFailed = item.status === 'FAILED';
 
   return (
     <div style={{ padding: 'var(--pad-section)', maxWidth: 1100, marginInline: 'auto', display: 'grid', gap: 18 }}>
@@ -248,9 +253,16 @@ function ActivityDetail({
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 13.5, color: 'var(--text-secondary-2)' }}>{item.target}</span>
-          <Chip tone={OUTCOME_TONE[item.outcome.kind]}>{item.outcome.label}</Chip>
+          {isFailed ? (
+            <Chip tone="danger">Failed</Chip>
+          ) : (
+            <Chip tone={OUTCOME_TONE[item.outcome.kind]}>{item.outcome.label}</Chip>
+          )}
         </div>
       </div>
+
+      {/* FAILED send — surface the REAL provider error, never a bare "Failed". */}
+      {isFailed && item.lastError ? <ProviderErrorPanel error={item.lastError} /> : null}
 
       {/* engagement tiles */}
       {item.engagement.length > 0 ? (
@@ -386,7 +398,7 @@ function ActivityDetail({
         </Section>
       ) : null}
 
-      <Section label={item.type === 'POST' ? 'Published' : 'Sent'}>
+      <Section label={isFailed ? 'Draft (not sent)' : item.type === 'POST' ? 'Published' : 'Sent'}>
         <div style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--ink)', whiteSpace: 'pre-wrap' }}>{item.content}</div>
       </Section>
 

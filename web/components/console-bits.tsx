@@ -125,3 +125,63 @@ export function Chip({
 }
 
 export type { ChipTone };
+
+/**
+ * Honest failure panel — renders the REAL provider error verbatim from an
+ * action's `lastError` (e.g. a Meta/Graph `ig create media container failed:
+ * HTTP 400 145 {"error":{"message": …}}` body). The send did NOT happen; we
+ * surface WHY instead of a bare "Failed". The message is shown as-is
+ * (whitespace preserved, monospace) — it is NEVER fabricated, paraphrased, or
+ * prettified beyond wrapping; the operator reads the connector's own words.
+ */
+export function ProviderErrorPanel({
+  error,
+  title = 'Send failed — provider error',
+}: {
+  error: string;
+  title?: string;
+}) {
+  return (
+    <div
+      role="alert"
+      style={{
+        border: '1px solid var(--danger-dot)',
+        borderRadius: 'var(--radius-card)',
+        background: 'var(--danger-bg)',
+        padding: 'var(--pad-card)',
+        display: 'grid',
+        gap: 8,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span aria-hidden style={{ color: 'var(--danger-text)', fontWeight: 700 }}>
+          ✕
+        </span>
+        <span
+          className="label"
+          style={{ color: 'var(--danger-text)', letterSpacing: '0.4px' }}
+        >
+          {title}
+        </span>
+      </div>
+      <pre
+        className="mono"
+        style={{
+          margin: 0,
+          fontSize: 12,
+          lineHeight: 1.5,
+          color: 'var(--danger-text)',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+          maxHeight: 260,
+          overflow: 'auto',
+        }}
+      >
+        {error}
+      </pre>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+        Real provider response — nothing was sent. Verbatim, not fabricated.
+      </div>
+    </div>
+  );
+}

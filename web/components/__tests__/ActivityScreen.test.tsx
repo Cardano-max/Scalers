@@ -18,10 +18,10 @@ function renderActivity() {
 describe('ActivityScreen — executed work + reasoning, on the mock adapter spine', () => {
   it('renders the seeded completed actions with filter counts', async () => {
     renderActivity();
-    // 3 seeded executed actions: 1 outreach, 1 reply, 1 post
-    expect(await screen.findByRole('button', { name: /All\s*3/ })).toBeInTheDocument();
+    // 4 seeded executed actions: 1 outreach, 1 reply, 2 posts (1 published + 1 FAILED)
+    expect(await screen.findByRole('button', { name: /All\s*4/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Outreach\s*1/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Posts\s*1/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Posts\s*2/ })).toBeInTheDocument();
   });
 
   it('shows both autonomy chips (teal Auto + amber You approved)', async () => {
@@ -55,12 +55,27 @@ describe('ActivityScreen — executed work + reasoning, on the mock adapter spin
 
   it('a post shows "View N comments" with auto-replied tags', async () => {
     renderActivity();
-    // switch to Posts → the FB post is selected
-    fireEvent.click(await screen.findByRole('button', { name: /Posts\s*1/ }));
+    // switch to Posts → the published FB post is selected first
+    fireEvent.click(await screen.findByRole('button', { name: /Posts\s*2/ }));
     const expander = await screen.findByRole('button', { name: 'View 3 comments' });
     fireEvent.click(expander);
     expect(await screen.findByText('Dana R.')).toBeInTheDocument();
     // engagement reagent answered some comments
     expect(screen.getAllByText('auto-replied').length).toBeGreaterThan(0);
+  });
+
+  it('a FAILED send renders the REAL provider error verbatim (not a bare "Failed")', async () => {
+    renderActivity();
+    // narrow to posts, then select the failed IG publish row
+    fireEvent.click(await screen.findByRole('button', { name: /Posts\s*2/ }));
+    fireEvent.click(await screen.findByText(/Beat the July heat/));
+    // the verbatim Meta/Graph error body is shown — not paraphrased
+    expect(await screen.findByText(/HTTP 400 145/)).toBeInTheDocument();
+    expect(screen.getByText(/OAuthException/)).toBeInTheDocument();
+    expect(screen.getByText(/pages_read_engagement/)).toBeInTheDocument();
+    // labeled honestly as the real provider response
+    expect(screen.getByText(/Real provider response/)).toBeInTheDocument();
+    // and the section is "Draft (not sent)", never "Published"
+    expect(screen.getByText('Draft (not sent)')).toBeInTheDocument();
   });
 });

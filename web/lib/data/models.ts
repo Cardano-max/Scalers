@@ -28,8 +28,10 @@ export type Worker =
 export type ActionStatus =
   | 'PENDING'
   | 'APPROVED'
+  | 'SENDING'
   | 'REJECTED'
   | 'SENT'
+  | 'FAILED'
   | 'REGENERATING';
 export type EscalationKind =
   | 'CONFIDENCE'
@@ -161,6 +163,13 @@ export interface Action {
   recommendation?: string | null;
   idempotencyKey: string;
   status: ActionStatus;
+  /**
+   * The REAL provider error captured when a send FAILED (maps to
+   * `actions.last_error`), e.g. a Meta/Graph `HTTP 400 #145 …` body. Present
+   * only when `status === 'FAILED'`. Rendered verbatim in the failed-action UI
+   * so the operator sees WHY a send failed — never fabricated or paraphrased.
+   */
+  lastError?: string | null;
   judges?: Judge[];
   isSeeded?: boolean;
 }

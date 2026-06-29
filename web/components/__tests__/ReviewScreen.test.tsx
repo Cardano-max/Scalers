@@ -69,4 +69,18 @@ describe('ReviewScreen — escalated → human, on the mock adapter spine', () =
     // post → "Approve & publish"
     expect(screen.getByRole('button', { name: 'Approve & publish' })).toBeInTheDocument();
   });
+
+  it('an approve→publish that FAILS surfaces the REAL provider error, never a fake success', async () => {
+    renderReview();
+    // the Instagram comment reply hits the live Graph API (expired token → fails)
+    fireEvent.click(await screen.findByRole('button', { name: /Replies\s*1/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve & send' }));
+    // the verbatim Graph error is rendered in the detail — not paraphrased
+    expect(await screen.findByText(/OAuthException/)).toBeInTheDocument();
+    expect(screen.getByText(/pages_read_engagement/)).toBeInTheDocument();
+    expect(screen.getByText(/Real provider response/)).toBeInTheDocument();
+    // it did NOT claim the send succeeded, and the item was not silently dropped
+    expect(screen.queryByText(/Approved & sent/)).not.toBeInTheDocument();
+    expect(screen.getByText('act_3c7b9')).toBeInTheDocument();
+  });
 });

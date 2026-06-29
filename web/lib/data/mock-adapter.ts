@@ -33,6 +33,20 @@ import type {
 
 const TENANT_ID = 'northwind';
 
+/**
+ * A REAL-FORMAT Meta/Graph provider error (copied verbatim from a live failed IG
+ * publish — see actions.last_error). Used so the mock mirrors reality: an IG/FB
+ * send through an expired token comes back FAILED carrying THIS string, exactly
+ * as the live connector returns it. Not invented prose — a genuine Graph body.
+ */
+const META_GRAPH_TOKEN_ERROR =
+  'ig create media container failed: HTTP 400 145\n' +
+  '{"error":{"message":"Any of the pages_read_engagement, pages_manage_metadata, ' +
+  'pages_read_user_content, pages_manage_ads, pages_show_list or pages_messaging ' +
+  'permission(s) must be granted before impersonating a user\'s page.",' +
+  '"type":"OAuthException","code":190,"error_subcode":145,' +
+  '"fbtrace_id":"A8xQzRf7Kp2"}}';
+
 const TENANT: Tenant = {
   id: TENANT_ID,
   name: 'Northwind Heating & Air',
@@ -55,6 +69,7 @@ function action(partial: Partial<Action> & Pick<Action, 'id' | 'type' | 'channel
     context: null,
     recommendation: null,
     status: 'PENDING',
+    lastError: null,
     jury: {
       confidence: partial.confidence,
       threshold: partial.threshold,
@@ -191,6 +206,7 @@ function activityItem(
     context: null,
     recommendation: null,
     status: 'SENT',
+    lastError: null,
     draft: partial.content,
     threshold,
     // Activity items already cleared the gate path; escalation is unused by the
@@ -447,6 +463,36 @@ const ACTIVITY: ActivityItem[] = [
         text: 'Saved this — our upstairs is always humid in July.',
         autoReplied: false,
       },
+    ],
+  }),
+  // A FAILED send — the agent attempted a real IG publish and the connector
+  // returned the REAL Graph error (expired token). It belongs on the Activity
+  // screen as executed work; the detail renders `lastError` verbatim so the
+  // operator sees WHY, not a bare "Failed". Mirrors the live `actions.last_error`.
+  activityItem({
+    id: 'evt_f4iled',
+    type: 'POST',
+    channel: 'INSTAGRAM',
+    worker: 'PUBLISHER',
+    autonomy: 'APPROVE_FIRST',
+    target: 'Attempted post · "Summer comfort checklist"',
+    idempotencyKey: 'nw:post:ig:summer-checklist:f01',
+    createdAt: '2026-06-29T14:05:00Z',
+    status: 'FAILED',
+    lastError: META_GRAPH_TOKEN_ERROR,
+    content:
+      'Beat the July heat: our 5-point summer comfort checklist keeps your home cool and your bills lower. Swipe for the full list. ☀️❄️',
+    confidence: 0.9,
+    threshold: 0.9,
+    // Failed sends carry no positive outcome; the UI overrides this to a danger
+    // "Failed" chip based on status. Kept a valid union value for the type.
+    outcome: { label: 'Failed', kind: 'neutral' },
+    engagement: [],
+    thinking: [
+      'Strategist scheduled a summer comfort checklist post (HVAC pack calendar).',
+      'Copywriter drafted; Publisher checked Meta media/format gates → clear.',
+      'Jury 0.90 ≥ 0.90 IG threshold; operator approved the publish.',
+      'Meta MCP create-media-container call REJECTED by Graph (expired token).',
     ],
   }),
 ];
@@ -731,6 +777,13 @@ export class MockAdapter implements DataAdapter {
   async approveAction(id: string, _idempotencyKey: string): Promise<Action> {
     const a = REVIEW_QUEUE.find((x) => x.id === id);
     if (!a) throw new Error(`mock: action ${id} not found`);
+    // HONEST outcome mirror: an Instagram/Facebook publish goes through the live
+    // Graph API, which currently rejects with an expired-token error. The mock
+    // returns the action FAILED carrying the REAL provider error string — so the
+    // console surfaces WHY (it never fakes a success). Gmail still succeeds.
+    if (a.channel === 'INSTAGRAM' || a.channel === 'FACEBOOK') {
+      return { ...a, status: 'FAILED', lastError: META_GRAPH_TOKEN_ERROR };
+    }
     // Approve RESUMES the engine (the action leaves the queue); never bypasses a gate.
     return { ...a, status: 'APPROVED' };
   }
