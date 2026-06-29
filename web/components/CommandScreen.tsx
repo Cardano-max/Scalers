@@ -10,7 +10,7 @@ export function CommandScreen() {
     {
       id: 'sys_init',
       role: 'ASSISTANT',
-      text: 'Harness is running for Northwind Heating & Air. 6 actions are in your review queue and outreach batch run_4821 is in progress. Autonomy is at 87% today. What do you want to do?',
+      text: 'Harness is running for Ladies First (@ladies8391). Actions are flowing into your review queue, and autonomy is HELD — every send waits for your approve-first sign-off. What do you want to do?',
       label: 'Harness',
       at: '2026-06-29T13:40:00Z',
     },

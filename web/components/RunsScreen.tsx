@@ -127,7 +127,7 @@ export function RunsScreen() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '13px 12px', marginBottom: 20 }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               <span style={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: '#A8A299', letterSpacing: '0.5px' }}>TENANT</span>
-              <span style={{ fontSize: 13, fontWeight: 500 }}>Northwind</span>
+              <span style={{ fontSize: 13, fontWeight: 500 }}>{selected.tenantId === 'ladies8391' ? 'Ladies First' : selected.tenantId}</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               <span style={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: '#A8A299', letterSpacing: '0.5px' }}>CHANNELS</span>
