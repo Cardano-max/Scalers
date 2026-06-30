@@ -80,21 +80,26 @@ export function VoiceTweakPanel({
   return (
     <section
       aria-label="Tweak and transcript"
-      style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1, gap: 12 }}
+      style={{ display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0, flex: 1, gap: 12 }}
     >
-      {/* Light transcript — recent turns, calm and elegant, no chrome. */}
+      {/* PRIMARY — the live transcript. It owns the vertical space and scrolls inside
+          itself so it is ALWAYS visible: user speech, the host's replies, the live
+          streaming caret. Everything else (composer, uploads, context) sits below it
+          and never pushes it off-screen. */}
       <div
         ref={scrollRef}
         role="log"
         aria-live="polite"
+        aria-label="Conversation transcript"
         style={{
           flex: 1,
-          minHeight: 0,
+          minHeight: 160,
           overflowY: 'auto',
+          overflowX: 'hidden',
           display: 'flex',
           flexDirection: 'column',
-          gap: 12,
-          padding: '4px 2px',
+          gap: 14,
+          padding: '8px 4px',
         }}
       >
         {turns.length === 0 ? (
@@ -184,33 +189,13 @@ export function VoiceTweakPanel({
         </div>
       )}
 
-      {/* Uploads, near the input — REAL context (CSV leads + brand/strategy notes). */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 14,
-          flexWrap: 'wrap',
-          justifyContent: 'flex-end',
-        }}
-      >
-        <span style={{ fontSize: 11, color: 'var(--text-faint)', marginRight: 'auto' }}>
-          Add context the team will use:
-        </span>
-        <CustomerUpload endpoint={uploadEndpoint} sessionId={sessionId} />
-        <BrandNotesUpload endpoint={notesEndpoint} sessionId={sessionId} />
-      </div>
-
-      {/* Persistent knowledge store — the docs every agent reads (host, run, voice). */}
-      <KnowledgePanel endpoint={documentsEndpoint} />
-
-
-      {/* The small "tweak" composer. */}
+      {/* The small "tweak" composer — sits directly under the transcript. */}
       <div
         style={{
           display: 'flex',
           gap: 8,
           alignItems: 'flex-end',
+          minWidth: 0,
           background: '#fff',
           border: '1px solid var(--hairline)',
           borderRadius: 12,
@@ -265,6 +250,29 @@ export function VoiceTweakPanel({
           Send
         </button>
       </div>
+
+      {/* Below the composer: REAL context controls (CSV leads + brand/strategy notes)
+          and the persistent knowledge store, collapsed by default so it never crowds
+          out the transcript. */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          flexWrap: 'wrap',
+          minWidth: 0,
+        }}
+      >
+        <span style={{ fontSize: 11, color: 'var(--text-faint)', marginRight: 'auto' }}>
+          Add context the team will use:
+        </span>
+        <CustomerUpload endpoint={uploadEndpoint} sessionId={sessionId} />
+        <BrandNotesUpload endpoint={notesEndpoint} sessionId={sessionId} />
+      </div>
+
+      {/* Persistent knowledge store — the docs every agent reads (host, run, voice).
+          Collapsed to a summary on the Voice surface; expand to upload / manage. */}
+      <KnowledgePanel endpoint={documentsEndpoint} collapsible />
 
       <style>{`@keyframes studioCaret { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }`}</style>
     </section>

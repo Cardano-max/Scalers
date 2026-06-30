@@ -93,7 +93,7 @@ export function VoiceScreen() {
   return (
     <section
       aria-label="Voice studio"
-      style={{ position: 'absolute', inset: 0, display: 'flex', minHeight: 0 }}
+      style={{ position: 'absolute', inset: 0, display: 'flex', minHeight: 0, minWidth: 0, overflowX: 'hidden' }}
     >
       {/* CENTER — the voice hero + conversation. */}
       <div
@@ -102,19 +102,24 @@ export function VoiceScreen() {
           minWidth: 0,
           display: 'flex',
           flexDirection: 'column',
-          overflow: 'auto',
+          overflowY: 'auto',
+          overflowX: 'hidden',
           borderRight: '1px solid var(--hairline)',
           background: 'var(--canvas)',
         }}
       >
-        {/* Hero — the orb breathes in lots of whitespace. */}
+        {/* Hero — the orb, compact so the transcript below stays in view. */}
         <div
           style={{
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            gap: 18,
-            padding: '72px 24px 48px',
+            gap: 14,
+            padding: '32px 24px 20px',
+            width: '100%',
+            maxWidth: 680,
+            margin: '0 auto',
+            minWidth: 0,
           }}
         >
           <VoiceOrb
@@ -209,8 +214,10 @@ export function VoiceScreen() {
           )}
         </div>
 
-        {/* The light transcript + small "tweak" box + uploads (not a heavy chat wall). */}
-        <div style={{ flex: 1, minHeight: 300, display: 'flex', padding: '0 24px 24px', maxWidth: 640, width: '100%', margin: '0 auto' }}>
+        {/* PRIMARY conversation area — transcript + composer + collapsed context.
+            flex:1 + minHeight:0 so the transcript inside owns the space and scrolls
+            internally rather than the whole column. */}
+        <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', padding: '0 24px 24px', maxWidth: 680, width: '100%', margin: '0 auto' }}>
           <VoiceTweakPanel
             turns={convoTurns}
             onSend={studio.send}
@@ -239,9 +246,11 @@ export function VoiceScreen() {
       <aside
         aria-label="Agency reasoning stream"
         style={{
-          width: 'clamp(360px, 36vw, 480px)',
+          width: 'clamp(320px, 34vw, 460px)',
           flex: '0 0 auto',
-          overflow: 'auto',
+          minWidth: 0,
+          overflowY: 'auto',
+          overflowX: 'hidden',
           background: 'var(--warroom-canvas)',
           padding: 16,
         }}
