@@ -34,6 +34,9 @@ function toState(r: InterviewResponse): InterviewState {
     nextQuestion: r.nextQuestion,
     readyMessage: r.readyMessage,
     gatingFields: r.gatingFields,
+    mode: r.mode,
+    modeLabel: r.modeLabel,
+    plannedSteps: r.plannedSteps,
   };
 }
 
