@@ -234,42 +234,287 @@ def choose_channel(facts: dict[str, Any], plan_channels: list[str] | None) -> st
     return "instagram"
 
 
+# --------------------------------------------------------------------------- #
+# Brand voice + verified research — the REAL inputs the copywriter cell consumes
+# --------------------------------------------------------------------------- #
+
+# The sending tenant (whose brand voice every outreach draft is written in). The
+# studio Host is single-tenant today; resolved once here so the call-site
+# (studio.agui) does not have to thread it through.
+_DEFAULT_TENANT = os.environ.get("SCALERS_TENANT_ID") or "ladies8391"
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _llm_copy_enabled() -> bool:
+    """Whether to write copy with the REAL copywriter cell (vs the deterministic
+    fallback). Honors an explicit ``SCALERS_OUTREACH_LLM`` override; otherwise auto:
+    on iff an Anthropic key is present (no key -> honest deterministic copy)."""
+    override = os.environ.get("SCALERS_OUTREACH_LLM")
+    if override is not None:
+        return override.strip().lower() in ("1", "true", "yes", "on")
+    return bool(os.environ.get("ANTHROPIC_API_KEY"))
+
+
+def _research_enabled(deep_research: bool | None) -> bool:
+    """Deep per-studio web research (Firecrawl) is OFF by default — it makes live
+    egress and is gated behind an explicit opt-in (``deep_research=True`` or the
+    ``STUDIO_DEEP_RESEARCH`` env flag). With no Firecrawl key wired it degrades to
+    honest-empty regardless."""
+    if deep_research is not None:
+        return bool(deep_research)
+    return _env_flag("STUDIO_DEEP_RESEARCH", False)
+
+
+def _render_voice_context(dims: Any) -> str:
+    """Render the tenant's ``VoiceDimensions`` (tone / structure / lexicon / bans /
+    policies) into the ``brand_voice_context`` string the copywriter cell consumes.
+    Pure projection of writer-owned dimensions — invents no voice content."""
+    v = dims.vocabulary
+
+    def _b(items) -> str:
+        return "\n".join(f"- {x}" for x in items) if items else "- (none on file)"
+
+    return "\n".join([
+        "## Tone:", _b(dims.tone),
+        "## Structure:", _b(dims.structure),
+        f"## Emoji policy: {v.emoji_policy or '(per brand)'}",
+        "## Preferred lexicon:", _b(v.prefer),
+        "## NEVER use (hard ban — beats every pattern):", _b(v.ban),
+    ])
+
+
+def resolve_brand_voice(tenant_id: str | None = None) -> tuple[str, tuple[str, ...]]:
+    """Resolve ``(brand_voice_context, approved_claims)`` for the SENDING tenant via
+    the brand-voice resolver (``config.load_pack`` + ``kb.voice.load_voice_dimensions``).
+
+    These describe the SENDER (the artist writing the outreach), never the recipient.
+    Degrades honestly to ``("", ())`` if the pack / dimensions cannot be resolved —
+    the copy then writes from goal + grounded recipient facts only, never a fabricated
+    voice."""
+    tid = tenant_id or _DEFAULT_TENANT
+    try:
+        from config.loader import load_pack
+        from kb.voice import load_voice_dimensions
+
+        pack = load_pack(tid)
+        dims = load_voice_dimensions(pack)
+        return _render_voice_context(dims), tuple(dims.vocabulary.approved_claims)
+    except Exception:
+        return "", ()
+
+
+def research_studio(facts: dict[str, Any], *, enabled: bool) -> list[dict[str, Any]]:
+    """Verified web research for the RECIPIENT studio via the wired Firecrawl
+    provider (``research.pipeline.live_registry`` — enabled only when a key is
+    present). Returns verbatim ``{title, snippet, url}`` hits (cite-only context for
+    the copywriter), or ``[]`` honestly when disabled / keyless / no hits.
+
+    HONESTY GATE: every field is copied verbatim from a real provider response; this
+    NEVER fabricates a source. A failure degrades to ``[]`` (no citation), never an
+    invented fact."""
+    if not enabled:
+        return []
+    name = (facts.get("name") or "").strip()
+    if not name:
+        return []
+    city = (facts.get("city") or "").strip()
+    try:
+        from research.pipeline import live_registry
+
+        provider = live_registry().get("firecrawl")
+        if provider is None or not getattr(provider, "enabled", False):
+            return []
+        query = " ".join(x for x in [name, city, "tattoo studio"] if x)
+        out: list[dict[str, Any]] = []
+        for hit in provider.search(query, limit=3):
+            url = getattr(hit, "url", None)
+            if not url:
+                continue
+            out.append({
+                "title": getattr(hit, "title", None),
+                "snippet": getattr(hit, "snippet", None),
+                "url": url,
+            })
+        return out
+    except Exception:
+        return []
+
+
+def _build_email_prompt(
+    facts: dict[str, Any], *, goal: str, research: list[dict[str, Any]]
+) -> str:
+    """Assemble the copywriter run prompt. It exposes ONLY grounded recipient facts
+    (name / city / CSV note / cite-only research) and hard-forbids asserting anything
+    the system cannot substantiate about a REAL business."""
+    name = (facts.get("name") or "the studio").strip()
+    city = (facts.get("city") or "").strip()
+    notes = (facts.get("notes") or "").strip()
+
+    known: list[str] = [f"- Studio name: {name}"]
+    if city:
+        known.append(f"- City / location: {city}")
+    if notes:
+        known.append(f"- Note on file (from our list): {notes}")
+
+    if research:
+        research_lines = "\n".join(
+            f'- "{(r.get("snippet") or r.get("title") or "").strip()}" (source: {r["url"]})'
+            for r in research
+            if (r.get("snippet") or r.get("title"))
+        ) or "- (none usable)"
+    else:
+        research_lines = "- (none — no verified research available for this studio)"
+
+    goal_line = (goal or "open a genuine conversation").strip()
+
+    return "\n".join([
+        "You are writing ONE short, warm cold-outreach EMAIL, in the BRAND VOICE "
+        "above, to a DIFFERENT, REAL tattoo studio (the recipient). Treat this as a "
+        "genuine first introduction from one studio to another (purpose = intro).",
+        "",
+        "# WHAT YOU ACTUALLY KNOW ABOUT THE RECIPIENT",
+        "# (the ONLY facts you may state about them):",
+        *known,
+        "",
+        "# RESEARCH (verbatim web snippets about the recipient — cite-only context):",
+        research_lines,
+        "",
+        "# HARD GROUNDING RULES — no fabrication about a REAL business:",
+        "- You may reference ONLY the facts under 'WHAT YOU ACTUALLY KNOW' above, "
+        "plus a research snippet ONLY when it is unmistakably about THIS studio and "
+        "you state nothing beyond what the snippet literally says.",
+        "- Do NOT invent or imply ANYTHING about the recipient's style, artists, past "
+        "work, awards, reputation, clientele, specialties, or history. If you lack a "
+        "specific fact, stay general and honest — use only their name and city.",
+        "- When you have nothing specific, connect on the genuine true reason: you are "
+        "a fellow tattoo studio reaching out. Reference their name and city, not "
+        "invented detail.",
+        "- Everything you say about YOURSELF (the sender) must come from the brand "
+        "voice's approved claims above — nothing else.",
+        f"- Reason for reaching out / goal: {goal_line}.",
+        "",
+        "Write a specific honest subject and a short plain-text body. End the body "
+        "with a brief visible unsubscribe line containing the exact token {{unsubscribe}}.",
+    ])
+
+
+def _template_outreach(
+    facts: dict[str, Any], *, goal: str, ch: str
+) -> tuple[str | None, str]:
+    """Deterministic fallback copy (no model): honest, grounded only in real facts.
+
+    Used when LLM copy is disabled (no Anthropic key) or the cell fails. Still never
+    invents a recipient detail — it leans on name, city, CSV note and the goal."""
+    name = (facts.get("name") or "there").strip()
+    first = name.split()[0] if name else "there"
+    traits = facts.get("persona_traits", {}) or {}
+    interests = facts.get("interests", []) or []
+    aesthetic = traits.get("aesthetic_lean")
+    top_interest = aesthetic or (interests[0] if interests else None)
+    city = facts.get("city")
+    notes = (facts.get("notes") or "").strip()
+    lifecycle = traits.get("lifecycle_stage")
+    win_back = bool(traits.get("win_back_candidate"))
+    tattoos = facts.get("tattoo_history", []) or []
+    last_style = tattoos[0]["style"] if tattoos else None
+
+    city_phrase = f" over in {city}" if city else ""
+    goal_line = (goal or "open a genuine conversation").strip()
+
+    if win_back or (lifecycle in ("lapsing", "lead-no-visit", "churn-risk")):
+        opener = f"Hi {first}, it's been a while and we've been thinking about you."
+    else:
+        opener = f"Hi {first}, I'm reaching out from one studio to another."
+
+    detail = ""
+    if last_style:
+        detail = f" Loved your last {last_style} piece."
+    elif top_interest:
+        detail = f" We work a lot in {top_interest} too."
+    elif notes:
+        detail = f" Saw you're {notes.lower()}."
+
+    body = (
+        f"{opener}{detail} I run a small studio{city_phrase} and wanted to say hello "
+        f"and {goal_line}. If it's of interest, I'd love to find a good time to talk. "
+        "No worries at all if not."
+    )
+    body = " ".join(body.split())
+
+    subject = None
+    if ch in ("gmail", "email"):
+        subject = f"Hello from one studio to another, {first}".strip()[:60]
+    return subject, body
+
+
 def build_outreach_draft(
     facts: dict[str, Any],
     *,
     goal: str = "",
     channel: str | None = None,
     plan_channels: list[str] | None = None,
+    tenant_id: str | None = None,
+    deep_research: bool | None = None,
 ) -> dict[str, Any]:
-    """Build ONE personalized outreach draft strictly from grounded facts.
+    """Build ONE personalized outreach draft for a lead — REAL copywriter-written,
+    brand-voiced, and grounded only in facts the system can substantiate.
 
-    Every interpolated detail (first name, city, top interest / aesthetic lean,
-    lapsed status, last tattoo style) comes from the lead's real customer/persona/
-    tattoo rows — NO invented facts. Returns ``{channel, target, subject, draft,
-    grounding}`` where ``grounding`` lists exactly which DB facts were used (so the
-    draft is auditable). The caller stages this as a PENDING action (HELD)."""
+    The copy is produced by the gated **copywriter email cell** (``cells.copywriter``)
+    in the SENDER's resolved **brand voice** (``resolve_brand_voice``), from a prompt
+    that may use ONLY the grounding bundle (recipient name / city / CSV note / any
+    first-party persona rows / cite-only verified research) and is explicitly
+    forbidden from asserting any unknown specific about the real recipient studio.
+    With no Anthropic key it degrades to a deterministic honest draft; with no
+    Firecrawl key (or ``deep_research`` off) the bundle simply carries no research —
+    never a fabricated fact.
+
+    Sync-callable (runs inside ``asyncio.to_thread`` today); the cell's ``run_sync``
+    bridges to the async agent internally. Returns the SAME contract
+    ``{channel, target, subject, draft, grounding, customer_id}`` where ``grounding``
+    is the audit list of exactly which facts/sources the copy was allowed to use, so
+    the caller can stage it as a PENDING action (HELD). Nothing is sent here."""
     name = (facts.get("name") or "there").strip()
-    first = name.split()[0] if name else "there"
-    traits = facts.get("persona_traits", {})
+    traits = facts.get("persona_traits", {}) or {}
     interests = facts.get("interests", []) or []
     aesthetic = traits.get("aesthetic_lean")
     top_interest = aesthetic or (interests[0] if interests else None)
     city = facts.get("city")
+    notes = (facts.get("notes") or "").strip()
     lifecycle = traits.get("lifecycle_stage")
     win_back = bool(traits.get("win_back_candidate"))
-    tattoos = facts.get("tattoo_history", [])
+    tattoos = facts.get("tattoo_history", []) or []
     last_style = tattoos[0]["style"] if tattoos else None
 
-    ch = (channel or choose_channel(facts, plan_channels)).lower()
+    # Channel: respect the explicit choice / consent rules. A lead reachable only by
+    # email (real public address, opted in, no IG handle) routes to email rather than
+    # defaulting to an instagram DM it has no handle for.
+    if channel:
+        ch = channel.strip().lower()
+    else:
+        ch = choose_channel(facts, plan_channels)
+        # Only when no channel was explicitly requested: a lead reachable solely by
+        # email (real address, opted in, no IG handle) should route to email rather
+        # than fall through to an instagram DM it has no handle for.
+        if ch == "instagram" and not plan_channels and not facts.get("ig_handle") \
+                and facts.get("email") and facts.get("email_opt_in"):
+            ch = "gmail"
+    if ch == "email":
+        ch = "gmail"
 
+    # --- grounding audit: exactly the facts the copy is allowed to use ----------- #
     grounding: list[str] = [f"name={name}"]
-    interest_phrase = ""
-    if top_interest:
-        interest_phrase = f" your {top_interest} work"
-        grounding.append(f"interest/aesthetic={top_interest}")
-    city_phrase = f" here in {city}" if city else ""
     if city:
         grounding.append(f"city={city}")
+    if notes:
+        grounding.append(f"note={notes}")
+    if top_interest:
+        grounding.append(f"interest/aesthetic={top_interest}")
     if lifecycle:
         grounding.append(f"lifecycle={lifecycle}")
     if last_style:
@@ -277,31 +522,36 @@ def build_outreach_draft(
     if win_back:
         grounding.append("win_back_candidate=true")
 
-    goal_line = (goal or "book your next session").strip()
+    subject: str | None = None
+    body: str | None = None
 
-    if win_back or (lifecycle in ("lapsing", "lead-no-visit", "churn-risk")):
-        opener = f"Hi {first} — it's been a while and we've been thinking about you."
-    else:
-        opener = f"Hi {first} —"
+    # --- REAL copywriter path (gated email cell, brand voice, verified research) -- #
+    if ch in ("gmail", "email") and _llm_copy_enabled():
+        try:
+            brand_voice_context, approved_claims = resolve_brand_voice(tenant_id)
+            research = research_studio(facts, enabled=_research_enabled(deep_research))
+            from cells.copywriter import build_copywriter_email_cell
 
-    last_line = (
-        f" Loved your last {last_style} piece" if last_style else ""
-    )
+            cell = build_copywriter_email_cell(
+                brand_voice_context=brand_voice_context,
+                approved_claims=approved_claims,
+            )
+            copy = cell.run_sync(_build_email_prompt(facts, goal=goal, research=research))
+            subject, body = copy.subject, copy.body
+            if brand_voice_context:
+                grounding.append(f"brand_voice={tenant_id or _DEFAULT_TENANT}")
+            for r in research:
+                grounding.append(f"research:{r['url']}")
+            grounding.append("copy=copywriter_email_cell")
+        except Exception as exc:  # any cell/network failure -> honest deterministic
+            subject = body = None
+            grounding.append(f"copy=deterministic_fallback({type(exc).__name__})")
 
-    body = (
-        f"{opener}{last_line}{(' We have new ' + str(top_interest) + ' flash that made us think of' + interest_phrase + '.') if top_interest else ''}"
-        f" We'd love to get you back in the chair{city_phrase} — {goal_line}."
-        " Want me to hold a spot for you this month?"
-    )
-    body = " ".join(body.split())  # collapse whitespace from optional fragments
-
-    subject = None
-    if ch in ("gmail", "email"):
-        subject = (
-            f"{first}, a {top_interest} idea for your next tattoo"
-            if top_interest
-            else f"{first}, let's plan your next tattoo"
-        )
+    # --- deterministic fallback (no key / non-email channel / cell failed) ------- #
+    if body is None:
+        subject, body = _template_outreach(facts, goal=goal, ch=ch)
+        if not any(g.startswith("copy=") for g in grounding):
+            grounding.append("copy=deterministic_template")
 
     target = None
     if ch in ("gmail", "email"):

@@ -103,7 +103,10 @@ def test_lookup_lead_honest_miss() -> None:
     assert lookup_lead(TENANT, email="nobody@nowhere.invalid", dsn=DSN) is None
 
 
-def test_build_outreach_draft_is_grounded() -> None:
+def test_build_outreach_draft_is_grounded(monkeypatch) -> None:
+    # Exercise the deterministic grounding/consent mechanics hermetically (no model):
+    # the REAL copywriter-cell path is covered separately by the live smoke.
+    monkeypatch.setenv("SCALERS_OUTREACH_LLM", "0")
     facts = lookup_lead(TENANT, email=SEED_EMAIL, dsn=DSN)
     draft = build_outreach_draft(facts, goal="win back lapsed clients")
     # Personalized: first name appears; grounding lists only real DB facts.
@@ -112,6 +115,29 @@ def test_build_outreach_draft_is_grounded() -> None:
     assert draft["customer_id"] == facts["customer_id"]
     # No fabricated channel — must be one of the real action channels.
     assert draft["channel"] in ("gmail", "instagram", "facebook", "sms")
+
+
+def test_build_outreach_draft_does_not_fabricate_recipient(monkeypatch) -> None:
+    # Deterministic path: a brand-new studio lead with only name + city + CSV note
+    # must produce honest copy and a grounding audit referencing only known facts.
+    monkeypatch.setenv("SCALERS_OUTREACH_LLM", "0")
+    facts = {
+        "customer_id": "cust_smoke_unit",
+        "name": "World Tattoo Studio",
+        "email": "worldtattoostudio@example.invalid",
+        "email_opt_in": True,
+        "city": "Denver",
+        "notes": "Primary contact for studio walk-ins/appts",
+        "persona_traits": {},
+        "interests": [],
+        "tattoo_history": [],
+    }
+    draft = build_outreach_draft(facts, goal="introduce our studio", channel="gmail")
+    assert draft["channel"] == "gmail"
+    assert draft["target"] == facts["email"]
+    assert (draft["draft"] or "").strip()
+    assert any(g == "name=World Tattoo Studio" for g in draft["grounding"])
+    assert any(g.startswith("city=") for g in draft["grounding"])
 
 
 def test_choose_channel_respects_consent() -> None:
