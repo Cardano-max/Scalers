@@ -19,6 +19,7 @@ import {
   type StudioStreamStatus,
 } from '@/lib/data/studio-adapter';
 import { studioPersona, type StudioPersona } from '@/lib/studio/persona';
+import { OrchestrationFlow } from './OrchestrationFlow';
 import { MicButton } from './MicButton';
 import { appendTranscript, type SttFactoryOptions } from '@/lib/studio/stt';
 
@@ -326,6 +327,10 @@ export function StudioChatPanel({
         </h2>
         <span style={{ fontSize: 11, color: '#A8A299' }}>operator + agent team</span>
       </header>
+
+      {/* Orchestration flow — appears once the agent team has started; lights up
+          each stage (Host → Strategist → Drafts → Critics → Jury) that has run. */}
+      {turns.some((t) => studioPersona(t).side === 'left') && <OrchestrationFlow turns={turns} />}
 
       {/* Message list */}
       <div
