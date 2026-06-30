@@ -1762,3 +1762,81 @@ def mount_studio_agui(app) -> None:
         if ev is None:
             return JSONResponse({"error": "no such action"}, status_code=404)
         return JSONResponse(ev.model_dump(by_alias=True))
+
+    @app.get("/studio/campaign/{run_id}/classify")
+    async def studio_campaign_classify_route(run_id: str):  # noqa: ANN202
+        """READ-ONLY: split a campaign run's PENDING drafts into ``eligible`` (safe to
+        batch-send — computed confidence at/above threshold, no safety/gate/quality
+        escalation) and ``review_required`` (everything else, fail-closed). Sends
+        nothing."""
+        from fastapi.responses import JSONResponse
+
+        from studio.campaign_send import classify_campaign
+
+        dsn = get_dsn()
+        try:
+            out = await asyncio.to_thread(classify_campaign, run_id=run_id, dsn=dsn)
+        except Exception as exc:
+            return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+        return JSONResponse(out)
+
+    @app.post("/studio/campaign/{run_id}/send-eligible")
+    async def studio_campaign_send_eligible_route(run_id: str, request: Request):  # noqa: ANN202
+        """OPERATOR-INITIATED: send ONLY the eligible/safe drafts of a campaign run.
+        Each goes through the existing per-draft ``approve_and_publish`` (atomic
+        exactly-once claim + gmail allow-list/redirect) — NOT a bulk bypass.
+        Non-eligible drafts are returned under ``skipped`` for review, never sent."""
+        from fastapi.responses import JSONResponse
+
+        from studio.campaign_send import send_eligible
+
+        try:
+            payload = json.loads(await request.body() or b"{}")
+        except Exception:
+            payload = {}
+        operator = (payload or {}).get("operator") if isinstance(payload, dict) else None
+        dsn = get_dsn()
+        try:
+            out = await asyncio.to_thread(
+                send_eligible, run_id=run_id, dsn=dsn, operator=operator
+            )
+        except Exception as exc:
+            return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+        return JSONResponse(out)
+
+    @app.post("/studio/campaign/action/{action_id}/override")
+    async def studio_campaign_override_route(action_id: str, request: Request):  # noqa: ANN202
+        """OVERRIDE one specific draft past the eligibility gate. REQUIRES an explicit
+        ``reason``; writes an ``override`` audit row BEFORE the send and routes the
+        send through the SAME ``approve_and_publish`` (exactly-once + allow-list still
+        apply). 400 if no reason is given — never a bare force-send."""
+        from fastapi.responses import JSONResponse
+
+        from studio.campaign_send import OverrideRequiresReasonError, override_send
+
+        try:
+            payload = json.loads(await request.body() or b"{}")
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        reason = (payload.get("reason") or "").strip()
+        operator = payload.get("operator")
+        if not reason:
+            return JSONResponse(
+                {"ok": False, "error": "override requires an explicit reason"},
+                status_code=400,
+            )
+        dsn = get_dsn()
+        try:
+            out = await asyncio.to_thread(
+                override_send, action_id, reason=reason, operator=operator, dsn=dsn
+            )
+        except OverrideRequiresReasonError:
+            return JSONResponse(
+                {"ok": False, "error": "override requires an explicit reason"},
+                status_code=400,
+            )
+        except Exception as exc:
+            return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+        return JSONResponse({"ok": True, **out})

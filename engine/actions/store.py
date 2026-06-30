@@ -179,6 +179,26 @@ def list_actions(tenant_id: str, status: str | None = None, dsn: str | None = No
     return [ActionRow.from_row(r) for r in rows]
 
 
+def list_actions_for_run(
+    run_id: str, *, status: str | None = None, dsn: str | None = None
+) -> list[ActionRow]:
+    """All actions staged under one campaign ``run_id`` (optionally a status),
+    oldest first. Used by the campaign-level send to enumerate a run's drafts."""
+    with _connect(dsn) as conn:
+        if status is None:
+            rows = conn.execute(
+                "SELECT * FROM actions WHERE run_id = %s ORDER BY created_at",
+                (run_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM actions WHERE run_id = %s AND status = %s "
+                "ORDER BY created_at",
+                (run_id, status),
+            ).fetchall()
+    return [ActionRow.from_row(r) for r in rows]
+
+
 def get_action(action_id: str, dsn: str | None = None) -> ActionRow | None:
     with _connect(dsn) as conn:
         row = conn.execute("SELECT * FROM actions WHERE id = %s", (action_id,)).fetchone()
