@@ -149,6 +149,8 @@ export function LiveCampaignStudio({ aguiUrl, graphqlUrl, sessionId }: LiveCampa
             onApplyReplan={studio.applyEditsAndReplan}
             planDirty={studio.planDirty}
             busy={studio.busy}
+            onRunCampaign={connected ? studio.runCampaign : undefined}
+            running={studio.runningCampaign}
           />
         </div>
       </div>

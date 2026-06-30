@@ -54,11 +54,16 @@ export interface UseStudioAgui {
   planDirty: boolean;
   steps: AgentStep[];
   busy: boolean;
+  /** True while a deterministic button-triggered campaign run is in flight. */
+  runningCampaign: boolean;
   pendingApproval: PendingApproval | null;
   error: string | null;
   send: (text: string) => void;
   setPlanField: (patch: Partial<CampaignPlan>) => void;
   applyEditsAndReplan: () => void;
+  /** Deterministic "Run campaign" — POSTs to /studio/run, bypassing the host's
+   *  free-text decision; runs the real traced spine and refreshes the thread. */
+  runCampaign: () => void;
   approve: () => void;
   reject: () => void;
 }
@@ -76,6 +81,7 @@ export function useStudioAgui(
   const [planDirty, setPlanDirty] = useState(false);
   const [steps, setSteps] = useState<AgentStep[]>([]);
   const [busy, setBusy] = useState(false);
+  const [runningCampaign, setRunningCampaign] = useState(false);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -280,6 +286,91 @@ export function useStudioAgui(
     );
   }, [connected, busy, send]);
 
+  // DETERMINISTIC run: POST the current plan to /studio/run (derived from the AG-UI
+  // URL) so the real traced spine fires WITHOUT depending on the host deciding to call
+  // the run_campaign tool. On completion we refresh history — the persisted operator
+  // trigger + per-agent traces + host summary replace the optimistic placeholders.
+  const runCampaign = useCallback(() => {
+    if (!connected || busy || runningCampaign) return;
+    setRunningCampaign(true);
+    setBusy(true);
+    setError(null);
+
+    const opId = `runbtn_op_${Date.now()}`;
+    const hostId = `runbtn_host_${Date.now()}`;
+    const stepId = `runbtn_step_${Date.now()}`;
+    const now = new Date().toISOString();
+    setTurns((prev) => [
+      ...prev,
+      { id: opId, role: 'OPERATOR', label: 'You', text: '▶ Run campaign', at: now },
+      {
+        id: hostId,
+        role: 'SYSTEM',
+        label: 'Studio Host',
+        text: 'Running the campaign — the team is working (research → strategy → drafts → critique → jury). This takes ~30–60s…',
+        at: now,
+        streaming: true,
+      },
+    ]);
+    setSteps((prev) => [
+      ...prev,
+      {
+        id: stepId,
+        agent: 'STRATEGIST',
+        label: 'Run campaign — real traced spine (HELD)',
+        status: 'running',
+      },
+    ]);
+
+    const runUrl = aguiUrl.replace(/\/agui(\?.*)?$/, '/run');
+    (async () => {
+      try {
+        const res = await fetch(runUrl, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ sessionId, plan: planRef.current }),
+        });
+        if (!res.ok) throw new Error(`studio run HTTP ${res.status}`);
+        const data = (await res.json()) as {
+          ok?: boolean;
+          error?: string;
+          runId?: string;
+          hostText?: string;
+        };
+        if (data.ok === false) {
+          setError(data.error ?? 'campaign run failed');
+        } else if (data.hostText) {
+          // keep the host aware of the run for any follow-up chat
+          messagesRef.current = [
+            ...messagesRef.current,
+            { id: `a_${Date.now()}`, role: 'assistant', content: data.hostText },
+          ];
+        }
+        setSteps((prev) =>
+          prev.map((s) =>
+            s.id === stepId
+              ? {
+                  ...s,
+                  status: data.ok === false ? 'failed' : 'done',
+                  detail: data.runId ? `run ${data.runId}` : undefined,
+                }
+              : s,
+          ),
+        );
+        await refreshHistory();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'campaign run failed');
+        setStreamStatus('error');
+        setSteps((prev) =>
+          prev.map((s) => (s.id === stepId ? { ...s, status: 'failed' } : s)),
+        );
+      } finally {
+        setRunningCampaign(false);
+        setBusy(false);
+      }
+    })();
+  }, [connected, busy, runningCampaign, aguiUrl, sessionId, refreshHistory]);
+
   return {
     connected,
     streamStatus,
@@ -289,11 +380,13 @@ export function useStudioAgui(
     planDirty,
     steps,
     busy,
+    runningCampaign,
     pendingApproval,
     error,
     send,
     setPlanField,
     applyEditsAndReplan,
+    runCampaign,
     approve: () => resolveApproval(true),
     reject: () => resolveApproval(false),
   };

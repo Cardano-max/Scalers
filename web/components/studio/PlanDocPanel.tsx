@@ -34,6 +34,10 @@ interface PlanDocPanelProps {
   onApplyReplan?: () => void;
   planDirty?: boolean;
   busy?: boolean;
+  /** LIVE path: deterministic "Run campaign" — triggers the real traced run DIRECTLY
+   *  (not via the host's free-text decision). `running` shows the in-flight state. */
+  onRunCampaign?: () => void;
+  running?: boolean;
 }
 
 const fieldLabelStyle: React.CSSProperties = {
@@ -79,6 +83,8 @@ export function PlanDocPanel({
   onApplyReplan,
   planDirty = false,
   busy = false,
+  onRunCampaign,
+  running = false,
 }: PlanDocPanelProps) {
   const version = doc ? `v${doc.version}` : 'v—';
   const status = doc ? STATUS_LABEL[doc.status] : '—';
@@ -275,28 +281,52 @@ export function PlanDocPanel({
             padding: '12px 16px',
             borderTop: '1px solid var(--hairline)',
             display: 'flex',
+            flexDirection: 'column',
             gap: 8,
           }}
         >
+          {/* PRIMARY: deterministic "Run campaign" — fires the real traced run
+              directly (no reliance on the host deciding to call the tool). */}
+          <button
+            type="button"
+            onClick={onRunCampaign}
+            disabled={busy || running || !onRunCampaign}
+            title="Run the real multi-agent campaign now (held — nothing is sent)"
+            aria-busy={running}
+            style={{
+              width: '100%',
+              fontSize: 14,
+              fontWeight: 700,
+              padding: '11px 14px',
+              border: 'none',
+              borderRadius: 9,
+              background: busy || running || !onRunCampaign ? '#CDB9E8' : '#7A5AF8',
+              color: busy || running || !onRunCampaign ? '#fff' : '#fff',
+              cursor: busy || running || !onRunCampaign ? 'not-allowed' : 'pointer',
+              opacity: busy || running || !onRunCampaign ? 0.85 : 1,
+            }}
+          >
+            {running ? 'Running the team… (~30–60s)' : '▶ Run campaign'}
+          </button>
           <button
             type="button"
             onClick={onApplyReplan}
-            disabled={!planDirty || busy}
+            disabled={!planDirty || busy || running}
             title={
               planDirty
                 ? 'Sync your edits to the backend and re-plan'
                 : 'Edit a field to enable'
             }
             style={{
-              flex: 1,
+              width: '100%',
               fontSize: 13,
               fontWeight: 600,
               padding: '10px 14px',
               border: 'none',
               borderRadius: 9,
-              background: !planDirty || busy ? '#CFE7E4' : '#0F8A82',
-              color: !planDirty || busy ? '#7FA8A3' : '#fff',
-              cursor: !planDirty || busy ? 'not-allowed' : 'pointer',
+              background: !planDirty || busy || running ? '#CFE7E4' : '#0F8A82',
+              color: !planDirty || busy || running ? '#7FA8A3' : '#fff',
+              cursor: !planDirty || busy || running ? 'not-allowed' : 'pointer',
             }}
           >
             {planDirty ? 'Apply edits & re-plan' : 'Plan in sync'}

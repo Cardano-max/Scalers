@@ -306,53 +306,23 @@ async def brainstorm_with_roles(ctx: RunContext[StudioDeps]) -> str:
     )
 
 
-@studio_agent.tool
-async def run_campaign(ctx: RunContext[StudioDeps]) -> str:
-    """Run the REAL, traced campaign for the CURRENT plan. Call when the operator asks
-    to RUN / launch / execute / kick off the campaign (or approves the plan to run).
+# --------------------------------------------------------------------------- #
+# Shared traced-run logic — used by BOTH the Haiku-triggered ``run_campaign``
+# tool AND the deterministic ``POST /studio/run`` button path, so they can never
+# diverge. All sync (offloaded once via ``asyncio.to_thread`` by each caller).
+# --------------------------------------------------------------------------- #
 
-    Classifies the plan to a registered archetype, then runs the WIRED Phase-A spine
-    (research -> strategy -> draft x N (capped) -> independent critique -> route pinned
-    to HOLD -> queue). Writes per-role ``agent_runs`` + queued ``assets`` + PENDING
-    ``actions`` and materializes a ``runs`` row whose steps are the per-agent traces
-    (watchable node-by-node in the Runs tab). NOTHING IS SENT — every output is
-    HELD/PENDING behind approve-first. Returns a short honest summary."""
-    from studio.campaign_runner import run_and_trace
 
-    plan = ctx.deps.state
-    brief = (
+def _brief_from_plan(plan: CampaignPlan) -> str:
+    return (
         f"Goal: {plan.goal or 'grow bookings'}\n"
         f"Audience: {plan.audience or 'local clients seeking custom tattoos'}\n"
         f"Channels: {', '.join(plan.channels) or 'instagram, email'}"
         + (f"\nSections: {', '.join(plan.sections)}" if plan.sections else "")
     )
-    summary = await asyncio.to_thread(
-        run_and_trace, brief=brief, tenant_id=ctx.deps.tenant_id, dsn=ctx.deps.dsn
-    )
 
-    # Mirror each per-role trace into the studio thread as a LABELED turn so the
-    # operator can watch what each agent thought right here (the Runs tab carries the
-    # full node/model/input/output drill-down for the same run_id).
-    for ar in summary.get("agent_runs", []):
-        role = str(ar.get("role") or "host")
-        role = role if role in VALID_ROLES else "host"
-        await asyncio.to_thread(
-            _log_turn,
-            ctx.deps.dsn,
-            ctx.deps.session_id,
-            role,
-            f"[{role}] {ar.get('output_summary', '')}",
-            ar.get("model"),
-        )
 
-    # Reflect the per-role work into the shared plan (persisted; the next turn loads it).
-    if summary.get("agent_runs"):
-        plan.tasks_per_role = {
-            str(ar.get("role")): [str(ar.get("output_summary", ""))[:160]]
-            for ar in summary["agent_runs"]
-        }
-        await asyncio.to_thread(_persist_plan, ctx.deps.dsn, ctx.deps.session_id, plan)
-
+def _summary_text(summary: dict[str, Any]) -> str:
     chans = ", ".join(summary.get("channels", [])) or "the selected channels"
     runs_note = (
         " You can watch each agent's step in the Runs tab."
@@ -365,6 +335,50 @@ async def run_campaign(ctx: RunContext[StudioDeps]) -> str:
         f"{summary.get('n_pending', 0)} action(s) PENDING approval — everything is HELD, "
         f"nothing was sent.{runs_note} Want me to refine a draft or stage one for approval?"
     )
+
+
+def _execute_campaign_sync(
+    plan: CampaignPlan, session_id: str, tenant_id: str, dsn: str | None
+) -> dict[str, Any]:
+    """SYNC: run the real traced Phase-A campaign for ``plan`` and persist its visible
+    surfaces — mirror each per-role trace into the thread as a LABELED turn (so the
+    operator can watch what each agent thought) and reflect the work into the shared
+    plan. Returns the runner summary. NOTHING is sent (HELD/PENDING only)."""
+    from studio.campaign_runner import run_and_trace
+
+    summary = run_and_trace(brief=_brief_from_plan(plan), tenant_id=tenant_id, dsn=dsn)
+    for ar in summary.get("agent_runs", []):
+        role = str(ar.get("role") or "host")
+        role = role if role in VALID_ROLES else "host"
+        _log_turn(dsn, session_id, role, f"[{role}] {ar.get('output_summary', '')}", ar.get("model"))
+    if summary.get("agent_runs"):
+        plan.tasks_per_role = {
+            str(ar.get("role")): [str(ar.get("output_summary", ""))[:160]]
+            for ar in summary["agent_runs"]
+        }
+        _persist_plan(dsn, session_id, plan)
+    return summary
+
+
+@studio_agent.tool
+async def run_campaign(ctx: RunContext[StudioDeps]) -> str:
+    """Run the REAL, traced campaign for the CURRENT plan. Call when the operator asks
+    to RUN / launch / execute / kick off the campaign (or approves the plan to run).
+
+    Classifies the plan to a registered archetype, then runs the WIRED Phase-A spine
+    (research -> strategy -> draft x N (capped) -> independent critique -> route pinned
+    to HOLD -> queue). Writes per-role ``agent_runs`` + queued ``assets`` + PENDING
+    ``actions`` and materializes a ``runs`` row whose steps are the per-agent traces
+    (watchable node-by-node in the Runs tab). NOTHING IS SENT — every output is
+    HELD/PENDING behind approve-first. Returns a short honest summary."""
+    summary = await asyncio.to_thread(
+        _execute_campaign_sync,
+        ctx.deps.state,
+        ctx.deps.session_id,
+        ctx.deps.tenant_id,
+        ctx.deps.dsn,
+    )
+    return _summary_text(summary)
 
 
 @studio_agent.tool(requires_approval=True)
@@ -489,4 +503,76 @@ def mount_studio_agui(app) -> None:
 
         return await AGUIAdapter.dispatch_request(
             request, agent=studio_agent, deps=deps, on_complete=on_complete
+        )
+
+    @app.post("/studio/run")
+    async def studio_run_route(request: Request):  # noqa: ANN202
+        """DETERMINISTIC campaign run — the 'Run campaign' BUTTON path.
+
+        Bypasses the Haiku host's free-text decision entirely: loads the session's
+        persisted plan (optionally merged with an inline override the button sends so
+        the run matches exactly what the operator sees) and runs the real traced
+        Phase-A spine directly via the SHARED ``_execute_campaign_sync``. Logs an
+        explicit operator trigger turn + the per-agent traces + a host summary so the
+        thread reads naturally after the frontend refreshes history. NOTHING is sent —
+        every output is HELD/PENDING behind approve-first (publishing still requires
+        the separate stage_publish approval gate)."""
+        from fastapi.responses import JSONResponse
+
+        dsn = get_dsn()
+        try:
+            payload = json.loads(await request.body() or b"{}")
+        except Exception:
+            payload = {}
+        session_id = (
+            payload.get("sessionId")
+            or payload.get("threadId")
+            or request.query_params.get("session_id")
+            or "studio-default"
+        )
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+
+        plan = _load_plan(session_id, dsn)
+        override = payload.get("plan")
+        if isinstance(override, dict):
+            try:
+                plan = CampaignPlan.model_validate({**plan.model_dump(), **override})
+            except Exception:
+                pass
+
+        try:
+            await asyncio.to_thread(
+                _log_turn, dsn, session_id, "operator", "Run the campaign now.", None
+            )
+        except Exception:
+            pass
+
+        try:
+            summary = await asyncio.to_thread(
+                _execute_campaign_sync, plan, session_id, tenant_id, dsn
+            )
+        except Exception as exc:  # honest failure — never a fake success
+            return JSONResponse(
+                {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500
+            )
+
+        host_text = _summary_text(summary)
+        try:
+            await asyncio.to_thread(
+                _log_turn, dsn, session_id, "host", host_text, HOST_AGUI_MODEL
+            )
+        except Exception:
+            pass
+
+        return JSONResponse(
+            {
+                "ok": True,
+                "runId": summary.get("run_id"),
+                "archetypeId": summary.get("archetype_id"),
+                "nPending": summary.get("n_pending"),
+                "nQueued": summary.get("n_queued"),
+                "channels": summary.get("channels"),
+                "runsRow": summary.get("runs_row"),
+                "hostText": host_text,
+            }
         )
