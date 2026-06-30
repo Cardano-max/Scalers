@@ -17,7 +17,12 @@ const ACTION_FIELDS = `
   gates { label ok }
   recommendation idempotencyKey status lastError
   judges { name score vote reasoning }
+  runId campaignId agentRole agentStepId traceUrl
 `;
+// runId/campaignId/agentRole/agentStepId/traceUrl are the traceability-spine
+// lineage now exposed on every Action (Review queue + Activity, which embeds this
+// fragment). Honest-null when the backend has no source. They let the chips
+// deep-link a draft → its run / producing-agent reasoning / run-level trace.
 // lastError carries the REAL provider error on a FAILED send (null otherwise).
 // It lives on BOTH Action and ActivityItem, so keeping it in the shared fragment
 // resolves for the review queue / action detail AND the Activity query (which
@@ -36,11 +41,13 @@ const ACTIVITY_FIELDS = `
   engagement { label value }
   thread { role name text }
   comments { name text autoReplied }
-  runId trace { id latency model tokens }
+  trace { id latency model tokens }
   judges { name score vote reasoning }
   spans { kind title ms detail }
   links { label target targetType }
 `;
+// runId / campaignId / agentRole / agentStepId / traceUrl arrive via the embedded
+// ACTION_FIELDS fragment above (don't re-list them here — that would double-select).
 
 const RUN_FIELDS = `
   id tenantId type trigger status startedAt duration autoCount reviewCount

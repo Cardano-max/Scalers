@@ -187,6 +187,20 @@ export interface Action {
   lastError?: string | null;
   judges?: Judge[];
   isSeeded?: boolean;
+  // --- traceability spine (additive) — REAL lineage exposed/derived on the
+  // draft so every Review-queue item links both ways. All honest-null when the
+  // source genuinely has no value; nothing is fabricated. ---
+  /** Owning workflow run id (actions.run_id). */
+  runId?: string | null;
+  /** Real campaign id (agent_runs.campaign_id, or run_id convention fallback). */
+  campaignId?: string | null;
+  /** The producing agent's role (e.g. Copywriter), linked via agent_runs. null
+   *  when the exact producing step could not be determined — never guessed. */
+  agentRole?: string | null;
+  /** The producing agent_runs step id, when resolvable (else null → honest). */
+  agentStepId?: string | null;
+  /** Run-level Langfuse trace url (per-step span ids are not persisted). */
+  traceUrl?: string | null;
 }
 
 export interface RunStep {

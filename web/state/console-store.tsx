@@ -67,7 +67,16 @@ type Action =
 function reducer(state: ConsoleState, action: Action): ConsoleState {
   switch (action.type) {
     case 'navigate':
-      if (action.screen === state.screen) return state;
+      if (action.screen === state.screen) {
+        // Same screen: a bare nav (no target) stays a no-op so an in-progress
+        // edit buffer survives (handoff rule). But an intra-screen DEEP-LINK
+        // (a chip/back-link that targets a specific row on the screen you are
+        // already on) MUST update contextId — otherwise clicking "Open run" for
+        // run B while already on Runs would do nothing. The editing buffer is
+        // left intact: selecting a different row is not a screen switch.
+        if (action.contextId == null) return state;
+        return { ...state, contextId: action.contextId };
+      }
       // Reset editing state on every screen switch (handoff behavior).
       return { screen: action.screen, contextId: action.contextId ?? null, editing: false, draftText: '' };
     case 'setContext':

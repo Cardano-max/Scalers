@@ -19,6 +19,11 @@ import { Dot } from './icons';
 import { Chip, ProviderErrorPanel, Tag, actionIntent, channelLabel, clockTime, matchesFilter, typeLabel, type QueueFilter } from './console-bits';
 import { CHANNEL_COLOR, WORKER_COLOR } from '@/lib/tokens';
 import type { Action, ActionType } from '@/lib/data/models';
+// --- traceability spine (additive) ---
+import { useConsole } from '@/state/console-store';
+import { useTraceArrival } from '@/lib/useTraceArrival';
+import { LineageChips } from './trace/LineageChips';
+import { ConfidenceEvidence } from './trace/ConfidenceEvidence';
 
 type ToastTone = 'success' | 'neutral' | 'amber';
 interface ToastState {
@@ -36,6 +41,9 @@ const FILTERS: Array<{ id: QueueFilter; label: string }> = [
 export function ReviewScreen() {
   const { adapter, tenantId } = useData();
   const queue = useAsync<Action[]>(() => adapter.getReviewQueue(tenantId), [tenantId]);
+  // Deep-link consumer + arrival highlight (additive traceability spine).
+  const console = useConsole();
+  const { highlightId, trigger: triggerArrival, scrollRef } = useTraceArrival();
 
   const [items, setItems] = useState<Action[] | null>(null);
   const [filter, setFilter] = useState<QueueFilter>('ALL');
@@ -63,7 +71,12 @@ export function ReviewScreen() {
 
   const list = useMemo(() => items ?? [], [items]);
   const filtered = useMemo(
-    () => list.filter((a) => matchesFilter(a.type, filter)),
+    () =>
+      list
+        .filter((a) => matchesFilter(a.type, filter))
+        // NEWEST drafts at the TOP (operator ask). createdAt is ISO-8601, so a
+        // lexical compare is chronological; non-mutating (filter already copied).
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0)),
     [list, filter],
   );
   const counts = useMemo(() => countByFilter(list), [list]);
@@ -78,6 +91,23 @@ export function ReviewScreen() {
       setSelectedId(filtered[0].id);
     }
   }, [filtered, selectedId]);
+
+  // ADDITIVE deep-link consumer (traceability spine): when navigated here with a
+  // contextId that matches a queued draft — e.g. a chip on a run/feed item — select
+  // + highlight that EXACT draft. Declared AFTER the default-select effect on
+  // purpose: on the data-load commit both run, and React applies this one's
+  // setSelectedId LAST, so the deep-link target wins over filtered[0] (the same
+  // "opens first item" race the other screens had). On a non-match it is a no-op,
+  // so the default-select still seeds the first row.
+  useEffect(() => {
+    const target = console.contextId;
+    if (target && filtered.some((a) => a.id === target)) {
+      setSelectedId(target);
+      setEditing(false);
+      triggerArrival(target);
+      console.setContext(null);
+    }
+  }, [filtered, console, triggerArrival]);
 
   const selected = filtered.find((a) => a.id === selectedId) ?? null;
 
@@ -230,6 +260,8 @@ export function ReviewScreen() {
                     key={a.id}
                     action={a}
                     selected={a.id === selectedId}
+                    highlighted={a.id === highlightId}
+                    scrollRef={a.id === highlightId ? scrollRef : undefined}
                     onSelect={() => selectRow(a.id)}
                   />
                 ))}
@@ -273,10 +305,14 @@ export function ReviewScreen() {
 function QueueRow({
   action,
   selected,
+  highlighted,
+  scrollRef,
   onSelect,
 }: {
   action: Action;
   selected: boolean;
+  highlighted?: boolean;
+  scrollRef?: (node: HTMLElement | null) => void;
   onSelect: () => void;
 }) {
   const preview = action.subject ?? action.draft;
@@ -284,6 +320,8 @@ function QueueRow({
     <li>
       <button
         type="button"
+        ref={scrollRef}
+        className={highlighted ? 'trace-arrive' : undefined}
         onClick={onSelect}
         style={{
           width: '100%',
@@ -334,10 +372,27 @@ function QueueRow({
           <span className="mono" style={{ fontSize: 11, color: WORKER_COLOR[action.worker] }}>
             {action.worker}
           </span>
+          <span className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            {clockTime(action.createdAt)}
+          </span>
           <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-muted)' }}>
             Confidence {pct(action.confidence)}%
           </span>
         </div>
+        {/* Lineage chips — deep-link to the producing run / agent reasoning / this
+            draft. Renders only the ids that genuinely exist (honest-null). */}
+        {action.runId || action.campaignId ? (
+          <div style={{ marginTop: 7 }}>
+            <LineageChips
+              lineage={{
+                campaignId: action.campaignId,
+                runId: action.runId,
+                agentRole: action.agentRole,
+                actionId: action.id,
+              }}
+            />
+          </div>
+        ) : null}
       </button>
     </li>
   );
@@ -386,6 +441,19 @@ function DetailPane({
           </span>
         </div>
         <div style={{ fontSize: 13.5, color: 'var(--text-secondary-2)' }}>{action.target}</div>
+        {/* Lineage chips — campaign / run / producing-agent reasoning / this draft,
+            plus context (created, channel, run-level trace). Deep-links both ways. */}
+        <LineageChips
+          lineage={{
+            campaignId: action.campaignId,
+            runId: action.runId,
+            agentRole: action.agentRole,
+            actionId: action.id,
+            createdAt: action.createdAt,
+            channel: action.channel,
+            traceUrl: action.traceUrl,
+          }}
+        />
       </div>
 
       {/* Plain-language intent + HELD/staged banner: states exactly what approving
@@ -422,6 +490,10 @@ function DetailPane({
       ) : null}
 
       <AutonomyCard action={action} />
+
+      {/* Human-readable "why this confidence" — built from the real jury/judge
+          fields above, with a link to the exact reasoning trace. Not raw JSON. */}
+      <ConfidenceEvidence action={action} />
 
       {action.context ? (
         <Section label="Replying to">

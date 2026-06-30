@@ -35,6 +35,27 @@ describe('console store — nav + edit reset', () => {
     expect(same.draftText).toBe('keep me');
   });
 
+  it('SAME-screen nav WITH a deep-link target updates contextId (intra-screen chip jump)', () => {
+    // The traceability fix: clicking a chip that targets a specific row on the
+    // screen you are already on must re-select that row. A bare same-screen nav
+    // stays a no-op (above); one carrying a contextId updates it.
+    const onActivity = { ...start, screen: 'activity' as const, contextId: null };
+    const jumped = __reducer(onActivity, {
+      type: 'navigate',
+      screen: 'activity',
+      contextId: 'act_77a0b',
+    });
+    expect(jumped.screen).toBe('activity');
+    expect(jumped.contextId).toBe('act_77a0b');
+    // editing buffer is preserved (selecting a different row is not a screen switch)
+    const editingThenJump = __reducer(
+      { ...onActivity, editing: true, draftText: 'half' },
+      { type: 'navigate', screen: 'activity', contextId: 'act_x' },
+    );
+    expect(editingThenJump.draftText).toBe('half');
+    expect(editingThenJump.contextId).toBe('act_x');
+  });
+
   it('setDraft updates the buffer; cancelEditing clears it', () => {
     let s = __reducer(start, { type: 'startEditing', draftText: 'a' });
     s = __reducer(s, { type: 'setDraft', draftText: 'ab' });

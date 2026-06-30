@@ -37,6 +37,7 @@ import { Chip, channelLabel, clockTime, typeLabel, type ChipTone } from './conso
 import { Dot } from './icons';
 import { AUTONOMY_LABEL, CHANNEL_COLOR, WORKER_COLOR } from '@/lib/tokens';
 import type {
+  Action,
   ActivityItem,
   AutonomyMode,
   Escalation,
@@ -55,6 +56,28 @@ const OUTCOME_TONE: Record<ActivityItem['outcome']['kind'], ChipTone> = {
   neutral: 'neutral',
 };
 
+/** Map a pending Review-queue draft into the ActivityItem shape so "Open
+ *  reasoning" resolves it. Carries the REAL Action core (incl. jury, gates,
+ *  judges, run linkage) verbatim and adds ONLY truthful staged metadata — no
+ *  fabricated trace, engagement, spans, or outcome. */
+function stagedStepFromAction(a: Action): ActivityItem {
+  return {
+    ...a,
+    autonomy: 'APPROVE_FIRST',
+    content: a.draft,
+    outcome: { label: 'Staged · pending approval', kind: 'neutral' },
+    thinking: [],
+    engagement: [],
+    thread: [],
+    comments: [],
+    runId: a.runId ?? null,
+    trace: null,
+    judges: a.judges ?? [],
+    spans: [],
+    links: [],
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Main screen component
 // ─────────────────────────────────────────────────────────────────────────────
@@ -68,6 +91,20 @@ export function StepDetailScreen() {
     () => adapter.getActivity(tenantId),
     [tenantId],
   );
+  // ALSO load the pending Review-queue drafts (live source). "Open reasoning"
+  // can target a draft that has not executed yet — without this it resolves to
+  // nothing and the page dead-ends on "No step selected" (an orphan). We map each
+  // draft into the ActivityItem shape with NO fabricated trace/engagement so the
+  // jury reasoning it DOES have renders, and the honest "not captured" badges
+  // cover the rest. Mirrors ActivityScreen's staged routing.
+  const isLive = adapter.source === 'live';
+  const staged = useAsync<ActivityItem[]>(
+    () =>
+      isLive
+        ? adapter.getReviewQueue(tenantId).then((as) => as.map(stagedStepFromAction))
+        : Promise.resolve([]),
+    [tenantId, isLive],
+  );
   // Load runs in parallel — needed only for Langfuse URL gating (spec §2.6).
   const runs = useAsync<Run[]>(
     () => adapter.getRuns(tenantId),
@@ -76,24 +113,32 @@ export function StepDetailScreen() {
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  // Mirror ActivityScreen:46-64: once data loads, resolve contextId → selectedId,
-  // then immediately clear contextId so it does not bleed into a subsequent nav.
+  // Executed work + staged drafts share one lookup so a deep-link to either kind
+  // resolves to the EXACT item — never the wrong one, never an orphan.
+  const allItems = useMemo(
+    () => [...(activity.data ?? []), ...(staged.data ?? [])],
+    [activity.data, staged.data],
+  );
+  const itemsReady = activity.data !== undefined && staged.data !== undefined;
+
+  // Resolve contextId → selectedId once the data loads, then clear contextId so
+  // it does not bleed into a subsequent nav.
   useEffect(() => {
-    if (consoleStore.contextId && activity.data) {
-      const found = activity.data.find((a) => a.id === consoleStore.contextId);
+    if (consoleStore.contextId && itemsReady) {
+      const found = allItems.find((a) => a.id === consoleStore.contextId);
       if (found) {
         setSelectedId(consoleStore.contextId);
         consoleStore.setContext(null);
       }
     }
-  }, [consoleStore.contextId, activity.data, consoleStore]);
+  }, [consoleStore.contextId, allItems, itemsReady, consoleStore]);
 
   const item = useMemo(
     () =>
-      activity.data && selectedId
-        ? (activity.data.find((a) => a.id === selectedId) ?? null)
+      selectedId
+        ? (allItems.find((a) => a.id === selectedId) ?? null)
         : null,
-    [activity.data, selectedId],
+    [allItems, selectedId],
   );
 
   // Resolve the owning run for the Langfuse link gate (spec §2.6).
@@ -105,11 +150,20 @@ export function StepDetailScreen() {
     [runs.data, item?.runId],
   );
 
-  if (activity.loading && !activity.data) {
+  if (!itemsReady && (activity.loading || staged.loading)) {
     return <Skeleton rows={6} label="Loading step detail…" />;
   }
-  if (activity.error) {
-    return <ErrorState error={activity.error} onRetry={activity.reload} />;
+  const loadError = activity.error ?? staged.error;
+  if (loadError) {
+    return (
+      <ErrorState
+        error={loadError}
+        onRetry={() => {
+          activity.reload();
+          staged.reload();
+        }}
+      />
+    );
   }
   if (!item) {
     return (

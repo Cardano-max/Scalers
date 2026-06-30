@@ -416,6 +416,14 @@ def _build_action(conn: Any, row: dict[str, Any]) -> Action:
             decision.get("run_id", "").startswith("demo-") if decision else False
         )
 
+    # --- traceability spine: real lineage exposed/derived on the draft ---------
+    # run_id is on the row; campaign_id + producing-agent step are derived from
+    # agent_runs (real-or-honest-null); trace_url is the run-level Langfuse link.
+    action_run_id = row.get("run_id")
+    action_campaign_id = _campaign_id_for(conn, action_run_id)
+    action_step_id, action_agent_role = _producing_step_for(conn, action_run_id)
+    action_trace_url = observability.trace_url(action_run_id) if action_run_id else None
+
     return Action(
         id=row["id"],
         tenant_id=row["tenant_id"],
@@ -452,6 +460,12 @@ def _build_action(conn: Any, row: dict[str, Any]) -> Action:
         last_error=row.get("last_error"),
         judges=action_judges,
         is_seeded=action_is_seeded,
+        # Lineage (additive; honest-null where no source exists).
+        run_id=action_run_id,
+        campaign_id=action_campaign_id,
+        agent_role=action_agent_role,
+        agent_step_id=action_step_id,
+        trace_url=action_trace_url,
     )
 
 
@@ -573,6 +587,12 @@ def _build_activity(conn: Any, row: dict[str, Any]) -> ActivityItem:
         # Carry the real provider error through verbatim (set only when the send
         # failed); the Activity detail renders it as an honest error panel.
         last_error=core.last_error,
+        # Lineage (additive) — reuse the core's derived values so an Activity item
+        # links back to its campaign / producing-agent step / run-level trace.
+        campaign_id=core.campaign_id,
+        agent_role=core.agent_role,
+        agent_step_id=core.agent_step_id,
+        trace_url=core.trace_url,
     )
 
 
@@ -771,6 +791,41 @@ def _campaign_id_for(conn: Any, run_id: str | None) -> str | None:
     except Exception:
         pass
     return _parse_campaign_from_run_id(run_id)
+
+
+# --------------------------------------------------------------------------- #
+# Producing-agent step resolution (real-or-honest-null). An action/draft is the
+# output of a drafting agent step in ``agent_runs`` (run scoped). We link the
+# action to the most-recent agent_runs row for the same run whose role is a known
+# DRAFTING role (copywriter/draft/writer). HONESTY: if no such row exists we
+# return ``(None, None)`` — we link to the run instead and say so, rather than
+# guessing a wrong step. (Per-step Langfuse span ids are NOT persisted, so the
+# step's own deep-link genuinely does not exist — only the run-level trace_url.)
+# --------------------------------------------------------------------------- #
+_DRAFTING_ROLES = ("copywriter", "copy", "draft", "drafter", "writer")
+
+
+def _producing_step_for(conn: Any, run_id: str | None) -> tuple[str | None, str | None]:
+    """Return ``(agent_step_id, agent_role)`` for the drafting step of ``run_id``.
+
+    ``(None, None)`` when ``run_id`` is absent or no confident drafting-role match
+    exists — never a guessed step. Raise-never: any DB hiccup degrades to None.
+    """
+    if not run_id:
+        return None, None
+    try:
+        placeholders = ",".join(["%s"] * len(_DRAFTING_ROLES))
+        row = conn.execute(
+            f"SELECT id, role FROM agent_runs WHERE run_id=%s "
+            f"AND lower(role) IN ({placeholders}) ORDER BY created_at DESC LIMIT 1",
+            (run_id, *_DRAFTING_ROLES),
+        ).fetchone()
+        if row:
+            sid = row.get("id")
+            return (str(sid) if sid is not None else None), row.get("role")
+    except Exception:
+        pass
+    return None, None
 
 
 # --------------------------------------------------------------------------- #
