@@ -180,7 +180,11 @@ def _publish_gmail(action: ActionRow, connector: Any | None, dsn: str | None) ->
     to_addr = real_to
     subject = action.subject or ""
     redirect = os.environ.get("GMAIL_REDIRECT_TO")
-    if redirect:
+    # Allow-list: actions explicitly staged for real outreach (worker
+    # 'studio_real_send') bypass the safety redirect and go to the real lead; every
+    # other gmail action (e.g. dummy/seed-customer campaign drafts) is redirected to
+    # the operator inbox so an accidental approve can never reach a real stranger.
+    if redirect and getattr(action, "worker", None) != "studio_real_send":
         to_addr = redirect
         subject = f"[TEST->{real_to}] {subject}"
     try:
