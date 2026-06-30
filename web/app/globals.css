@@ -263,6 +263,37 @@ body {
   }
 }
 
+/*
+ * (6) Streaming reasoning caret — trails the leading edge while the newest LIVE
+ * step's REAL reasoning reveals progressively (the "thinking is unfolding live"
+ * feel). Only the reveal is animated; the text itself is the real agent output.
+ */
+@keyframes stream-caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+.stream-caret {
+  display: inline-block;
+  width: 2px;
+  height: 0.95em;
+  margin-left: 1.5px;
+  border-radius: 1px;
+  background: currentColor;
+  vertical-align: -0.12em;
+  animation: stream-caret-blink 1.05s steps(1, end) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .stream-caret {
+    animation: none;
+    display: none;
+  }
+}
+
 /* Voice-orb idle breathing (only on the idle/connecting states; live is audio-driven). */
 @keyframes orb-breathe {
   0%,

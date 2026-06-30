@@ -10,6 +10,7 @@
 import { useState } from 'react';
 import type { RunStep } from '@/lib/studio/run-trace';
 import { personaForRunRole, stepSummaryLine, durationBetween } from '@/lib/studio/agency';
+import { StreamingText } from './StreamingText';
 
 function pretty(value: unknown): string {
   if (value == null) return '';
@@ -26,18 +27,24 @@ export function StepSpanRow({
   prevCreatedAt,
   index,
   active = false,
+  stream = false,
 }: {
   step: RunStep;
   prevCreatedAt?: string | null;
   index: number;
   /** True when this is the in-flight step with no output yet (shimmer skeleton). */
   active?: boolean;
+  /** True for the newest landed step of a LIVE run — its reasoning streams in. */
+  stream?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const persona = personaForRunRole(step.role);
   const dur = durationBetween(prevCreatedAt ?? null, step.createdAt ?? null);
   const summary = stepSummaryLine(step);
   const hasOutput = step.output != null && step.output !== '';
+  // Exactly the one-line evidence we display when collapsed (kept verbatim — the
+  // streaming reveal only animates how much of THIS real string is shown).
+  const shown = summary.length > 160 ? `${summary.slice(0, 160)}…` : summary;
 
   return (
     <div
@@ -105,7 +112,13 @@ export function StepSpanRow({
           <div className="shimmer" style={{ height: 13, borderRadius: 5, width: '72%' }} />
         ) : summary ? (
           <div style={{ fontSize: 12.5, lineHeight: 1.45, color: 'var(--text-secondary)' }}>
-            {open ? '' : summary.length > 160 ? `${summary.slice(0, 160)}…` : summary}
+            {open ? (
+              ''
+            ) : stream ? (
+              <StreamingText text={shown} caretColor={persona.accent} />
+            ) : (
+              shown
+            )}
           </div>
         ) : (
           <div style={{ fontSize: 12, color: 'var(--text-faint)' }}>No output recorded for this step.</div>

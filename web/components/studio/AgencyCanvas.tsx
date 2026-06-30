@@ -244,6 +244,9 @@ export function AgencyCanvas({
               step={s}
               index={i}
               prevCreatedAt={i > 0 ? steps[i - 1].createdAt : null}
+              /* Only the newest landed step of a LIVE run streams its reasoning in;
+                 earlier (already-complete) steps render their real text in full. */
+              stream={running && i === steps.length - 1}
             />
           ))}
           {running && (
