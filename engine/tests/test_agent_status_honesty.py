@@ -91,3 +91,60 @@ def test_errored_run_marks_the_failing_agent_failed_not_queued() -> None:
     statuses = derive_agent_statuses("artist_spotlight", _runs("strategist"), "error")
     assert _QUEUED not in statuses.values()
     assert statuses["draft"] == AGENT_STATUS_FAILED
+
+
+# --- landed-but-FAILED runs read 'failed', never a fake 'done' -------------------- #
+
+
+def test_failed_strategist_run_reads_failed_not_done() -> None:
+    # The provided-leads path records a failed cell as a real agent_run marked
+    # status='failed' and CONTINUES. That landed run must read 'failed', not 'done' —
+    # a failed strategist showing green would misreport a fake success.
+    agent_runs = [
+        {"role": "strategist", "output": {"status": "failed", "error": "model timeout"}},
+        {"role": "draft", "output": {"hook": "h"}},
+        {"role": "draft", "output": {"hook": "h2"}},
+        {"role": "critic", "output": {"verdict": "approve", "confidence": 0.9, "rationale": "ok"}},
+        {"role": "critic", "output": {"verdict": "revise", "confidence": 0.6, "rationale": "tighten"}},
+        {"role": "jury", "output": {"aggregate": 1.0, "decision": "review"}},
+    ]
+    statuses = derive_agent_statuses("provided_leads", agent_runs, "completed")
+    assert statuses["strategist"] == AGENT_STATUS_FAILED
+    # The successful lanes stay done; nothing is silently queued.
+    assert statuses["draft"] == AGENT_STATUS_DONE
+    assert statuses["critic"] == AGENT_STATUS_DONE
+    assert statuses["jury"] == AGENT_STATUS_DONE
+    assert _QUEUED not in statuses.values()
+
+
+def test_failed_critic_run_reads_failed_even_when_other_critics_succeed() -> None:
+    # A rate-limited (429) critic on a multi-lead run records verdict='error'. The critic
+    # lane surfaces 'failed' so the operator SEES it — even though other critic passes
+    # succeeded. The strategist and the rest stay honest.
+    agent_runs = [
+        {"role": "strategist", "output": {"target_angle": "win them back", "positioning": "p"}},
+        {"role": "draft", "output": {"hook": "h"}},
+        {"role": "critic", "output": {"verdict": "approve", "confidence": 0.9, "rationale": "ok"}},
+        {"role": "critic", "output": {"verdict": "error", "confidence": 0.0, "rationale": "critic cell failed: 429"}},
+        {"role": "jury", "output": {"aggregate": 1.0, "decision": "review"}},
+    ]
+    statuses = derive_agent_statuses("provided_leads", agent_runs, "completed")
+    assert statuses["critic"] == AGENT_STATUS_FAILED
+    assert statuses["strategist"] == AGENT_STATUS_DONE
+    assert statuses["draft"] == AGENT_STATUS_DONE
+    assert _QUEUED not in statuses.values()
+
+
+def test_all_success_run_still_reads_done_everywhere() -> None:
+    # Regression guard: with every recorded run successful, every landed lane is 'done'
+    # (the failure detection must not false-positive on real success outputs, incl. a
+    # real critic verdict of approve/revise/reject and a jury 'decision').
+    agent_runs = [
+        {"role": "strategist", "output": {"target_angle": "a", "positioning": "p"}},
+        {"role": "draft", "output": {"hook": "h", "caption": "c"}},
+        {"role": "critic", "output": {"verdict": "reject", "confidence": 0.3, "rationale": "off-voice"}},
+        {"role": "jury", "output": {"aggregate": 0.0, "decision": "review"}},
+    ]
+    statuses = derive_agent_statuses("provided_leads", agent_runs, "completed")
+    for role in ("strategist", "draft", "critic", "jury"):
+        assert statuses[role] == AGENT_STATUS_DONE, role
