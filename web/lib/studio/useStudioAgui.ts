@@ -12,7 +12,7 @@
  * and every action is a no-op, so the UI shows the honest not-connected state and
  * NEVER a fabricated exchange. Reachable → every turn is a real model round-trip.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AgentStep,
   ChatTurn,
@@ -95,6 +95,15 @@ export interface UseStudioAgui {
   pendingApproval: PendingApproval | null;
   error: string | null;
   send: (text: string) => void;
+  /**
+   * Record a finalized SPOKEN turn into the SAME transcript as typed turns, so the
+   * voice host and the text composer are ONE conversation (not two windows). These
+   * client-recorded lines are kept separately from the persisted/streamed history so
+   * a history refresh (after a typed turn or a completed run) never wipes them; the
+   * exposed `turns` is the two merged in chronological order. The session id is the
+   * SAME one the voice WebRTC session mints with — voice + text share one session.
+   */
+  recordVoiceTurn: (role: ChatTurn['role'], label: string, text: string) => void;
   setPlanField: (patch: Partial<CampaignPlan>) => void;
   applyEditsAndReplan: () => void;
   /** Deterministic "Run campaign" — POST /studio/run (returns run_id fast), then
@@ -115,6 +124,10 @@ export function useStudioAgui(
   const [connected, setConnected] = useState<boolean | null>(null);
   const [streamStatus, setStreamStatus] = useState<StudioStreamStatus>('connecting');
   const [turns, setTurns] = useState<ChatTurn[]>([]);
+  // Finalized spoken turns, recorded client-side so they interleave with the typed
+  // transcript and SURVIVE a history refresh (which replaces `turns`). Kept separate
+  // and merged on read — see `recordVoiceTurn` and the merged `turns` returned below.
+  const [voiceTurns, setVoiceTurns] = useState<ChatTurn[]>([]);
   const [plan, setPlan] = useState<CampaignPlan>(emptyPlan());
   const [planVersion, setPlanVersion] = useState(0);
   const [planDirty, setPlanDirty] = useState(false);
@@ -318,6 +331,41 @@ export function useStudioAgui(
     [pendingApproval, busy, connected, drive, refreshHistory],
   );
 
+  // Record a finalized spoken line into the unified transcript. Deduped against the
+  // immediately-previous voice line (the realtime stream can re-emit a final), so a
+  // single utterance lands once. Never sends anything — it is a display record only.
+  const recordVoiceTurn = useCallback(
+    (role: ChatTurn['role'], label: string, text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      setVoiceTurns((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && last.role === role && last.text === trimmed) return prev;
+        return [
+          ...prev,
+          {
+            id: `voice_${role}_${Date.now()}_${prev.length}`,
+            role,
+            label,
+            text: trimmed,
+            at: new Date().toISOString(),
+          },
+        ];
+      });
+    },
+    [],
+  );
+
+  // The ONE transcript: persisted/streamed turns + client-recorded voice turns,
+  // merged in chronological order (ISO timestamps sort lexically). This is what the
+  // single Voice surface renders — typed and spoken lines in one conversation.
+  const mergedTurns = useMemo<ChatTurn[]>(() => {
+    if (voiceTurns.length === 0) return turns;
+    return [...turns, ...voiceTurns].sort((a, b) =>
+      a.at < b.at ? -1 : a.at > b.at ? 1 : 0,
+    );
+  }, [turns, voiceTurns]);
+
   const setPlanField = useCallback((patch: Partial<CampaignPlan>) => {
     setPlan((prev) => ({ ...prev, ...patch }));
     setPlanDirty(true);
@@ -427,7 +475,7 @@ export function useStudioAgui(
   return {
     connected,
     streamStatus,
-    turns,
+    turns: mergedTurns,
     plan,
     planVersion,
     planDirty,
@@ -438,6 +486,7 @@ export function useStudioAgui(
     pendingApproval,
     error,
     send,
+    recordVoiceTurn,
     setPlanField,
     applyEditsAndReplan,
     runCampaign,

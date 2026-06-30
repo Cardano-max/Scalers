@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { OrchestrationFlow, deriveFlowStages } from '../OrchestrationFlow';
-import { StudioChatPanel } from '../StudioChatPanel';
 import type { ChatTurn } from '@/lib/data/studio-adapter';
 
 /**
@@ -53,19 +52,5 @@ describe('OrchestrationFlow render', () => {
     const host = container.querySelector('[data-stage="host"]') as HTMLElement;
     expect(host.getAttribute('data-done')).toBe('false');
     expect(screen.getByLabelText('Campaign orchestration flow')).toBeInTheDocument();
-  });
-});
-
-describe('StudioChatPanel — flow visibility', () => {
-  it('hides the flow strip until an agent turn exists (honest empty state)', () => {
-    const opOnly: ChatTurn[] = [
-      { id: 'op', role: 'OPERATOR', label: 'You', text: 'hi', at: '2026-06-30T10:00:00Z' },
-    ];
-    const { rerender, queryByLabelText } = render(
-      <StudioChatPanel turns={opOnly} onSend={() => {}} streamStatus="open" />,
-    );
-    expect(queryByLabelText('Campaign orchestration flow')).toBeNull();
-    rerender(<StudioChatPanel turns={realRunTurns} onSend={() => {}} streamStatus="open" />);
-    expect(queryByLabelText('Campaign orchestration flow')).toBeInTheDocument();
   });
 });

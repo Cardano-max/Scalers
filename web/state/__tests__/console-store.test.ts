@@ -5,10 +5,10 @@ describe('console store — nav + edit reset', () => {
   const start = { screen: 'overview' as const, contextId: null, editing: false, draftText: '' };
 
   it('leads with the voice-first headline modes then the real-data tabs', () => {
+    // The separate Command chat tab was removed — Voice is the one conversation.
     expect(NAV_ITEMS.map((n) => n.id)).toEqual([
       'voice',
       'agency',
-      'command',
       'overview',
       'review',
       'activity',

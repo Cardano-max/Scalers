@@ -76,9 +76,14 @@ export function useVoiceHost(
     onRunLaunched?: (runId: string) => void;
     /** Reflect the server-persisted voice plan edit into the shared plan panel. */
     onPlan?: (plan: Record<string, unknown>) => void;
+    /** A finalized OPERATOR utterance — record it into the unified transcript so
+     *  spoken and typed turns are ONE conversation. */
+    onUserFinal?: (text: string) => void;
+    /** A finalized HOST utterance — record it into the unified transcript. */
+    onAssistantFinal?: (text: string) => void;
   } = {},
 ): UseVoiceHost {
-  const { disabled = false, onRunLaunched, onPlan } = opts;
+  const { disabled = false, onRunLaunched, onPlan, onUserFinal, onAssistantFinal } = opts;
 
   const [conn, setConn] = useState<VoiceConnState>('idle');
   const [userLine, setUserLine] = useState('');
@@ -99,6 +104,10 @@ export function useVoiceHost(
   onLaunchedRef.current = onRunLaunched;
   const onPlanRef = useRef(onPlan);
   onPlanRef.current = onPlan;
+  const onUserFinalRef = useRef(onUserFinal);
+  onUserFinalRef.current = onUserFinal;
+  const onAssistantFinalRef = useRef(onAssistantFinal);
+  onAssistantFinalRef.current = onAssistantFinal;
 
   // Narrate each NEW landed agent through the realtime voice as it appears in the
   // shared run state. Honest: only fires for real steps, once each.
@@ -141,13 +150,19 @@ export function useVoiceHost(
     setError(null);
     const s = new RealtimeVoiceSession(aguiUrl, sessionId, {
       onStatus: setConn,
-      onUserTranscript: setUserLine,
+      onUserTranscript: (t) => {
+        setUserLine(t);
+        // A finalized spoken line — record it into the ONE transcript (same session).
+        onUserFinalRef.current?.(t);
+      },
       onAssistantTranscript: (t, done) => {
         setAssistantLine((prev) => (done ? t : prev + t));
         // Host is speaking while deltas arrive; clear shortly after the final.
         setHostSpeaking(true);
         if (speakingTimer.current) clearTimeout(speakingTimer.current);
         speakingTimer.current = setTimeout(() => setHostSpeaking(false), done ? 350 : 1200);
+        // On the final, record the host's spoken line into the unified transcript.
+        if (done) onAssistantFinalRef.current?.(t);
       },
       onPlan: handlePlan,
       onOrchestrate: handleOrchestrate,

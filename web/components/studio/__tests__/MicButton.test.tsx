@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { MicButton } from '../MicButton';
-import { StudioChatPanel } from '../StudioChatPanel';
+import { VoiceTweakPanel } from '../VoiceTweakPanel';
 import type {
   SpeechRecognitionLike,
   SpeechRecognitionEventLike,
@@ -78,15 +78,16 @@ describe('MicButton', () => {
   });
 });
 
-describe('StudioChatPanel — voice feeds the existing text composer', () => {
+describe('VoiceTweakPanel — voice feeds the existing text composer', () => {
   it('drops a dictated transcript into the draft and sends it via onSend', () => {
     const { factory, instances } = captureFactory();
     const onSend = vi.fn();
     render(
-      <StudioChatPanel
+      <VoiceTweakPanel
         turns={[]}
         onSend={onSend}
         streamStatus="open"
+        sessionId="s1"
         micOptions={{ recognizerFactory: factory }}
       />,
     );
@@ -95,7 +96,7 @@ describe('StudioChatPanel — voice feeds the existing text composer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start voice input' }));
     act(() => instances[0].emit('plan a may promo', true));
 
-    const textarea = screen.getByLabelText('Message the campaign team') as HTMLTextAreaElement;
+    const textarea = screen.getByLabelText('Tweak the plan or type a brief') as HTMLTextAreaElement;
     expect(textarea.value).toBe('plan a may promo');
 
     // The SAME existing send path handles it — no new backend.
@@ -106,14 +107,15 @@ describe('StudioChatPanel — voice feeds the existing text composer', () => {
   it('appends a dictated chunk after typed text with a single space', () => {
     const { factory, instances } = captureFactory();
     render(
-      <StudioChatPanel
+      <VoiceTweakPanel
         turns={[]}
         onSend={vi.fn()}
         streamStatus="open"
+        sessionId="s1"
         micOptions={{ recognizerFactory: factory }}
       />,
     );
-    const textarea = screen.getByLabelText('Message the campaign team') as HTMLTextAreaElement;
+    const textarea = screen.getByLabelText('Tweak the plan or type a brief') as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: 'Goal:' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'Start voice input' }));

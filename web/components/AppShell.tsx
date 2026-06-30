@@ -24,7 +24,7 @@ export function AppShell() {
   const { screen, navigate } = useConsole();
 
   // Optional deep-link: open a screen directly from the URL hash (e.g.
-  // `#command`). No-op in jsdom (empty hash) and when the hash isn't a known
+  // `#voice`). No-op in jsdom (empty hash) and when the hash isn't a known
   // screen, so default routing and tests are unaffected.
   useEffect(() => {
     const hash =
