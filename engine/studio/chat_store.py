@@ -39,6 +39,10 @@ VALID_ROLES: tuple[str, ...] = (
     "researcher",
     "strategist",
     "draft",
+    # P3.x: the Host's REAL extended-thinking trace (Anthropic ThinkingPart.content),
+    # captured from the run result and persisted so a frontend thinking-view can show
+    # genuine reasoning. Carries the host model pin; never an outreach send.
+    "thinking",
 )
 
 

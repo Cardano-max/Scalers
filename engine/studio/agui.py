@@ -108,12 +108,25 @@ _SYSTEM = (
     "jury) and produces drafts + actions staged for approval; everything is HELD "
     "and NOTHING is sent. The operator can watch each agent's step. Do NOT invent "
     "its output.\n"
-    "4. NEVER send or publish anything yourself. If the operator wants something "
+    "4. You HAVE a customer database and a persistent memory layer. When the "
+    "operator asks you to research / look up / target customers or leads, or refers "
+    "to uploaded leads, churn-risk / lapsing customers, or 'these customers', you "
+    "MUST call the research tools — NEVER reply that you lack access to a database "
+    "or memory. Use `research_lead` to pull ONE lead's grounded facts (interests, "
+    "past tattoos, city, persona psychology, prior-campaign memories) and reason "
+    "over them. Use `research_and_stage_leads` to research a BATCH (the uploaded "
+    "leads or the churn-risk cohort) one-by-one and produce a PERSONALIZED outreach "
+    "draft per lead — each draft is staged as a PENDING action in the Review Queue "
+    "(HELD, approve-first) and a memory of the outreach is written so you remember "
+    "it next time. Reason per-lead before drafting; ground every claim in the facts "
+    "the tool returns — never invent a customer detail.\n"
+    "5. NEVER send or publish anything yourself. If the operator wants something "
     "posted/emailed, call `stage_publish` — it stages a PENDING action that a "
     "human must approve; it is held, never sent.\n"
-    "5. After acting, reply in 2-4 sentences: reflect the current plan and ask 1 "
+    "6. After acting, reply in 2-4 sentences: reflect the current plan and ask 1 "
     "high-leverage clarifying question. Be honest — never claim a tool ran that "
-    "did not, and never claim anything was sent."
+    "did not, never claim anything was sent, and never claim a customer fact the "
+    "research tool did not return."
 )
 
 
@@ -125,12 +138,27 @@ _SYSTEM = (
 # `DeferredToolRequests` is not among output types" and the approval gate would 500
 # instead of surfacing an Approve/Reject interrupt. Declaring it here makes the gate
 # work unconditionally (and matches what the hermetic approval test asserts).
+# Extended thinking on the Host (Haiku 4.5). Haiku 4.5 supports CLASSIC budget
+# thinking only (`anthropic_supports_adaptive_thinking=False` in the installed
+# pydantic-ai profile), so the shape is `{"type":"enabled","budget_tokens":N}` with
+# 1024 <= N < max_tokens. Extended thinking forces temperature=1 (the prior 0.4 is
+# replaced). The reasoning text comes back as a `ThinkingPart` (content + signature)
+# and is CAPTURED + persisted in `on_complete` (role="thinking") so a later
+# frontend thinking-view can show REAL reasoning. Verified compatible with this
+# agent's `output_type=[str, DeferredToolRequests]` + tools (auto tool_choice).
+HOST_THINKING_BUDGET = 1024
+HOST_MAX_TOKENS = 4096
+
 studio_agent = Agent(
     HOST_AGUI_MODEL,
     deps_type=StudioDeps,
     output_type=[str, DeferredToolRequests],
     instructions=_SYSTEM,
-    model_settings={"temperature": 0.4},
+    model_settings={
+        "temperature": 1,
+        "max_tokens": HOST_MAX_TOKENS,
+        "anthropic_thinking": {"type": "enabled", "budget_tokens": HOST_THINKING_BUDGET},
+    },
     defer_model_check=True,
 )
 
@@ -160,6 +188,49 @@ def _plan_context(ctx: RunContext[StudioDeps]) -> str:
     )
 
 
+@studio_agent.instructions
+def _memory_and_db_context(ctx: RunContext[StudioDeps]) -> str:
+    """Advertise the customer DB + memory layer on EVERY turn, and surface the
+    memories relevant to this campaign so the Host genuinely 'remembers' prior runs.
+
+    This is what kills the "I don't have access to a memory layer" refusal: the
+    capability is now real (the `research_lead` / `research_and_stage_leads` tools),
+    and the relevant memories are injected here as ground truth. Recall is best-effort
+    — if the memory store is unavailable it degrades to advertising the tools, never
+    to a false claim that data exists."""
+    p = ctx.deps.state
+    lines = [
+        "CUSTOMER DATA + MEMORY ARE AVAILABLE TO YOU. You can pull real grounded "
+        "facts on any lead (customers + persona traits + tattoo history + prior "
+        "campaign memories) and you persist memories across runs. When the operator "
+        "asks to research/target customers or references uploaded/churn-risk leads, "
+        "CALL `research_lead` or `research_and_stage_leads` — do NOT say you lack "
+        "access.",
+    ]
+    try:
+        from memory import MemoryStore
+
+        query = (p.goal or "") + " " + (p.audience or "") or "campaign outreach"
+        store = MemoryStore(dsn=ctx.deps.dsn)
+        recalled = store.recall(tenant_id=ctx.deps.tenant_id, query=query, k=5)
+        if recalled:
+            mem_lines = "\n".join(f"  - {m.text}" for m in recalled)
+            lines.append(
+                "MEMORIES FROM PRIOR CAMPAIGNS/RESEARCH for this studio (treat as "
+                "remembered context, not new facts):\n" + mem_lines
+            )
+        else:
+            lines.append(
+                "MEMORIES: none recorded yet for this studio (this is your first "
+                "research/campaign, or none match) — do not invent any."
+            )
+    except Exception:
+        lines.append(
+            "MEMORIES: memory layer present; no memories loaded this turn."
+        )
+    return "\n".join(lines)
+
+
 # --------------------------------------------------------------------------- #
 # Persistence helpers (sync psycopg, offloaded to threads from the async tools)
 # --------------------------------------------------------------------------- #
@@ -179,6 +250,37 @@ def _log_turn(dsn: str | None, session_id: str, role: str, text: str, model: str
 
 def _persist_plan(dsn: str | None, session_id: str, plan: CampaignPlan) -> str:
     return upsert_plan(session_id, plan.model_dump(), dsn=dsn)
+
+
+def _extract_thinking(result: Any) -> list[str]:
+    """Pull the REAL extended-thinking text (``ThinkingPart.content``) out of a
+    completed run. Returns the non-empty reasoning segments in order. Best-effort:
+    if the SDK shape changes or no thinking was produced, returns ``[]`` (never
+    fabricates a trace)."""
+    try:
+        from pydantic_ai.messages import ThinkingPart
+    except Exception:
+        return []
+    segments: list[str] = []
+    try:
+        messages = result.all_messages()
+    except Exception:
+        return []
+    for msg in messages:
+        for part in getattr(msg, "parts", []) or []:
+            if isinstance(part, ThinkingPart):
+                content = (getattr(part, "content", "") or "").strip()
+                if content:
+                    segments.append(content)
+    return segments
+
+
+def _persist_thinking(dsn: str | None, session_id: str, segments: list[str]) -> None:
+    """Persist captured thinking segments as ``role='thinking'`` chat turns carrying
+    the host model pin, so a later thinking-view can render REAL reasoning."""
+    store = _chat_store(dsn)
+    for seg in segments:
+        store.append_turn(session_id, "thinking", seg, HOST_AGUI_MODEL)
 
 
 # --------------------------------------------------------------------------- #
@@ -417,6 +519,207 @@ async def stage_publish(
 
 
 # --------------------------------------------------------------------------- #
+# Customer research + per-lead grounded drafting (the grounding + memory layer)
+# --------------------------------------------------------------------------- #
+
+
+def _format_lead_facts(facts: dict[str, Any]) -> str:
+    """Render grounded lead facts as a compact, honest block for the Host to reason
+    over. Only fields the DB actually returned appear."""
+    traits = facts.get("persona_traits", {})
+    parts = [f"{facts.get('name')} ({facts.get('customer_id')})"]
+    if facts.get("city"):
+        parts.append(f"{facts['city']}, {facts.get('state') or ''}".strip(", "))
+    if facts.get("interests"):
+        parts.append("interests=" + ", ".join(facts["interests"]))
+    for key in ("aesthetic_lean", "lifecycle_stage", "win_back_candidate", "likely_best_channel"):
+        if key in traits:
+            parts.append(f"{key}={traits[key]}")
+    th = facts.get("tattoo_history", [])
+    parts.append(f"past_tattoos={len(th)}" + (f" (last: {th[0]['style']})" if th else ""))
+    if facts.get("memories"):
+        parts.append(f"prior_memories={len(facts['memories'])}")
+    return " | ".join(str(p) for p in parts)
+
+
+@studio_agent.tool
+async def research_lead(
+    ctx: RunContext[StudioDeps],
+    email: str | None = None,
+    name: str | None = None,
+    customer_id: str | None = None,
+) -> str:
+    """Pull ONE lead's REAL grounded facts from the customer DB + memory layer.
+
+    Resolves by email, name, or customer_id (tenant-scoped). Returns interests, past
+    tattoos, city, persona psychology, and any prior-campaign memories so you can
+    reason per-lead. Returns an honest 'not found' if the lead is not in the DB —
+    never invent facts."""
+    from studio.customer_research import lookup_lead
+
+    def _work() -> dict[str, Any] | None:
+        from memory import MemoryStore
+
+        return lookup_lead(
+            ctx.deps.tenant_id,
+            email=email,
+            name=name,
+            customer_id=customer_id,
+            dsn=ctx.deps.dsn,
+            memory_store=MemoryStore(dsn=ctx.deps.dsn),
+        )
+
+    facts = await asyncio.to_thread(_work)
+    if facts is None:
+        ident = email or name or customer_id
+        return f"No customer found for {ident!r} in tenant {ctx.deps.tenant_id}. (Honest: this lead is not in the DB.)"
+    return "Grounded facts: " + _format_lead_facts(facts)
+
+
+def _research_and_stage_sync(
+    plan: CampaignPlan,
+    session_id: str,
+    tenant_id: str,
+    dsn: str | None,
+    *,
+    emails: list[str] | None,
+    limit: int,
+) -> dict[str, Any]:
+    """SYNC: research a batch of leads one-by-one, build a PERSONALIZED grounded draft
+    per lead, persist each as a PENDING ``actions`` row (HELD), and WRITE a per-lead +
+    a campaign memory so the Host remembers this outreach next run. NOTHING is sent."""
+    from actions.store import ensure_schema, record_pending_action
+
+    from memory import MemoryStore
+    from studio.customer_research import (
+        build_outreach_draft,
+        churn_risk_leads,
+        lookup_leads,
+    )
+
+    store = MemoryStore(dsn=dsn)
+    store.ensure_schema()
+    ensure_schema(dsn)
+
+    if emails:
+        leads = lookup_leads(
+            tenant_id, [{"email": e} for e in emails], dsn=dsn, memory_store=store
+        )
+        requested = len(emails)
+    else:
+        leads = churn_risk_leads(tenant_id, limit=limit, dsn=dsn, memory_store=store)
+        requested = len(leads)
+
+    goal = plan.goal or "win back lapsed clients"
+    staged: list[dict[str, Any]] = []
+    for facts in leads:
+        draft = build_outreach_draft(
+            facts, goal=goal, plan_channels=plan.channels or None
+        )
+        cust_id = facts["customer_id"]
+        action_id = record_pending_action(
+            tenant_id=tenant_id,
+            decision_id=None,
+            type="outreach",
+            channel=draft["channel"],
+            worker="studio_agui_research",
+            target=draft["target"],
+            draft=draft["draft"],
+            subject=draft["subject"],
+            conf=None,
+            threshold=None,
+            esc_kind="approval_required",
+            esc_label="Studio per-lead outreach — operator approval required",
+            idempotency_key=f"studio:{session_id}:{cust_id}:outreach",
+            dsn=dsn,
+        )
+        # Persistent memory of this outreach (per customer) — internal context only.
+        store.write(
+            tenant_id=tenant_id,
+            subject_type="customer",
+            subject_id=cust_id,
+            text=(
+                f"Staged {draft['channel']} outreach to {facts.get('name')} for goal "
+                f"'{goal}'. Grounded on: {', '.join(draft['grounding'])}. "
+                f"Draft opener: {draft['draft'][:100]}"
+            ),
+            metadata={
+                "kind": "outreach",
+                "session_id": session_id,
+                "action_id": action_id,
+                "channel": draft["channel"],
+            },
+        )
+        staged.append(
+            {
+                "customer_id": cust_id,
+                "name": facts.get("name"),
+                "channel": draft["channel"],
+                "action_id": action_id,
+                "target": draft["target"],
+            }
+        )
+
+    channels = sorted({s["channel"] for s in staged})
+    # Campaign-level memory (cross-run learning) keyed to this session.
+    if staged:
+        store.write(
+            tenant_id=tenant_id,
+            subject_type="campaign",
+            subject_id=session_id,
+            text=(
+                f"Researched {len(staged)} leads and staged {len(staged)} personalized "
+                f"PENDING outreach drafts for goal '{goal}' across {', '.join(channels)}. "
+                f"Leads: {', '.join(s['name'] or s['customer_id'] for s in staged[:10])}."
+            ),
+            metadata={"kind": "campaign_summary", "session_id": session_id, "n": len(staged)},
+        )
+    return {
+        "requested": requested,
+        "n_leads": len(leads),
+        "n_drafts": len(staged),
+        "channels": channels,
+        "staged": staged,
+        "not_found": max(0, requested - len(leads)) if emails else 0,
+    }
+
+
+@studio_agent.tool
+async def research_and_stage_leads(
+    ctx: RunContext[StudioDeps],
+    emails: list[str] | None = None,
+    limit: int = 10,
+) -> str:
+    """Research a BATCH of leads one-by-one and stage a PERSONALIZED outreach draft
+    PER lead in the Review Queue (PENDING / HELD — nothing sent).
+
+    Pass ``emails`` to target specific uploaded leads; omit it to target the tenant's
+    churn-risk / lapsing cohort (capped by ``limit``). For each lead this pulls real
+    grounded facts, builds a personalized draft from those facts (no invented
+    details), writes a PENDING ``actions`` row, and records a memory of the outreach
+    so you remember it next time. Returns an honest summary of what was staged."""
+    summary = await asyncio.to_thread(
+        _research_and_stage_sync,
+        ctx.deps.state,
+        ctx.deps.session_id,
+        ctx.deps.tenant_id,
+        ctx.deps.dsn,
+        emails=emails,
+        limit=limit,
+    )
+    lead_lines = "; ".join(
+        f"{s['name']}→{s['channel']} (action {s['action_id']})" for s in summary["staged"][:10]
+    )
+    nf = summary.get("not_found", 0)
+    nf_note = f" {nf} requested lead(s) were not in the DB (honest miss)." if nf else ""
+    return (
+        f"Researched {summary['n_leads']} lead(s) and staged {summary['n_drafts']} "
+        f"personalized PENDING outreach draft(s) across {', '.join(summary['channels']) or 'n/a'} "
+        f"— all HELD in the Review Queue, nothing sent.{nf_note} {lead_lines}"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Customer CSV upload — REAL parse, honest preview (NO ingestion)
 # --------------------------------------------------------------------------- #
 
@@ -538,6 +841,13 @@ def mount_studio_agui(app) -> None:
             out = getattr(result, "output", None)
             text = out if isinstance(out, str) else None
             try:
+                # Capture + persist the host's REAL extended-thinking trace first, so
+                # the thinking-view can show the reasoning behind this reply.
+                segments = _extract_thinking(result)
+                if segments:
+                    await asyncio.to_thread(
+                        _persist_thinking, dsn, session_id, segments
+                    )
                 if text:
                     await asyncio.to_thread(
                         _log_turn, dsn, session_id, "host", text, HOST_AGUI_MODEL
@@ -651,4 +961,27 @@ def mount_studio_agui(app) -> None:
             result = parse_customers_csv(content, filename)
         except ValueError as exc:
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+        # INGEST: upsert parsed leads into ``customers`` (keyed on tenant+email) so
+        # ``research_lead`` / ``research_and_stage_leads`` can find them. Idempotent —
+        # re-uploading already-seeded leads matches them and creates no duplicates.
+        # Honest: if ingestion fails we still return the parse preview with the error.
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        try:
+            from studio.customer_research import ingest_leads
+
+            # Re-parse ALL data rows (parse_customers_csv samples only the first 5).
+            import csv as _csv
+            import io as _io
+
+            reader = _csv.DictReader(_io.StringIO((content or "").lstrip("﻿")))
+            rows = [{(k or "").strip(): (v or "") for k, v in r.items()} for r in reader]
+            ingest = await asyncio.to_thread(
+                lambda: ingest_leads(tenant_id, rows, dsn=dsn)
+            )
+            result["ingested"] = True
+            result["ingest"] = ingest
+        except Exception as exc:  # honest: report the failure, keep the preview
+            result["ingested"] = False
+            result["ingest_error"] = f"{type(exc).__name__}: {exc}"
         return JSONResponse(result)
