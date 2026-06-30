@@ -15,11 +15,10 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import {
-  STUDIO_ROLE_COLOR,
-  STUDIO_ROLE_LABEL,
   type ChatTurn,
   type StudioStreamStatus,
 } from '@/lib/data/studio-adapter';
+import { studioPersona } from '@/lib/studio/persona';
 import { MicButton } from './MicButton';
 import { appendTranscript, type SttFactoryOptions } from '@/lib/studio/stt';
 
@@ -51,6 +50,24 @@ function formatTime(at: string): string {
   const d = new Date(at);
   if (Number.isNaN(d.getTime())) return '';
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+/** Blinking caret shown at the tail of an in-flight (streaming) turn. */
+function StreamingCaret({ color }: { color: string }) {
+  return (
+    <span
+      aria-label="streaming"
+      style={{
+        display: 'inline-block',
+        width: 7,
+        height: 14,
+        marginLeft: 2,
+        verticalAlign: 'text-bottom',
+        background: color,
+        animation: 'studioCaret 1s steps(2) infinite',
+      }}
+    />
+  );
 }
 
 export function StudioChatPanel({
@@ -151,56 +168,139 @@ export function StudioChatPanel({
             backend is connected.
           </div>
         ) : (
-          turns.map((turn) => (
-            <article
-              key={turn.id}
-              data-role={turn.role}
-              style={{ display: 'flex', flexDirection: 'column', gap: 4 }}
-            >
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                <span
+          turns.map((turn) => {
+            const persona = studioPersona(turn);
+            const isOperator = persona.side === 'right';
+
+            // Operator: a right-aligned filled bubble, clearly NOT an agent.
+            if (isOperator) {
+              return (
+                <article
+                  key={turn.id}
+                  data-role={turn.role}
+                  data-persona={persona.key}
                   style={{
-                    fontSize: 12,
-                    fontWeight: 600,
-                    color: STUDIO_ROLE_COLOR[turn.role],
+                    alignSelf: 'flex-end',
+                    maxWidth: '82%',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 4,
                   }}
                 >
-                  {turn.label || STUDIO_ROLE_LABEL[turn.role]}
-                </span>
-                <time
-                  dateTime={turn.at}
-                  style={{ fontSize: 11, color: '#A8A299', fontVariantNumeric: 'tabular-nums' }}
-                >
-                  {formatTime(turn.at)}
-                </time>
-              </div>
-              <div
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'baseline',
+                      justifyContent: 'flex-end',
+                      gap: 8,
+                    }}
+                  >
+                    <time
+                      dateTime={turn.at}
+                      style={{ fontSize: 11, color: '#A8A299', fontVariantNumeric: 'tabular-nums' }}
+                    >
+                      {formatTime(turn.at)}
+                    </time>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: persona.accent }}>
+                      {persona.name}
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 14,
+                      lineHeight: 1.5,
+                      color: '#0B3F3B',
+                      background: persona.bg,
+                      border: `1px solid ${persona.border}`,
+                      borderRadius: 12,
+                      borderTopRightRadius: 4,
+                      padding: '9px 12px',
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                    }}
+                  >
+                    {turn.text}
+                    {turn.streaming && <StreamingCaret color={persona.accent} />}
+                  </div>
+                </article>
+              );
+            }
+
+            // Agent: a left-aligned card with a coloured avatar + accent rail.
+            return (
+              <article
+                key={turn.id}
+                data-role={turn.role}
+                data-persona={persona.key}
                 style={{
-                  fontSize: 14,
-                  lineHeight: 1.5,
-                  color: '#2A2722',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
+                  alignSelf: 'flex-start',
+                  maxWidth: '92%',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 10,
                 }}
               >
-                {turn.text}
-                {turn.streaming && (
-                  <span
-                    aria-label="streaming"
+                <span
+                  aria-hidden
+                  style={{
+                    flex: '0 0 auto',
+                    width: 30,
+                    height: 30,
+                    borderRadius: 9,
+                    background: persona.bg,
+                    border: `1px solid ${persona.border}`,
+                    color: persona.accent,
+                    fontSize: 11,
+                    fontWeight: 700,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontVariantNumeric: 'tabular-nums',
+                  }}
+                >
+                  {persona.initials}
+                </span>
+                <div
+                  style={{
+                    minWidth: 0,
+                    flex: 1,
+                    background: persona.bg,
+                    border: `1px solid ${persona.border}`,
+                    borderLeft: `3px solid ${persona.accent}`,
+                    borderRadius: 10,
+                    padding: '8px 12px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 3,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 700, color: persona.accent }}>
+                      {turn.label || persona.name}
+                    </span>
+                    <time
+                      dateTime={turn.at}
+                      style={{ fontSize: 11, color: '#A8A299', fontVariantNumeric: 'tabular-nums' }}
+                    >
+                      {formatTime(turn.at)}
+                    </time>
+                  </div>
+                  <div
                     style={{
-                      display: 'inline-block',
-                      width: 7,
-                      height: 14,
-                      marginLeft: 2,
-                      verticalAlign: 'text-bottom',
-                      background: STUDIO_ROLE_COLOR[turn.role],
-                      animation: 'studioCaret 1s steps(2) infinite',
+                      fontSize: 14,
+                      lineHeight: 1.5,
+                      color: '#2A2722',
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
                     }}
-                  />
-                )}
-              </div>
-            </article>
-          ))
+                  >
+                    {turn.text}
+                    {turn.streaming && <StreamingCaret color={persona.accent} />}
+                  </div>
+                </div>
+              </article>
+            );
+          })
         )}
       </div>
 
