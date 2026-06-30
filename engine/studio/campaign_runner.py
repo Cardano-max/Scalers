@@ -147,7 +147,8 @@ def _materialize_runs_row(
 
 
 def run_and_trace(
-    *, brief: str, tenant_id: str, dsn: str | None = None, archetype_id: str | None = None
+    *, brief: str, tenant_id: str, dsn: str | None = None, archetype_id: str | None = None,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Run the real, traced Phase-A campaign for ``brief`` and return a structured
     summary (NOTHING sends; all outputs are HELD/PENDING).
@@ -156,6 +157,9 @@ def run_and_trace(
     ``agent_runs`` (list of {role, model, output_summary}), ``n_pending``,
     ``n_queued``, ``channels`` (from the spec), ``step_notes``, and
     ``runs_row`` (bool: whether the Runs-UI trace row was materialized).
+
+    ``run_id`` may be supplied so the async studio run endpoint knows the id up front
+    and can poll ``agent_runs`` live as each role lands.
     """
     from archetypes import registry
     from archetypes.compose import run_campaign as _compose_run
@@ -164,7 +168,9 @@ def run_and_trace(
     if aid not in registry.REGISTRY:
         aid = pick_archetype(brief)
 
-    state = _compose_run(archetype_id=aid, tenant_id=tenant_id, brief=brief, dsn=dsn, persist=True)
+    state = _compose_run(
+        archetype_id=aid, tenant_id=tenant_id, brief=brief, dsn=dsn, persist=True, run_id=run_id
+    )
 
     # Read back the per-role traces the spine just wrote (authoritative source).
     agent_runs: list[dict[str, Any]] = []

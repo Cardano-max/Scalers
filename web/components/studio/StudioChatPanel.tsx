@@ -51,6 +51,12 @@ interface StudioChatPanelProps {
    * ingestion). Omit in preview — the control then shows an honest not-connected note.
    */
   uploadEndpoint?: string;
+  /**
+   * True while a LIVE campaign run is in flight. Surfaces the orchestration strip
+   * immediately (even before the first agent card lands) and lights the active stage
+   * with a spinner, so the operator watches the run progress in real time.
+   */
+  runActive?: boolean;
 }
 
 function formatTime(at: string): string {
@@ -280,6 +286,7 @@ export function StudioChatPanel({
   onReject,
   micOptions,
   uploadEndpoint,
+  runActive = false,
 }: StudioChatPanelProps) {
   const [draft, setDraft] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -338,9 +345,12 @@ export function StudioChatPanel({
         </div>
       </header>
 
-      {/* Orchestration flow — appears once the agent team has started; lights up
-          each stage (Host → Strategist → Drafts → Critics → Jury) that has run. */}
-      {turns.some((t) => studioPersona(t).side === 'left') && <OrchestrationFlow turns={turns} />}
+      {/* Orchestration flow — appears once the agent team has started (or the moment a
+          live run kicks off); lights up each stage (Host → Strategist → Drafts →
+          Critics → Jury) that has run and spins the active stage during a live run. */}
+      {(runActive || turns.some((t) => studioPersona(t).side === 'left')) && (
+        <OrchestrationFlow turns={turns} running={runActive} />
+      )}
 
       {/* Message list */}
       <div

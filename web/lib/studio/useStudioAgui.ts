@@ -31,6 +31,7 @@ import {
   userMessage,
 } from './agui';
 import { fetchStudioHistory } from './studio-history';
+import { startRun, fetchRunState, type RunState } from './run-trace';
 
 export interface PendingApproval {
   interrupt: AguiInterrupt;
@@ -88,13 +89,16 @@ export interface UseStudioAgui {
   busy: boolean;
   /** True while a deterministic button-triggered campaign run is in flight. */
   runningCampaign: boolean;
+  /** Live state of the current/last run — per-agent steps as they land (drives the
+   *  OrchestrationFlow stepper + per-agent cards filling in real time). */
+  runState: RunState | null;
   pendingApproval: PendingApproval | null;
   error: string | null;
   send: (text: string) => void;
   setPlanField: (patch: Partial<CampaignPlan>) => void;
   applyEditsAndReplan: () => void;
-  /** Deterministic "Run campaign" — POSTs to /studio/run, bypassing the host's
-   *  free-text decision; runs the real traced spine and refreshes the thread. */
+  /** Deterministic "Run campaign" — POST /studio/run (returns run_id fast), then
+   *  poll GET /studio/run/{id} so per-agent steps surface live, not batch-revealed. */
   runCampaign: () => void;
   approve: () => void;
   reject: () => void;
@@ -114,6 +118,7 @@ export function useStudioAgui(
   const [steps, setSteps] = useState<AgentStep[]>([]);
   const [busy, setBusy] = useState(false);
   const [runningCampaign, setRunningCampaign] = useState(false);
+  const [runState, setRunState] = useState<RunState | null>(null);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -326,90 +331,67 @@ export function useStudioAgui(
     );
   }, [connected, busy, send]);
 
-  // DETERMINISTIC run: POST the current plan to /studio/run (derived from the AG-UI
-  // URL) so the real traced spine fires WITHOUT depending on the host deciding to call
-  // the run_campaign tool. On completion we refresh history — the persisted operator
-  // trigger + per-agent traces + host summary replace the optimistic placeholders.
+  // DETERMINISTIC LIVE run: POST /studio/run (returns the run_id fast — the real traced
+  // spine runs in the backend BACKGROUND), then poll GET /studio/run/{id} every ~1.5s so
+  // the per-agent steps surface AS THEY LAND. `runState` drives the OrchestrationFlow
+  // stepper + the per-agent cards filling in real time, instead of a ~60s batch reveal.
+  // On completion we refresh history once so the persisted operator trigger + per-agent
+  // traces + host summary replace the live placeholders. NOTHING sends (HELD/PENDING).
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const runCampaign = useCallback(() => {
     if (!connected || busy || runningCampaign) return;
     setRunningCampaign(true);
     setBusy(true);
     setError(null);
+    setRunState({ runId: '', status: 'running', steps: [], nPending: null, archetype: null, error: null });
 
-    const opId = `runbtn_op_${Date.now()}`;
-    const hostId = `runbtn_host_${Date.now()}`;
-    const stepId = `runbtn_step_${Date.now()}`;
-    const now = new Date().toISOString();
-    setTurns((prev) => [
-      ...prev,
-      { id: opId, role: 'OPERATOR', label: 'You', text: '▶ Run campaign', at: now },
-      {
-        id: hostId,
-        role: 'SYSTEM',
-        label: 'Studio Host',
-        text: 'Running the campaign — the team is working (research → strategy → drafts → critique → jury). This takes ~30–60s…',
-        at: now,
-        streaming: true,
-      },
-    ]);
-    setSteps((prev) => [
-      ...prev,
-      {
-        id: stepId,
-        agent: 'STRATEGIST',
-        label: 'Run campaign — real traced spine (HELD)',
-        status: 'running',
-      },
-    ]);
-
-    const runUrl = aguiUrl.replace(/\/agui(\?.*)?$/, '/run');
     (async () => {
+      let runId: string;
       try {
-        const res = await fetch(runUrl, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ sessionId, plan: planRef.current }),
-        });
-        if (!res.ok) throw new Error(`studio run HTTP ${res.status}`);
-        const data = (await res.json()) as {
-          ok?: boolean;
-          error?: string;
-          runId?: string;
-          hostText?: string;
-        };
-        if (data.ok === false) {
-          setError(data.error ?? 'campaign run failed');
-        } else if (data.hostText) {
-          // keep the host aware of the run for any follow-up chat
-          messagesRef.current = [
-            ...messagesRef.current,
-            { id: `a_${Date.now()}`, role: 'assistant', content: data.hostText },
-          ];
-        }
-        setSteps((prev) =>
-          prev.map((s) =>
-            s.id === stepId
-              ? {
-                  ...s,
-                  status: data.ok === false ? 'failed' : 'done',
-                  detail: data.runId ? `run ${data.runId}` : undefined,
-                }
-              : s,
-          ),
-        );
-        await refreshHistory();
+        const r = await startRun(aguiUrl, sessionId, planRef.current);
+        runId = r.runId;
+        setRunState((prev) => ({ ...(prev as RunState), runId }));
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'campaign run failed');
-        setStreamStatus('error');
-        setSteps((prev) =>
-          prev.map((s) => (s.id === stepId ? { ...s, status: 'failed' } : s)),
-        );
-      } finally {
+        setError(e instanceof Error ? e.message : 'run start failed');
         setRunningCampaign(false);
         setBusy(false);
+        setRunState((prev) => (prev ? { ...prev, status: 'error', error: 'run start failed' } : prev));
+        return;
       }
+
+      let attempts = 0;
+      const poll = async () => {
+        attempts += 1;
+        try {
+          const st = await fetchRunState(aguiUrl, runId);
+          setRunState(st);
+          if (st.status === 'completed' || st.status === 'error') {
+            setRunningCampaign(false);
+            setBusy(false);
+            if (st.status === 'error' && st.error) setError(st.error);
+            // Surface the operator trigger + per-agent turns + host summary in the chat.
+            await refreshHistory();
+            return;
+          }
+        } catch {
+          /* transient poll error — keep polling until the safety cap */
+        }
+        if (attempts >= 80) {
+          // ~2 min safety cap: stop polling but keep whatever steps we have.
+          setRunningCampaign(false);
+          setBusy(false);
+          return;
+        }
+        pollRef.current = setTimeout(poll, 1500);
+      };
+      pollRef.current = setTimeout(poll, 1200);
     })();
   }, [connected, busy, runningCampaign, aguiUrl, sessionId, refreshHistory]);
+
+  // Stop polling on unmount.
+  useEffect(() => () => {
+    if (pollRef.current) clearTimeout(pollRef.current);
+  }, []);
 
   return {
     connected,
@@ -421,6 +403,7 @@ export function useStudioAgui(
     steps,
     busy,
     runningCampaign,
+    runState,
     pendingApproval,
     error,
     send,

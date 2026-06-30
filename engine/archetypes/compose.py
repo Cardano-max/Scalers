@@ -349,11 +349,15 @@ def build_campaign_graph(*, team_store=None, dsn: str | None = None, checkpointe
 def run_campaign(
     *, archetype_id: str, tenant_id: str, brief: str = "",
     campaign_id: str | None = None, dsn: str | None = None, persist: bool = True,
+    run_id: str | None = None,
 ) -> CampaignState:
     """Classify-free direct run for a KNOWN archetype id, in-process to completion.
 
     Use ``archetypes.classify.classify_brief`` first to get the id from a brief; this
     runs the wired spine for that id. Real cells run; nothing sends (all PENDING/HELD).
+
+    ``run_id`` may be supplied so a caller (e.g. the studio's async run endpoint) knows
+    the id BEFORE the run finishes and can poll the per-role ``agent_runs`` as they land.
     """
     if archetype_id not in registry.REGISTRY:
         raise KeyError(f"unregistered archetype {archetype_id!r}; registry={registry.ids()}")
@@ -371,7 +375,7 @@ def run_campaign(
             pass
 
     campaign_id = campaign_id or f"camp_{uuid.uuid4().hex[:12]}"
-    run_id = f"team-{campaign_id}-{uuid.uuid4().hex[:12]}"
+    run_id = run_id or f"team-{campaign_id}-{uuid.uuid4().hex[:12]}"
     graph = build_campaign_graph(team_store=team_store, dsn=dsn)
     init = CampaignState(
         campaign_id=campaign_id, run_id=run_id, tenant_id=tenant_id,

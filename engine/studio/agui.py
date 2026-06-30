@@ -440,15 +440,19 @@ def _summary_text(summary: dict[str, Any]) -> str:
 
 
 def _execute_campaign_sync(
-    plan: CampaignPlan, session_id: str, tenant_id: str, dsn: str | None
+    plan: CampaignPlan, session_id: str, tenant_id: str, dsn: str | None,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """SYNC: run the real traced Phase-A campaign for ``plan`` and persist its visible
     surfaces — mirror each per-role trace into the thread as a LABELED turn (so the
     operator can watch what each agent thought) and reflect the work into the shared
-    plan. Returns the runner summary. NOTHING is sent (HELD/PENDING only)."""
+    plan. ``run_id`` lets the async endpoint poll the per-role ``agent_runs`` live.
+    Returns the runner summary. NOTHING is sent (HELD/PENDING only)."""
     from studio.campaign_runner import run_and_trace
 
-    summary = run_and_trace(brief=_brief_from_plan(plan), tenant_id=tenant_id, dsn=dsn)
+    summary = run_and_trace(
+        brief=_brief_from_plan(plan), tenant_id=tenant_id, dsn=dsn, run_id=run_id
+    )
     for ar in summary.get("agent_runs", []):
         role = str(ar.get("role") or "host")
         role = role if role in VALID_ROLES else "host"
@@ -862,18 +866,26 @@ def mount_studio_agui(app) -> None:
             request, agent=studio_agent, deps=deps, on_complete=on_complete
         )
 
+    # In-process registry of async studio runs (status + final summary). Lost on
+    # restart — fine, these runs complete in ~60s. The live FE polls
+    # GET /studio/run/{id}, which reads agent_runs (written incrementally by the
+    # spine) PLUS this status, so the operator watches each agent land in real time.
+    if not hasattr(app.state, "_studio_runs"):
+        app.state._studio_runs = {}
+    runs_registry: dict[str, dict] = app.state._studio_runs
+
     @app.post("/studio/run")
-    async def studio_run_route(request: Request):  # noqa: ANN202
-        """DETERMINISTIC campaign run — the 'Run campaign' BUTTON path.
+    async def studio_run_start(request: Request):  # noqa: ANN202
+        """DETERMINISTIC async campaign run — the 'Run campaign' BUTTON path, made LIVE.
 
         Bypasses the Haiku host's free-text decision entirely: loads the session's
         persisted plan (optionally merged with an inline override the button sends so
-        the run matches exactly what the operator sees) and runs the real traced
-        Phase-A spine directly via the SHARED ``_execute_campaign_sync``. Logs an
-        explicit operator trigger turn + the per-agent traces + a host summary so the
-        thread reads naturally after the frontend refreshes history. NOTHING is sent —
-        every output is HELD/PENDING behind approve-first (publishing still requires
-        the separate stage_publish approval gate)."""
+        the run matches exactly what the operator sees), then returns the run_id
+        IMMEDIATELY and runs the real traced Phase-A spine in the BACKGROUND. The FE
+        polls GET /studio/run/{id} to render each per-agent step as it lands (live
+        progress), instead of waiting ~60s for a batch reveal. NOTHING is sent — every
+        output is HELD/PENDING behind approve-first (publishing still requires the
+        separate stage_publish approval gate)."""
         from fastapi.responses import JSONResponse
 
         dsn = get_dsn()
@@ -897,6 +909,10 @@ def mount_studio_agui(app) -> None:
             except Exception:
                 pass
 
+        campaign_id = f"camp_{uuid.uuid4().hex[:12]}"
+        run_id = f"team-{campaign_id}-{uuid.uuid4().hex[:12]}"
+        runs_registry[run_id] = {"status": "running", "summary": None, "error": None}
+
         try:
             await asyncio.to_thread(
                 _log_turn, dsn, session_id, "operator", "Run the campaign now.", None
@@ -904,35 +920,101 @@ def mount_studio_agui(app) -> None:
         except Exception:
             pass
 
-        try:
-            summary = await asyncio.to_thread(
-                _execute_campaign_sync, plan, session_id, tenant_id, dsn
-            )
-        except Exception as exc:  # honest failure — never a fake success
-            return JSONResponse(
-                {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500
-            )
+        async def _bg() -> None:
+            try:
+                summary = await asyncio.to_thread(
+                    _execute_campaign_sync, plan, session_id, tenant_id, dsn, run_id
+                )
+                runs_registry[run_id] = {"status": "completed", "summary": summary, "error": None}
+                try:
+                    await asyncio.to_thread(
+                        _log_turn, dsn, session_id, "host", _summary_text(summary), HOST_AGUI_MODEL
+                    )
+                except Exception:
+                    pass
+            except Exception as exc:  # honest failure, never a fake success
+                runs_registry[run_id] = {
+                    "status": "error", "summary": None, "error": f"{type(exc).__name__}: {exc}"
+                }
 
-        host_text = _summary_text(summary)
-        try:
-            await asyncio.to_thread(
-                _log_turn, dsn, session_id, "host", host_text, HOST_AGUI_MODEL
-            )
-        except Exception:
-            pass
-
+        asyncio.create_task(_bg())
         return JSONResponse(
-            {
-                "ok": True,
-                "runId": summary.get("run_id"),
-                "archetypeId": summary.get("archetype_id"),
-                "nPending": summary.get("n_pending"),
-                "nQueued": summary.get("n_queued"),
-                "channels": summary.get("channels"),
-                "runsRow": summary.get("runs_row"),
-                "hostText": host_text,
-            }
+            {"ok": True, "runId": run_id, "campaignId": campaign_id, "status": "running"}
         )
+
+    @app.get("/studio/run/{run_id}")
+    async def studio_run_state(run_id: str):  # noqa: ANN202
+        """Poll one run: {status, steps[role,model,input,output], nPending, archetype}.
+        Steps come from agent_runs (written incrementally by the spine), so the FE
+        renders each agent as it lands. Works for a run already completed in the DB too."""
+        from fastapi.responses import JSONResponse
+
+        dsn = get_dsn()
+        reg = runs_registry.get(run_id)
+
+        def _load() -> dict:
+            import psycopg
+            from psycopg.rows import dict_row
+
+            steps: list[dict] = []
+            runs_status = None
+            n_pending = None
+            with psycopg.connect(dsn, autocommit=True, row_factory=dict_row) as c:
+                rows = c.execute(
+                    "SELECT role, model, input, output, created_at FROM agent_runs "
+                    "WHERE run_id=%s ORDER BY created_at",
+                    (run_id,),
+                ).fetchall()
+                for i, ar in enumerate(rows):
+                    ca = ar.get("created_at")
+                    steps.append({
+                        "seq": i,
+                        "role": ar.get("role"),
+                        "model": ar.get("model"),
+                        "input": ar.get("input"),
+                        "output": ar.get("output"),
+                        "createdAt": ca.isoformat() if hasattr(ca, "isoformat") else str(ca),
+                    })
+                try:
+                    row = c.execute(
+                        "SELECT status FROM runs WHERE run_id=%s", (run_id,)
+                    ).fetchone()
+                    runs_status = str(row["status"]).lower() if row else None
+                except Exception:
+                    runs_status = None
+                try:
+                    pr = c.execute(
+                        "SELECT count(*) n FROM actions WHERE run_id=%s AND status='pending'",
+                        (run_id,),
+                    ).fetchone()
+                    n_pending = pr["n"] if pr else None
+                except Exception:
+                    n_pending = None
+
+            status = None
+            archetype = None
+            if reg:
+                status = reg.get("status")
+                if reg.get("summary"):
+                    archetype = reg["summary"].get("archetype_id")
+                    if reg["summary"].get("n_pending") is not None:
+                        n_pending = reg["summary"]["n_pending"]
+            if status is None:
+                status = (
+                    "completed"
+                    if runs_status in ("completed", "success")
+                    else ("running" if steps else "unknown")
+                )
+            return {
+                "status": status,
+                "steps": steps,
+                "nPending": n_pending,
+                "archetype": archetype,
+                "error": reg.get("error") if reg else None,
+            }
+
+        data = await asyncio.to_thread(_load)
+        return JSONResponse({"ok": True, "runId": run_id, **data})
 
     @app.post("/studio/upload")
     async def studio_upload_route(request: Request):  # noqa: ANN202
