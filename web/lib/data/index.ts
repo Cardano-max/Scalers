@@ -1,14 +1,29 @@
 /**
  * Data layer entrypoint. Selects the adapter from NEXT_PUBLIC_DATA_SOURCE:
- *   mock (default) -> the clearly-labeled MockAdapter (no backend needed)
- *   live           -> the urql + SSE LiveAdapter bound to the kkg.4 gateway
- * Flipping the env var is the ONLY change needed to go from mock to live.
+ *   live (default) -> the urql + SSE LiveAdapter bound to the REAL engine
+ *                     GraphQL + SSE (obsapi at :8010). The non-studio tabs
+ *                     (Overview / Review queue / Activity / Live feed / Runs)
+ *                     render REAL runs + actions, not seeded fixtures.
+ *   mock           -> the clearly-labeled MockAdapter (clean offline fallback,
+ *                     no backend needed). Opt in with NEXT_PUBLIC_DATA_SOURCE=mock.
+ * Flipping the env var is the ONLY change needed to go from live to mock.
+ *
+ * The default endpoints are SAME-ORIGIN (`/graphql`, `/sse/stream`): next.config
+ * rewrites proxy them to the engine origin (STUDIO_BACKEND_ORIGIN, default
+ * http://127.0.0.1:8010) so the browser never needs CORS and works on any port.
+ *
+ * NOTE: this shared adapter drives ONLY the non-studio tabs. The Campaign Studio
+ * (Command tab) uses its own `createStudioAdapter()` and is unaffected by this
+ * source flip.
  */
 import type { DataAdapter } from './adapter';
 import { MockAdapter, MOCK_TENANT_ID } from './mock-adapter';
 import { LiveAdapter } from './live-adapter';
 
 export type DataSource = 'mock' | 'live';
+
+/** The live demo tenant whose real campaign runs + drafts back these tabs. */
+export const LIVE_TENANT_ID = 'ladies8391';
 
 export interface DataLayerEnv {
   source?: string;
@@ -17,17 +32,22 @@ export interface DataLayerEnv {
   tenantId?: string;
 }
 
+/**
+ * Resolve the active source. The build DEFAULTS to `live` for these tabs so a
+ * normal `next build` shows real engine data; `mock` is an explicit opt-out that
+ * keeps a clean, backend-free fallback for offline/demo work.
+ */
 export function resolveDataSource(value?: string): DataSource {
-  return value === 'live' ? 'live' : 'mock';
+  return value === 'mock' ? 'mock' : 'live';
 }
 
-/** Build the active adapter from env (with sane local defaults). */
+/** Build the active adapter from env (with sane same-origin defaults). */
 export function createAdapter(env: DataLayerEnv = readEnv()): DataAdapter {
   const source = resolveDataSource(env.source);
   if (source === 'live') {
     return new LiveAdapter({
-      graphqlUrl: env.graphqlUrl ?? 'http://localhost:4000/graphql',
-      sseUrl: env.sseUrl ?? 'http://localhost:4000/sse/stream',
+      graphqlUrl: env.graphqlUrl ?? '/graphql',
+      sseUrl: env.sseUrl ?? '/sse/stream',
     });
   }
   return new MockAdapter();
@@ -43,9 +63,14 @@ export function readEnv(): DataLayerEnv {
   };
 }
 
-/** The single active tenant carried in every query/subscription. */
+/**
+ * The single active tenant carried in every query/subscription. On the live
+ * source the default is the real demo tenant (ladies8391); on mock it is the
+ * mock tenant. An explicit NEXT_PUBLIC_TENANT_ID always wins.
+ */
 export function activeTenantId(env: DataLayerEnv = readEnv()): string {
-  return env.tenantId ?? MOCK_TENANT_ID;
+  if (env.tenantId) return env.tenantId;
+  return resolveDataSource(env.source) === 'live' ? LIVE_TENANT_ID : MOCK_TENANT_ID;
 }
 
 export type { DataAdapter } from './adapter';

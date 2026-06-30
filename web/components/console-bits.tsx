@@ -31,12 +31,62 @@ export function channelLabel(channel: Channel): string {
   switch (channel) {
     case 'GMAIL':
       return 'Gmail';
+    case 'EMAIL':
+      return 'Email';
+    case 'SMS':
+      return 'SMS';
     case 'INSTAGRAM':
+    case 'IG':
       return 'Instagram';
+    case 'REELS':
+      return 'Reels';
+    case 'TIKTOK':
+      return 'TikTok';
     case 'FACEBOOK':
       return 'Facebook';
     default:
       return channel;
+  }
+}
+
+/**
+ * Plain-language statement of what approving this draft will DO — the operator's
+ * "I'll post THIS on Instagram with this caption" framing. Channel-first because a
+ * campaign draft is typed POST but the CHANNEL decides the verb (an EMAIL POST is
+ * an email; an IG POST is a caption). Nothing here sends — it describes the staged
+ * intent the Review queue holds for approval.
+ */
+export function actionIntent(
+  type: ActionType,
+  channel: Channel,
+  target?: string | null,
+): string {
+  const to = target ? ` to ${target}` : '';
+  switch (channel) {
+    case 'GMAIL':
+    case 'EMAIL':
+      return type === 'COMMENT'
+        ? `Will reply to this email${to}`
+        : `Will send this email${to}`;
+    case 'SMS':
+      return `Will send this text message${to}`;
+    case 'INSTAGRAM':
+    case 'IG':
+      return type === 'COMMENT'
+        ? 'Will reply with this comment on Instagram'
+        : type === 'DM'
+          ? `Will send this Instagram DM${to}`
+          : 'Will post this caption to Instagram';
+    case 'REELS':
+      return 'Will post this Reel caption to Instagram';
+    case 'TIKTOK':
+      return 'Will post this video caption to TikTok';
+    case 'FACEBOOK':
+      return type === 'COMMENT'
+        ? 'Will reply with this comment on Facebook'
+        : 'Will post this to Facebook';
+    default:
+      return `Will publish this ${typeLabel(type).toLowerCase()} to ${channelLabel(channel)}`;
   }
 }
 
