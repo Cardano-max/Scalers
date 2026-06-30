@@ -466,6 +466,58 @@ def _execute_campaign_sync(
     return summary
 
 
+async def launch_studio_run(
+    app,
+    dsn: str | None,
+    session_id: str,
+    tenant_id: str,
+    plan: CampaignPlan,
+    *,
+    trigger_note: str = "Run the campaign now.",
+) -> dict[str, Any]:
+    """Start ONE deterministic held campaign run in the background and return its
+    identifiers immediately. This is the single shared launch path behind BOTH the
+    ``POST /studio/run`` button and the voice ``request_orchestration`` GO-gate, so
+    they can never diverge: same registry, same traced Phase-A spine, same HELD
+    posture (writes ``agent_runs`` + PENDING ``actions``; NOTHING is sent).
+
+    The caller (an async route) owns the event loop; we register the run on
+    ``app.state._studio_runs`` (the same dict the ``GET /studio/run/{id}`` poller
+    reads) and schedule the real work as a background task."""
+    if not hasattr(app.state, "_studio_runs"):
+        app.state._studio_runs = {}
+    runs_registry: dict[str, dict] = app.state._studio_runs
+
+    campaign_id = f"camp_{uuid.uuid4().hex[:12]}"
+    run_id = f"team-{campaign_id}-{uuid.uuid4().hex[:12]}"
+    runs_registry[run_id] = {"status": "running", "summary": None, "error": None}
+
+    try:
+        await asyncio.to_thread(_log_turn, dsn, session_id, "operator", trigger_note, None)
+    except Exception:
+        pass
+
+    async def _bg() -> None:
+        try:
+            summary = await asyncio.to_thread(
+                _execute_campaign_sync, plan, session_id, tenant_id, dsn, run_id
+            )
+            runs_registry[run_id] = {"status": "completed", "summary": summary, "error": None}
+            try:
+                await asyncio.to_thread(
+                    _log_turn, dsn, session_id, "host", _summary_text(summary), HOST_AGUI_MODEL
+                )
+            except Exception:
+                pass
+        except Exception as exc:  # honest failure, never a fake success
+            runs_registry[run_id] = {
+                "status": "error", "summary": None, "error": f"{type(exc).__name__}: {exc}"
+            }
+
+    asyncio.create_task(_bg())
+    return {"runId": run_id, "campaignId": campaign_id, "status": "running"}
+
+
 @studio_agent.tool
 async def run_campaign(ctx: RunContext[StudioDeps]) -> str:
     """Run the REAL, traced campaign for the CURRENT plan. Call when the operator asks
@@ -909,37 +961,14 @@ def mount_studio_agui(app) -> None:
             except Exception:
                 pass
 
-        campaign_id = f"camp_{uuid.uuid4().hex[:12]}"
-        run_id = f"team-{campaign_id}-{uuid.uuid4().hex[:12]}"
-        runs_registry[run_id] = {"status": "running", "summary": None, "error": None}
-
-        try:
-            await asyncio.to_thread(
-                _log_turn, dsn, session_id, "operator", "Run the campaign now.", None
-            )
-        except Exception:
-            pass
-
-        async def _bg() -> None:
-            try:
-                summary = await asyncio.to_thread(
-                    _execute_campaign_sync, plan, session_id, tenant_id, dsn, run_id
-                )
-                runs_registry[run_id] = {"status": "completed", "summary": summary, "error": None}
-                try:
-                    await asyncio.to_thread(
-                        _log_turn, dsn, session_id, "host", _summary_text(summary), HOST_AGUI_MODEL
-                    )
-                except Exception:
-                    pass
-            except Exception as exc:  # honest failure, never a fake success
-                runs_registry[run_id] = {
-                    "status": "error", "summary": None, "error": f"{type(exc).__name__}: {exc}"
-                }
-
-        asyncio.create_task(_bg())
+        info = await launch_studio_run(app, dsn, session_id, tenant_id, plan)
         return JSONResponse(
-            {"ok": True, "runId": run_id, "campaignId": campaign_id, "status": "running"}
+            {
+                "ok": True,
+                "runId": info["runId"],
+                "campaignId": info["campaignId"],
+                "status": info["status"],
+            }
         )
 
     @app.get("/studio/run/{run_id}")
