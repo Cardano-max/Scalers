@@ -42,7 +42,7 @@ from pydantic_ai import Agent, DeferredToolRequests, RunContext
 from pydantic_ai.ui import StateDeps  # noqa: F401  (re-exported for callers/tests)
 
 from studio.campaign_plan_store import latest_plans, upsert_plan
-from studio.chat_store import PostgresChatStore
+from studio.chat_store import VALID_ROLES, PostgresChatStore
 
 # --------------------------------------------------------------------------- #
 # Model pins (task §HONESTY GATE)
@@ -102,12 +102,18 @@ _SYSTEM = (
     "`brainstorm_with_roles` ONCE. That runs the real role cells (funnel "
     "architect, copywriter, an independent critic, and an Opus jury). Do NOT "
     "invent their output yourself.\n"
-    "3. NEVER send or publish anything yourself. If the operator wants something "
+    "3. When the operator asks to RUN / launch / execute / kick off / 'let's go' on "
+    "the campaign (or approves the plan to run), call `run_campaign` ONCE. It runs "
+    "the real multi-agent spine (research -> strategy -> drafts -> critique -> "
+    "jury) and produces drafts + actions staged for approval; everything is HELD "
+    "and NOTHING is sent. The operator can watch each agent's step. Do NOT invent "
+    "its output.\n"
+    "4. NEVER send or publish anything yourself. If the operator wants something "
     "posted/emailed, call `stage_publish` — it stages a PENDING action that a "
     "human must approve; it is held, never sent.\n"
-    "4. After acting, reply in 2-4 sentences: reflect the current plan and ask 1 "
+    "5. After acting, reply in 2-4 sentences: reflect the current plan and ask 1 "
     "high-leverage clarifying question. Be honest — never claim a tool ran that "
-    "did not."
+    "did not, and never claim anything was sent."
 )
 
 
@@ -300,6 +306,67 @@ async def brainstorm_with_roles(ctx: RunContext[StudioDeps]) -> str:
     )
 
 
+@studio_agent.tool
+async def run_campaign(ctx: RunContext[StudioDeps]) -> str:
+    """Run the REAL, traced campaign for the CURRENT plan. Call when the operator asks
+    to RUN / launch / execute / kick off the campaign (or approves the plan to run).
+
+    Classifies the plan to a registered archetype, then runs the WIRED Phase-A spine
+    (research -> strategy -> draft x N (capped) -> independent critique -> route pinned
+    to HOLD -> queue). Writes per-role ``agent_runs`` + queued ``assets`` + PENDING
+    ``actions`` and materializes a ``runs`` row whose steps are the per-agent traces
+    (watchable node-by-node in the Runs tab). NOTHING IS SENT — every output is
+    HELD/PENDING behind approve-first. Returns a short honest summary."""
+    from studio.campaign_runner import run_and_trace
+
+    plan = ctx.deps.state
+    brief = (
+        f"Goal: {plan.goal or 'grow bookings'}\n"
+        f"Audience: {plan.audience or 'local clients seeking custom tattoos'}\n"
+        f"Channels: {', '.join(plan.channels) or 'instagram, email'}"
+        + (f"\nSections: {', '.join(plan.sections)}" if plan.sections else "")
+    )
+    summary = await asyncio.to_thread(
+        run_and_trace, brief=brief, tenant_id=ctx.deps.tenant_id, dsn=ctx.deps.dsn
+    )
+
+    # Mirror each per-role trace into the studio thread as a LABELED turn so the
+    # operator can watch what each agent thought right here (the Runs tab carries the
+    # full node/model/input/output drill-down for the same run_id).
+    for ar in summary.get("agent_runs", []):
+        role = str(ar.get("role") or "host")
+        role = role if role in VALID_ROLES else "host"
+        await asyncio.to_thread(
+            _log_turn,
+            ctx.deps.dsn,
+            ctx.deps.session_id,
+            role,
+            f"[{role}] {ar.get('output_summary', '')}",
+            ar.get("model"),
+        )
+
+    # Reflect the per-role work into the shared plan (persisted; the next turn loads it).
+    if summary.get("agent_runs"):
+        plan.tasks_per_role = {
+            str(ar.get("role")): [str(ar.get("output_summary", ""))[:160]]
+            for ar in summary["agent_runs"]
+        }
+        await asyncio.to_thread(_persist_plan, ctx.deps.dsn, ctx.deps.session_id, plan)
+
+    chans = ", ".join(summary.get("channels", [])) or "the selected channels"
+    runs_note = (
+        " You can watch each agent's step in the Runs tab."
+        if summary.get("runs_row")
+        else " (Per-agent traces are in this thread; the Runs-tab row was unavailable.)"
+    )
+    return (
+        f"Ran the '{summary.get('archetype_id')}' campaign (run {summary.get('run_id')}). "
+        f"The team produced {summary.get('n_queued', 0)} draft(s) across {chans} and staged "
+        f"{summary.get('n_pending', 0)} action(s) PENDING approval — everything is HELD, "
+        f"nothing was sent.{runs_note} Want me to refine a draft or stage one for approval?"
+    )
+
+
 @studio_agent.tool(requires_approval=True)
 async def stage_publish(
     ctx: RunContext[StudioDeps], channel: str, draft: str, target: str | None = None
@@ -393,9 +460,15 @@ def mount_studio_agui(app) -> None:
             except Exception:
                 pass
 
+        # Tenant the studio writes under (PENDING actions, materialized runs, assets).
+        # Env-overridable so the booter can ALIGN it with the console's
+        # NEXT_PUBLIC_TENANT_ID — otherwise studio output lands in a tenant the
+        # Runs/Review tabs don't query. Default "demo" matches the existing data.
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
         deps = StudioDeps(
             state=_load_plan(session_id, dsn),
             session_id=session_id,
+            tenant_id=tenant_id,
             dsn=dsn,
         )
 

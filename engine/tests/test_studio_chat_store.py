@@ -39,8 +39,10 @@ def test_sessions_are_isolated() -> None:
 def test_rejects_unknown_role() -> None:
     store = InMemoryChatStore()
     with pytest.raises(ValueError):
-        store.append_turn("s1", "researcher", "nope")
-    # P2 shipped (operator, host); P3.1 added the labeled brainstorm role cells.
+        store.append_turn("s1", "marketer", "nope")
+    # P2 shipped (operator, host); P3.1 added the labeled brainstorm role cells;
+    # P3.x added the wired traced-run roles surfaced from a run_campaign.
     assert set(VALID_ROLES) == {
-        "operator", "host", "funnel_architect", "copywriter", "critic", "jury"
+        "operator", "host", "funnel_architect", "copywriter", "critic", "jury",
+        "researcher", "strategist", "draft",
     }

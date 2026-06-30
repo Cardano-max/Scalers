@@ -26,6 +26,9 @@ from typing import Any, Protocol, runtime_checkable
 # Authors of a studio chat turn. P2 shipped (operator, host); P3.1 adds the role
 # cells that emit LABELED in-thread brainstorm messages (each carrying its own
 # model pin): funnel_architect, copywriter, critic (independent pass), jury (Opus).
+# P3.x adds the WIRED traced-run roles surfaced from a `run_campaign` (the Phase-A
+# spine writes agent_runs as researcher/strategist/draft/critic/jury; we mirror each
+# as a LABELED in-thread trace so the operator can watch what each agent thought).
 VALID_ROLES: tuple[str, ...] = (
     "operator",
     "host",
@@ -33,6 +36,9 @@ VALID_ROLES: tuple[str, ...] = (
     "copywriter",
     "critic",
     "jury",
+    "researcher",
+    "strategist",
+    "draft",
 )
 
 

@@ -41,6 +41,7 @@ export interface PendingApproval {
 const STEP_LABEL: Record<string, { label: string; agent: AgentStep['agent'] }> = {
   revise_plan: { label: 'Revise plan (shared state)', agent: 'STRATEGIST' },
   brainstorm_with_roles: { label: 'Brainstorm with role cells', agent: 'STRATEGIST' },
+  run_campaign: { label: 'Run campaign — real traced spine (HELD)', agent: 'STRATEGIST' },
   stage_publish: { label: 'Stage publish — approval required', agent: 'SAFETY' },
 };
 

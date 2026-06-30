@@ -579,11 +579,19 @@ def activity_item(action_id: str) -> ActivityItem | None:
 # Runs
 # --------------------------------------------------------------------------- #
 def _build_run(conn: Any, row: dict[str, Any]) -> Run:
-    chan_rows = conn.execute(
-        "SELECT DISTINCT channel FROM autonomy_decisions WHERE run_id=%s",
-        (row["run_id"],),
-    ).fetchall()
-    channels = [mappers.channel(c["channel"]) for c in chan_rows]
+    # Channels are a secondary display field derived from autonomy_decisions. That
+    # table may be absent on a partially-initialized cluster (or for studio-
+    # materialized campaign runs that don't route through autonomy). Degrade to
+    # empty channels rather than 500 the entire runs query — the run's events/steps
+    # (the per-agent traces) never depend on this lookup.
+    try:
+        chan_rows = conn.execute(
+            "SELECT DISTINCT channel FROM autonomy_decisions WHERE run_id=%s",
+            (row["run_id"],),
+        ).fetchall()
+        channels = [mappers.channel(c["channel"]) for c in chan_rows]
+    except Exception:
+        channels = []
 
     trajectory: list[RunStep] = []
     for step in row.get("steps") or []:

@@ -39,6 +39,13 @@ function mapRole(role: string): { role: StudioRole; label: string } {
       return { role: 'CRITIC', label: 'Critic' };
     case 'jury':
       return { role: 'JURY', label: 'Jury' };
+    // P3.x wired-run roles (Phase-A spine traces surfaced from a run_campaign).
+    case 'researcher':
+      return { role: 'RESEARCHER', label: 'Researcher' };
+    case 'strategist':
+      return { role: 'STRATEGIST', label: 'Strategist' };
+    case 'draft':
+      return { role: 'COPYWRITER', label: 'Draft' };
     default:
       return { role: 'SYSTEM', label: role || 'Studio' };
   }
