@@ -9,7 +9,18 @@
  */
 
 // --- enums (string unions mirror the GraphQL enums) ---
-export type Channel = 'GMAIL' | 'INSTAGRAM' | 'FACEBOOK';
+// The obsapi maps known DB channels to GMAIL/INSTAGRAM/FACEBOOK and UPPERCASES
+// anything else, so real campaign drafts also arrive as EMAIL/SMS/IG/REELS/TIKTOK.
+// These are part of the live contract — the console renders them honestly.
+export type Channel =
+  | 'GMAIL'
+  | 'INSTAGRAM'
+  | 'FACEBOOK'
+  | 'EMAIL'
+  | 'SMS'
+  | 'IG'
+  | 'REELS'
+  | 'TIKTOK';
 export type ActionType = 'OUTREACH' | 'COMMENT' | 'POST' | 'DM';
 export type Worker =
   | 'OUTREACH'
@@ -24,7 +35,11 @@ export type Worker =
   | 'TEMPORAL'
   | 'RESEARCH'
   | 'STRATEGIST'
-  | 'COPYWRITER';
+  | 'COPYWRITER'
+  // Multi-agent campaign run workers (studio orchestration → real run events/feed).
+  | 'TEAM'
+  | 'DRAFT'
+  | 'CRITIC';
 export type ActionStatus =
   | 'PENDING'
   | 'APPROVED'
@@ -41,7 +56,7 @@ export type EscalationKind =
   | 'INTENT'
   | 'WEAK_PERSONALIZATION';
 export type AutonomyMode = 'AUTO' | 'APPROVE_FIRST';
-export type RunTrigger = 'SCHEDULE' | 'COMMAND' | 'EVENT';
+export type RunTrigger = 'SCHEDULE' | 'COMMAND' | 'EVENT' | 'STUDIO';
 export type RunStatus = 'RUNNING' | 'SUCCESS' | 'FAILED';
 export type Severity = 'INFO' | 'SUCCESS' | 'WARN' | 'ERROR';
 export type Role = 'OPERATOR' | 'ASSISTANT';

@@ -16,7 +16,7 @@ import { useData } from '@/lib/data/DataProvider';
 import { useAsync } from '@/lib/useAsync';
 import { AsyncBoundary } from './states';
 import { Dot } from './icons';
-import { Chip, ProviderErrorPanel, Tag, channelLabel, clockTime, matchesFilter, typeLabel, type QueueFilter } from './console-bits';
+import { Chip, ProviderErrorPanel, Tag, actionIntent, channelLabel, clockTime, matchesFilter, typeLabel, type QueueFilter } from './console-bits';
 import { CHANNEL_COLOR, WORKER_COLOR } from '@/lib/tokens';
 import type { Action, ActionType } from '@/lib/data/models';
 
@@ -387,6 +387,34 @@ function DetailPane({
         </div>
         <div style={{ fontSize: 13.5, color: 'var(--text-secondary-2)' }}>{action.target}</div>
       </div>
+
+      {/* Plain-language intent + HELD/staged banner: states exactly what approving
+          this draft would do, and that NOTHING sends until the operator approves
+          (and even then it is held behind the real publish step). */}
+      {action.status === 'PENDING' ? (
+        <div
+          style={{
+            border: '1px solid var(--reasoning-border)',
+            borderRadius: 'var(--radius-card)',
+            background: 'var(--reasoning-bg)',
+            padding: '12px 14px',
+            display: 'grid',
+            gap: 6,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <Dot color={CHANNEL_COLOR[action.channel]} size={8} />
+            <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--reasoning-text)' }}>
+              {actionIntent(action.type, action.channel, action.target)}
+            </span>
+            <Chip tone="amber" style={{ marginLeft: 'auto' }}>Staged · awaiting approval</Chip>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+            Held for review — nothing is sent. Approve only stages this for the publish
+            step (still gated); Reject discards it.
+          </div>
+        </div>
+      ) : null}
 
       {/* FAILED approve→publish — show the REAL provider error, not a bare "Failed". */}
       {action.status === 'FAILED' && action.lastError ? (

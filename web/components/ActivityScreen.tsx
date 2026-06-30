@@ -17,9 +17,9 @@ import { useAsync } from '@/lib/useAsync';
 import { useConsole } from '@/state/console-store';
 import { AsyncBoundary } from './states';
 import { Dot } from './icons';
-import { Chip, ProviderErrorPanel, Tag, channelLabel, clockTime, matchesFilter, typeLabel, type ChipTone, type QueueFilter } from './console-bits';
+import { Chip, ProviderErrorPanel, Tag, actionIntent, channelLabel, clockTime, matchesFilter, typeLabel, type ChipTone, type QueueFilter } from './console-bits';
 import { AUTONOMY_LABEL, CHANNEL_COLOR, WORKER_COLOR } from '@/lib/tokens';
-import type { ActivityItem, AutonomyMode } from '@/lib/data/models';
+import type { Action, ActivityItem, AutonomyMode } from '@/lib/data/models';
 import { ExecutionTraceCard } from './trace/ExecutionTraceCard';
 import { JuryCard } from './trace/JuryCard';
 
@@ -36,16 +36,68 @@ const OUTCOME_TONE: Record<ActivityItem['outcome']['kind'], ChipTone> = {
   neutral: 'neutral',
 };
 
+/** A pending Review-queue draft is still "what the campaign produced", so it
+ *  surfaces in Activity too — honestly labeled as STAGED (not executed). We carry
+ *  the real Action core through verbatim and add only truthful staged metadata:
+ *  no fabricated engagement, reasoning, trace, or outcome. */
+function stagedActivityFromAction(a: Action): ActivityItem {
+  return {
+    ...a,
+    autonomy: 'APPROVE_FIRST',
+    content: a.draft,
+    outcome: { label: 'Staged · pending approval', kind: 'neutral' },
+    thinking: [],
+    engagement: [],
+    thread: [],
+    comments: [],
+    runId: null,
+    trace: null,
+    judges: a.judges ?? [],
+    spans: [],
+    links: [],
+  };
+}
+
+/** Staged drafts (awaiting approval) vs. executed work (sent/failed). */
+function isStaged(item: ActivityItem): boolean {
+  return item.status === 'PENDING' || item.status === 'APPROVED';
+}
+
 export function ActivityScreen() {
   const { adapter, tenantId } = useData();
   const console = useConsole();
   const activity = useAsync<ActivityItem[]>(() => adapter.getActivity(tenantId), [tenantId]);
 
+  // Route the campaign's pending DRAFTS into Activity too (operator ask: drafts
+  // go to Review queue + Activity + Live feed). Only on the LIVE source — the
+  // mock spine keeps its own curated executed seed. Staged drafts render after the
+  // executed work, clearly badged "Staged · pending approval"; nothing is sent.
+  const isLive = adapter.source === 'live';
+  const staged = useAsync<ActivityItem[]>(
+    () =>
+      isLive
+        ? adapter.getReviewQueue(tenantId).then((as) => as.map(stagedActivityFromAction))
+        : Promise.resolve([]),
+    [tenantId, isLive],
+  );
+
   const [filter, setFilter] = useState<QueueFilter>('ALL');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [threadOpen, setThreadOpen] = useState(false);
 
-  const items = useMemo(() => activity.data ?? [], [activity.data]);
+  // Executed first, then staged drafts — preserves the executed order the mock
+  // spine (and its tests) rely on; no re-sort.
+  const items = useMemo(
+    () => [...(activity.data ?? []), ...(staged.data ?? [])],
+    [activity.data, staged.data],
+  );
+  const ready = activity.data !== undefined && staged.data !== undefined;
+  const loading = activity.loading || staged.loading;
+  const error = activity.error ?? staged.error;
+  const reload = () => {
+    activity.reload();
+    staged.reload();
+  };
   const filtered = useMemo(() => items.filter((a) => matchesFilter(a.type, filter)), [items, filter]);
   const counts = useMemo(() => countByFilter(items), [items]);
 
@@ -123,13 +175,13 @@ export function ActivityScreen() {
 
         <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
           <AsyncBoundary
-            loading={activity.loading}
-            error={activity.error}
-            data={activity.data}
+            loading={loading}
+            error={error}
+            data={ready ? items : undefined}
             empty={filtered.length === 0}
-            onRetry={activity.reload}
+            onRetry={reload}
             emptyTitle="No activity yet"
-            emptyHint="Executed and approved actions land here with the agent’s reasoning."
+            emptyHint="Executed work and staged drafts land here with the agent’s reasoning."
           >
             {() => (
               <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
@@ -200,6 +252,8 @@ function ActivityRow({
           <Dot color={CHANNEL_COLOR[item.channel]} size={7} />
           {item.status === 'FAILED' ? (
             <Chip tone="danger" style={{ marginLeft: 'auto' }}>Failed</Chip>
+          ) : isStaged(item) ? (
+            <Chip tone="amber" style={{ marginLeft: 'auto' }}>Staged</Chip>
           ) : (
             <Chip tone={OUTCOME_TONE[item.outcome.kind]} style={{ marginLeft: 'auto' }}>
               {item.outcome.label}
@@ -213,7 +267,11 @@ function ActivityRow({
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 7 }}>
           <span className="mono" style={{ fontSize: 11, color: WORKER_COLOR[item.worker] }}>{item.worker}</span>
-          <AutonomyChip mode={item.autonomy} style={{ marginLeft: 'auto' }} />
+          {isStaged(item) ? (
+            <Chip tone="neutral" style={{ marginLeft: 'auto' }}>Awaiting approval</Chip>
+          ) : (
+            <AutonomyChip mode={item.autonomy} style={{ marginLeft: 'auto' }} />
+          )}
           <span className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{clockTime(item.createdAt)}</span>
         </div>
       </button>
@@ -237,6 +295,7 @@ function ActivityDetail({
   const hasComments = !!item.comments && item.comments.length > 0;
   const expandLabel = hasComments ? `View ${item.comments!.length} comments` : 'View conversation';
   const isFailed = item.status === 'FAILED';
+  const staged = isStaged(item);
 
   return (
     <div style={{ padding: 'var(--pad-section)', maxWidth: 1100, marginInline: 'auto', display: 'grid', gap: 18 }}>
@@ -248,18 +307,42 @@ function ActivityDetail({
             <Dot color={CHANNEL_COLOR[item.channel]} size={8} />
             {channelLabel(item.channel)}
           </span>
-          <AutonomyChip mode={item.autonomy} />
+          {staged ? null : <AutonomyChip mode={item.autonomy} />}
           <span className="mono" style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-muted)' }}>{clockTime(item.createdAt)}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 13.5, color: 'var(--text-secondary-2)' }}>{item.target}</span>
           {isFailed ? (
             <Chip tone="danger">Failed</Chip>
+          ) : staged ? (
+            <Chip tone="amber">Staged · pending approval</Chip>
           ) : (
             <Chip tone={OUTCOME_TONE[item.outcome.kind]}>{item.outcome.label}</Chip>
           )}
         </div>
       </div>
+
+      {/* Staged draft: plain-language intent + HELD note. Nothing is sent; the
+          operator approves/rejects in the Review queue. */}
+      {staged ? (
+        <div
+          style={{
+            border: '1px solid var(--reasoning-border)',
+            borderRadius: 'var(--radius-card)',
+            background: 'var(--reasoning-bg)',
+            padding: '12px 14px',
+            display: 'grid',
+            gap: 4,
+          }}
+        >
+          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--reasoning-text)' }}>
+            {actionIntent(item.type, item.channel, item.target)}
+          </span>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+            Held for approval — not sent. Approve or reject this in the Review queue.
+          </span>
+        </div>
+      ) : null}
 
       {/* FAILED send — surface the REAL provider error, never a bare "Failed". */}
       {isFailed && item.lastError ? <ProviderErrorPanel error={item.lastError} /> : null}
@@ -343,48 +426,51 @@ function ActivityDetail({
       {/* JURY card with per-dimension verdict summary */}
       <JuryCard jury={item.jury} judges={item.judges ?? []} isSeeded={item.isSeeded ?? false} />
 
-      {/* AGENT REASONING (teal-tinted) */}
-      <div
-        style={{
-          border: '1px solid var(--reasoning-border)',
-          borderRadius: 'var(--radius-card)',
-          background: 'var(--reasoning-bg)',
-          padding: 'var(--pad-card)',
-          display: 'grid',
-          gap: 12,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span className="label" style={{ color: 'var(--reasoning-text)' }}>Agent reasoning</span>
-          <span className="mono" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--auto-chip-text)' }}>
-            jury {item.jury.confidence.toFixed(2)}
-          </span>
+      {/* AGENT REASONING (teal-tinted) — only when a reasoning trace was captured.
+          Staged drafts have none yet; we never render an empty/fabricated trace. */}
+      {item.thinking.length > 0 ? (
+        <div
+          style={{
+            border: '1px solid var(--reasoning-border)',
+            borderRadius: 'var(--radius-card)',
+            background: 'var(--reasoning-bg)',
+            padding: 'var(--pad-card)',
+            display: 'grid',
+            gap: 12,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span className="label" style={{ color: 'var(--reasoning-text)' }}>Agent reasoning</span>
+            <span className="mono" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--auto-chip-text)' }}>
+              jury {item.jury.confidence.toFixed(2)}
+            </span>
+          </div>
+          <ol style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 10 }}>
+            {item.thinking.map((step, i) => (
+              <li key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                <span
+                  className="mono"
+                  style={{
+                    flex: '0 0 auto',
+                    width: 18,
+                    height: 18,
+                    borderRadius: '50%',
+                    display: 'grid',
+                    placeItems: 'center',
+                    fontSize: 10,
+                    color: '#fff',
+                    background: 'var(--teal)',
+                    marginTop: 1,
+                  }}
+                >
+                  {i + 1}
+                </span>
+                <span style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--reasoning-text)' }}>{step}</span>
+              </li>
+            ))}
+          </ol>
         </div>
-        <ol style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 10 }}>
-          {item.thinking.map((step, i) => (
-            <li key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-              <span
-                className="mono"
-                style={{
-                  flex: '0 0 auto',
-                  width: 18,
-                  height: 18,
-                  borderRadius: '50%',
-                  display: 'grid',
-                  placeItems: 'center',
-                  fontSize: 10,
-                  color: '#fff',
-                  background: 'var(--teal)',
-                  marginTop: 1,
-                }}
-              >
-                {i + 1}
-              </span>
-              <span style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--reasoning-text)' }}>{step}</span>
-            </li>
-          ))}
-        </ol>
-      </div>
+      ) : null}
 
       {item.context ? (
         <Section label="Replying to">
@@ -398,7 +484,17 @@ function ActivityDetail({
         </Section>
       ) : null}
 
-      <Section label={isFailed ? 'Draft (not sent)' : item.type === 'POST' ? 'Published' : 'Sent'}>
+      <Section
+        label={
+          staged
+            ? 'Draft (staged — not sent)'
+            : isFailed
+              ? 'Draft (not sent)'
+              : item.type === 'POST'
+                ? 'Published'
+                : 'Sent'
+        }
+      >
         <div style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--ink)', whiteSpace: 'pre-wrap' }}>{item.content}</div>
       </Section>
 
