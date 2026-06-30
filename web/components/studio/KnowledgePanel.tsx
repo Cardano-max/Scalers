@@ -3,9 +3,11 @@
 /**
  * KnowledgePanel — manage the PERSISTENT per-tenant document store for the studio.
  *
- * Upload a document (name + pasted text or a picked .txt/.md file), see the ACTIVE
- * documents the whole team is reading, and remove one (which drops it from every
- * agent surface at once). Backs onto the real engine routes:
+ * Upload a document (name + pasted text or a picked .txt/.md/.csv file), see the
+ * ACTIVE documents the whole team is reading, and remove one (which drops it from
+ * every agent surface at once). A picked .csv is sent with kind="csv" so the engine
+ * chunks it one retrievable passage per row; .txt/.md and pasted text are kind="doc".
+ * Backs onto the real engine routes:
  *   GET  /studio/documents          — list active docs
  *   POST /studio/documents          — { name, content, kind? } upload (persistent)
  *   POST /studio/documents/remove   — { id } soft-remove
@@ -42,6 +44,10 @@ export function KnowledgePanel({ endpoint }: { endpoint?: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  // Document kind sent to the store: a picked .csv becomes a CSV doc (chunked per
+  // row); .txt/.md and pasted text are plain docs. Reset to 'doc' on manual edit —
+  // the backend still sniffs pasted CSV as a safety net.
+  const [kind, setKind] = useState<'doc' | 'csv'>('doc');
   const fileRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
@@ -71,8 +77,10 @@ export function KnowledgePanel({ endpoint }: { endpoint?: string }) {
     e.target.value = '';
     if (!file) return;
     const text = await readFileText(file);
+    const isCsv = /\.csv$/i.test(file.name) || file.type === 'text/csv';
+    setKind(isCsv ? 'csv' : 'doc');
     setContent(text);
-    if (!name.trim()) setName(file.name.replace(/\.(md|markdown|txt)$/i, ''));
+    if (!name.trim()) setName(file.name.replace(/\.(md|markdown|txt|csv)$/i, ''));
   };
 
   const upload = async () => {
@@ -90,7 +98,7 @@ export function KnowledgePanel({ endpoint }: { endpoint?: string }) {
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: name.trim() || 'Document', content }),
+        body: JSON.stringify({ name: name.trim() || 'Document', content, kind }),
       });
       const data = (await res.json()) as { ok?: boolean; error?: string };
       if (!res.ok || !data.ok) {
@@ -99,6 +107,7 @@ export function KnowledgePanel({ endpoint }: { endpoint?: string }) {
       }
       setName('');
       setContent('');
+      setKind('doc');
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'upload failed');
@@ -228,7 +237,10 @@ export function KnowledgePanel({ endpoint }: { endpoint?: string }) {
         />
         <textarea
           value={content}
-          onChange={(e) => setContent(e.target.value)}
+          onChange={(e) => {
+            setContent(e.target.value);
+            setKind('doc');
+          }}
           placeholder="Paste document text, or pick a file →"
           aria-label="Document text"
           rows={3}
@@ -244,7 +256,7 @@ export function KnowledgePanel({ endpoint }: { endpoint?: string }) {
           <input
             ref={fileRef}
             type="file"
-            accept=".txt,.md,.markdown,text/plain"
+            accept=".txt,.md,.markdown,.csv,text/plain,text/csv"
             onChange={onFile}
             style={{ display: 'none' }}
             data-testid="knowledge-file-input"
@@ -281,6 +293,11 @@ export function KnowledgePanel({ endpoint }: { endpoint?: string }) {
           >
             {busy ? 'Adding…' : 'Add document'}
           </button>
+        </div>
+        <div style={{ fontSize: 10.5, color: '#8C877D', lineHeight: 1.4 }}>
+          A CSV added here is persistent reference knowledge every agent can read and
+          cite; to blast a campaign to exactly those leads, use the lead upload on the
+          Voice / Agency campaign flow instead.
         </div>
       </div>
 
