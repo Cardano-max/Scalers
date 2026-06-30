@@ -77,6 +77,122 @@ def pick_archetype(brief: str) -> str:
     return _DEFAULT_ARCHETYPE if _DEFAULT_ARCHETYPE in registry.REGISTRY else registry.ids()[0]
 
 
+# --------------------------------------------------------------------------- #
+# Honest per-agent status (constraint: never a silent "queued").
+#
+# The agency rail must report an HONEST reason for every agent that did not land an
+# agent_run, derived from REAL run state (the agent_runs the spine actually wrote) +
+# the archetype's executed path. A required agent that genuinely did not run is
+# skipped-not-required / waiting-for-prev / failed / blocked-missing-input /
+# cancelled — never a forever "queued" placeholder while the campaign claims complete.
+# --------------------------------------------------------------------------- #
+
+# Canonical spine agent roles in execution order, each paired with the enabled-path
+# node (archetypes.router) that proves the role ran. The spine records role "draft"
+# for the "draft_one" worker, "jury" for the "route" node, etc.
+AGENT_ROLE_SEQUENCE: tuple[tuple[str, str], ...] = (
+    ("researcher", "research"),
+    ("strategist", "strategy"),
+    ("draft", "draft_one"),
+    ("critic", "critique"),
+    ("jury", "route"),
+)
+
+AGENT_STATUS_DONE = "done"
+AGENT_STATUS_RUNNING = "running"
+AGENT_STATUS_WAITING = "waiting-for-prev"
+AGENT_STATUS_SKIPPED = "skipped-not-required"
+AGENT_STATUS_FAILED = "failed"
+AGENT_STATUS_BLOCKED = "blocked-missing-input"
+AGENT_STATUS_CANCELLED = "cancelled"
+
+
+def required_agent_roles(archetype_id: str | None, *, force_research: bool = False) -> set[str]:
+    """The agent roles the archetype's enabled path ACTUALLY executes (and so must
+    land an agent_run for the run to be honestly complete).
+
+    Derived from the typed spec via ``router.enabled_path`` — the same pure-code
+    routing the compiled graph uses. Returns an empty set for a non-registry mode
+    (e.g. the ``provided_leads`` per-lead path, which has no spec row): in that mode
+    the caller infers required-vs-skipped from the runs that actually landed."""
+    from archetypes import registry, router
+
+    try:
+        spec = registry.get(str(archetype_id))
+    except Exception:
+        return set()
+    path = set(router.enabled_path(spec))
+    roles = {role for role, node in AGENT_ROLE_SEQUENCE if node in path}
+    if force_research:
+        roles.add("researcher")
+    return roles
+
+
+def derive_agent_statuses(
+    archetype_id: str | None,
+    agent_runs: list[dict[str, Any]],
+    run_status: str | None,
+    *,
+    force_research: bool = False,
+) -> dict[str, str]:
+    """Map every canonical spine agent to an HONEST status from REAL run state.
+
+    A role with a recorded agent_run is ``done``. A role with no run is reported by
+    its real reason and the run's terminal state — NEVER a silent ``queued``:
+
+      * not in this archetype's executed path          -> skipped-not-required
+      * run finished cleanly but this role never ran    -> skipped-not-required
+      * run still running, this is the in-flight role   -> running
+      *                     a not-yet-reached role       -> waiting-for-prev
+      *                     a role the run moved past     -> skipped-not-required
+      * run errored at this role                         -> failed
+      *           downstream of the failure              -> blocked-missing-input
+      * run cancelled                                    -> cancelled
+    """
+    present = {str(ar.get("role") or "").lower() for ar in agent_runs}
+    required = required_agent_roles(archetype_id, force_research=force_research)
+    status = (run_status or "").lower()
+    terminal_ok = status in ("completed", "success")
+    errored = status in ("error", "failed")
+    cancelled = status in ("cancelled", "canceled")
+    running = status == "running"
+
+    seq = [role for role, _ in AGENT_ROLE_SEQUENCE]
+    last_landed = max((i for i, role in enumerate(seq) if role in present), default=-1)
+    # The earliest not-yet-landed role at/after the last landed one is the in-flight one.
+    active_idx = next(
+        (i for i, role in enumerate(seq) if role not in present and i >= last_landed), None
+    )
+
+    out: dict[str, str] = {}
+    for i, role in enumerate(seq):
+        if role in present:
+            out[role] = AGENT_STATUS_DONE
+        elif required and role not in required:
+            out[role] = AGENT_STATUS_SKIPPED
+        elif terminal_ok:
+            out[role] = AGENT_STATUS_SKIPPED
+        elif running:
+            if i == active_idx:
+                out[role] = AGENT_STATUS_RUNNING
+            elif i < last_landed:
+                out[role] = AGENT_STATUS_SKIPPED
+            else:
+                out[role] = AGENT_STATUS_WAITING
+        elif cancelled:
+            out[role] = AGENT_STATUS_CANCELLED
+        elif errored:
+            if i == active_idx:
+                out[role] = AGENT_STATUS_FAILED
+            elif i < last_landed:
+                out[role] = AGENT_STATUS_SKIPPED
+            else:
+                out[role] = AGENT_STATUS_BLOCKED
+        else:
+            out[role] = AGENT_STATUS_WAITING
+    return out
+
+
 def _summarize_output(role: str, output: Any) -> str:
     """A short, readable one/two-liner for one role's output (for the chat trace)."""
     if not isinstance(output, dict):
@@ -225,11 +341,25 @@ def run_and_trace(
     spec = registry.get(aid)
     channels = [c.value for c in spec.channels[: spec.fanout_cap]]
 
+    # The compose graph only returns on a clean run, so the spine roles all landed;
+    # report the HONEST per-agent status from the REAL agent_runs so a consumer never
+    # has to fall back to a silent "queued". Any required role still missing here is a
+    # genuine gap (surfaced honestly, not hidden behind a complete claim).
+    agent_status = derive_agent_statuses(
+        aid, agent_runs, "completed", force_research=force_research
+    )
+    incomplete_roles = sorted(
+        role for role, st in agent_status.items()
+        if st not in (AGENT_STATUS_DONE, AGENT_STATUS_SKIPPED)
+    )
+
     return {
         "run_id": state.run_id,
         "campaign_id": state.campaign_id,
         "archetype_id": aid,
         "agent_runs": agent_runs,
+        "agent_status": agent_status,
+        "incomplete_roles": incomplete_roles,
         "n_pending": len(state.pending_action_ids),
         "n_queued": len(state.queued_asset_ids),
         "channels": channels,

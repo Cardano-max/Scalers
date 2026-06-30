@@ -12,6 +12,42 @@ import type { RunState, RunStep } from './run-trace';
 
 export type AgencyStageKey = 'research' | 'strategy' | 'drafts' | 'critics' | 'jury';
 
+/**
+ * An HONEST per-agent status derived from REAL run state. A stage with no landed step
+ * is NEVER silently "queued": it carries the real reason it has not produced — so a
+ * completed campaign whose plan skipped a stage reads "skipped", not a forever-queue.
+ */
+export type AgentRunStatus =
+  | 'done'
+  | 'running'
+  | 'waiting-for-prev'
+  | 'skipped-not-required'
+  | 'failed'
+  | 'blocked-missing-input'
+  | 'cancelled';
+
+/** Short lane/roster label for each honest status. */
+export const AGENT_STATUS_LABEL: Record<AgentRunStatus, string> = {
+  done: 'done',
+  running: 'running',
+  'waiting-for-prev': 'waiting',
+  'skipped-not-required': 'skipped',
+  failed: 'failed',
+  'blocked-missing-input': 'blocked',
+  cancelled: 'cancelled',
+};
+
+/** Hover/title text explaining each honest status. */
+export const AGENT_STATUS_TITLE: Record<AgentRunStatus, string> = {
+  done: 'Completed',
+  running: 'Running now',
+  'waiting-for-prev': 'Waiting for the previous step',
+  'skipped-not-required': 'Not required for this campaign',
+  failed: 'Failed',
+  'blocked-missing-input': 'Blocked — a required input never arrived',
+  cancelled: 'Cancelled',
+};
+
 export interface AgencyStage {
   key: AgencyStageKey;
   /** The cinematic narrative label the operator reads. */
@@ -27,9 +63,10 @@ export interface AgencyStage {
   done: boolean;
   /** The single earliest expected stage with no landed step, while running. */
   active: boolean;
-  /** Research only: the run FINISHED without a researcher step — honestly "not
-   *  required for this campaign" rather than a forever-"queued" placeholder. */
+  /** True when the run moved past this stage without it (honestly "not required"). */
   skipped: boolean;
+  /** The honest status of this agent, derived from REAL run state (never "queued"). */
+  status: AgentRunStatus;
   /** ISO createdAt of this stage's FIRST landed step (gates the handoff edge draw). */
   firstCreatedAt: string | null;
   /** The real steps that belong to this stage, in seq order. */
@@ -65,10 +102,12 @@ export function personaForRunRole(role: string): StudioPersona {
 
 export function deriveAgencyStages(runState: RunState | null, running = false): AgencyStage[] {
   const steps = runState?.steps ?? [];
-  // A finished run with no researcher step means deep research was not required for
-  // this campaign (the operator answered "no", or the type doesn't need it) — show
-  // that honestly instead of leaving the lane "queued" forever (the old bug).
-  const completed = runState?.status === 'completed';
+  // The honest derivation reads the REAL terminal state of the run. A stage with no
+  // landed step is reported by WHY it has none — never a silent forever-"queued"
+  // (the old bug: a completed provided-leads run left Strategist/Critic "queued").
+  const status = runState?.status;
+  const completed = status === 'completed';
+  const errored = status === 'error';
   const stages: AgencyStage[] = STAGE_DEFS.map((def) => {
     const mine = steps
       .filter((s) => def.roles.includes((s.role || '').toLowerCase()))
@@ -84,29 +123,44 @@ export function deriveAgencyStages(runState: RunState | null, running = false): 
       countable: def.countable,
       done: mine.length > 0,
       active: false,
-      skipped: def.key === 'research' && completed && mine.length === 0,
+      skipped: false,
+      status: 'waiting-for-prev' as AgentRunStatus,
       firstCreatedAt,
       steps: mine,
     };
   });
 
-  if (running) {
-    // Index of the last stage that has actually landed a step.
-    let lastLanded = -1;
-    stages.forEach((s, i) => {
-      if (s.done) lastLanded = i;
-    });
-    // A not-done stage BEFORE the last landed one was surpassed: only research is
-    // legitimately optional, so mark it skipped (e.g. strategy landed first because
-    // deep research wasn't requested) instead of showing it forever "researching".
-    for (let i = 0; i < lastLanded; i += 1) {
-      if (!stages[i].done && stages[i].key === 'research') stages[i].skipped = true;
+  // Index of the last stage that has actually landed a step (how far the run got).
+  let lastLanded = -1;
+  stages.forEach((s, i) => {
+    if (s.done) lastLanded = i;
+  });
+  // The earliest not-done stage at/after the last landed one is the in-flight stage.
+  const activeIdx = stages.findIndex((s, i) => !s.done && i >= lastLanded);
+
+  stages.forEach((s, i) => {
+    if (s.done) {
+      s.status = 'done';
+      return;
     }
-    // The active stage is the earliest not-done, not-skipped stage at/after the last
-    // landed step (the one currently in flight).
-    const next = stages.find((s, i) => !s.done && !s.skipped && i >= lastLanded);
-    if (next) next.active = true;
-  }
+    // No landed step for this stage — derive the honest reason from real run state.
+    if (running) {
+      if (i === activeIdx) s.status = 'running';
+      else if (i < lastLanded) s.status = 'skipped-not-required'; // run moved past it
+      else s.status = 'waiting-for-prev';
+    } else if (completed) {
+      // Run finished cleanly without this stage -> it was not part of this plan.
+      s.status = 'skipped-not-required';
+    } else if (errored) {
+      if (i === activeIdx) s.status = 'failed';
+      else if (i < lastLanded) s.status = 'skipped-not-required';
+      else s.status = 'blocked-missing-input';
+    } else {
+      s.status = 'waiting-for-prev';
+    }
+    s.active = s.status === 'running';
+    s.skipped = s.status === 'skipped-not-required';
+  });
 
   return stages;
 }

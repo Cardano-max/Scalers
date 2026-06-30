@@ -20,6 +20,8 @@ import {
   deriveAgencyStages,
   extractResearchSources,
   stepSummaryLine,
+  AGENT_STATUS_LABEL,
+  AGENT_STATUS_TITLE,
   type AgencyStage,
 } from '@/lib/studio/agency';
 import { AGENT_PERSONAS } from '@/lib/studio/persona';
@@ -362,12 +364,18 @@ function LaneNode({ stage }: { stage: AgencyStage }) {
           <span style={{ fontVariantNumeric: 'tabular-nums' }}>
             done{stage.countable && stage.count > 0 ? ` · ×${stage.count}` : ''}
           </span>
-        ) : stage.skipped ? (
-          <span style={{ color: 'var(--text-faint)' }} title="Not required for this campaign">
-            skipped
-          </span>
         ) : (
-          'queued'
+          <span
+            style={{
+              color:
+                stage.status === 'failed' || stage.status === 'blocked-missing-input'
+                  ? 'var(--danger-text)'
+                  : 'var(--text-faint)',
+            }}
+            title={AGENT_STATUS_TITLE[stage.status]}
+          >
+            {AGENT_STATUS_LABEL[stage.status]}
+          </span>
         )}
       </span>
     </div>
@@ -454,10 +462,18 @@ function Roster({ stages }: { stages: AgencyStage[] }) {
                   <span style={{ color: stage.accent }}>{stage.verb}…</span>
                 ) : stage.done ? (
                   'done'
-                ) : stage.skipped ? (
-                  <span style={{ color: 'var(--text-faint)' }}>skipped</span>
                 ) : (
-                  'queued'
+                  <span
+                    style={{
+                      color:
+                        stage.status === 'failed' || stage.status === 'blocked-missing-input'
+                          ? 'var(--danger-text)'
+                          : 'var(--text-faint)',
+                    }}
+                    title={AGENT_STATUS_TITLE[stage.status]}
+                  >
+                    {AGENT_STATUS_LABEL[stage.status]}
+                  </span>
                 )}
               </div>
             </div>

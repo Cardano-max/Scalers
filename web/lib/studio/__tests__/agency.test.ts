@@ -61,6 +61,52 @@ describe('deriveAgencyStages — real counts + active + handoff gate', () => {
   });
 });
 
+describe('deriveAgencyStages — honest per-agent status (never silent "queued")', () => {
+  it('marks un-run agents of a COMPLETED run skipped-not-required, never queued', () => {
+    // The P1 bug repro: the provided-leads path records researcher + draft×N + jury
+    // and NO strategist / critic, yet the run is completed. Those two must read an
+    // honest "skipped-not-required", not a forever-"queued".
+    const rs = runState(
+      [
+        step(1, 'researcher', { sources: [] }, '2026-06-30T10:00:00Z'),
+        step(2, 'draft', { hook: 'h1' }, '2026-06-30T10:00:04Z'),
+        step(3, 'draft', { hook: 'h2' }, '2026-06-30T10:00:05Z'),
+        step(4, 'jury', { decision: 'review' }, '2026-06-30T10:00:08Z'),
+      ],
+      'completed',
+    );
+    const byKey = Object.fromEntries(deriveAgencyStages(rs, false).map((s) => [s.key, s]));
+    expect(byKey.research.status).toBe('done');
+    expect(byKey.drafts.status).toBe('done');
+    expect(byKey.jury.status).toBe('done');
+    expect(byKey.strategy.status).toBe('skipped-not-required');
+    expect(byKey.strategy.skipped).toBe(true);
+    expect(byKey.critics.status).toBe('skipped-not-required');
+    // No agent anywhere is left in the dishonest "queued" state.
+    expect(deriveAgencyStages(rs, false).every((s) => (s.status as string) !== 'queued')).toBe(true);
+  });
+
+  it('reports running / waiting honestly mid-run', () => {
+    const rs = runState([step(1, 'strategist', { primary_angle: 'speed' }, '2026-06-30T10:00:00Z')]);
+    const byKey = Object.fromEntries(deriveAgencyStages(rs, true).map((s) => [s.key, s]));
+    expect(byKey.strategy.status).toBe('done');
+    expect(byKey.drafts.status).toBe('running');
+    expect(byKey.critics.status).toBe('waiting-for-prev');
+    expect(byKey.jury.status).toBe('waiting-for-prev');
+  });
+
+  it('reports failed / blocked honestly for an errored run', () => {
+    const rs = runState(
+      [step(1, 'strategist', { primary_angle: 'speed' }, '2026-06-30T10:00:00Z')],
+      'error',
+    );
+    const byKey = Object.fromEntries(deriveAgencyStages(rs, false).map((s) => [s.key, s]));
+    expect(byKey.drafts.status).toBe('failed');
+    expect(byKey.critics.status).toBe('blocked-missing-input');
+    expect(byKey.jury.status).toBe('blocked-missing-input');
+  });
+});
+
 describe('extractResearchSources — real citations only', () => {
   it('pulls real {url,title} citations and ignores entries without a url', () => {
     const steps = [
