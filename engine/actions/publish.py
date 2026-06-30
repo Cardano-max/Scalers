@@ -38,11 +38,21 @@ so a mock can never perform a real IG/Gmail/FB send: it fails honestly instead.
 from __future__ import annotations
 
 import inspect
+import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any
 
 from actions.store import ActionRow, _connect, get_action, update_status
+
+_log = logging.getLogger(__name__)
+
+# A draft must never deliver a raw template placeholder (e.g. the copywriter's
+# ``{{unsubscribe}}`` token) to a real recipient. The studio draft builder resolves
+# these before staging; this is the send-path backstop that REFUSES to send if one
+# survived. Honest failure, never a raw token in someone's inbox.
+_PLACEHOLDER_RE = re.compile(r"\{\{[^}]*\}\}")
 
 
 class ActionNotFoundError(LookupError):
@@ -175,28 +185,58 @@ def _publish_gmail(action: ActionRow, connector: Any | None, dsn: str | None) ->
     from connectors.gmail import GmailConnector
 
     conn = connector or GmailConnector.from_env(enabled=True)
-    # SAFE TEST REDIRECT: when GMAIL_REDIRECT_TO is set, every real send is routed to
-    # that inbox instead of the lead, and the subject is prefixed with the intended
-    # recipient so the test inbox shows who it WOULD have reached. The DB row's
-    # `target` is deliberately LEFT UNCHANGED (honesty: the queue still shows the real
-    # lead). With no redirect env set, behaviour is exactly as before (live send).
+
+    # TOKEN GUARD (honesty): never deliver a raw template placeholder. If the body
+    # still carries an unresolved {{...}} token (e.g. the copywriter's {{unsubscribe}}
+    # that the studio builder should have resolved), FAIL with the reason — do NOT
+    # send. Exactly-once is unaffected: the action was already claimed, this just
+    # marks it failed without an external call.
+    body = action.draft or ""
+    stray = _PLACEHOLDER_RE.search(body)
+    if stray is not None:
+        return update_status(
+            action.id, "failed", dsn=dsn,
+            last_error=(
+                f"refusing to send: unresolved template placeholder "
+                f"{stray.group(0)!r} in body"
+            ),
+        )
+
+    # SEND MODE — explicit and honest:
+    #   * live     — a REAL send to the REAL recipient with a CLEAN subject. Either the
+    #                action was explicitly staged for real outreach (worker
+    #                'studio_real_send' = an operator-approved real send), or no test
+    #                redirect is configured at all.
+    #   * redirect — a SAFE TEST send: routed to the operator inbox (GMAIL_REDIRECT_TO)
+    #                with a '[TEST->{real_to}]' subject marker so the test inbox shows
+    #                who it WOULD have reached. The DB row's `target` is LEFT UNCHANGED
+    #                (the queue still shows the real lead).
+    # A draft goes live ONLY on that explicit operator real-send; everything else still
+    # redirects, so an accidental approve can never reach a real stranger. The allow-list
+    # (worker gate) and exactly-once claim are unchanged.
     real_to = action.target or ""
-    to_addr = real_to
     subject = action.subject or ""
     redirect = os.environ.get("GMAIL_REDIRECT_TO")
-    # Allow-list: actions explicitly staged for real outreach (worker
-    # 'studio_real_send') bypass the safety redirect and go to the real lead; every
-    # other gmail action (e.g. dummy/seed-customer campaign drafts) is redirected to
-    # the operator inbox so an accidental approve can never reach a real stranger.
-    if redirect and getattr(action, "worker", None) != "studio_real_send":
+    is_live_send = getattr(action, "worker", None) == "studio_real_send" or not redirect
+    if is_live_send:
+        mode = "live"
+        to_addr = real_to
+        # subject stays CLEAN — no [TEST] marker on a real send.
+    else:
+        mode = "redirect"
         to_addr = redirect
         subject = f"[TEST->{real_to}] {subject}"
+    _log.info(
+        "gmail publish: action=%s mode=%s to=%s clean_subject=%s",
+        action.id, mode, to_addr, mode == "live",
+    )
+
     try:
         _ensure_real(conn)  # real-only: a mock never live-sends
         result = conn.send(
             to=to_addr,
             subject=subject,
-            body=action.draft,
+            body=body,
         )
     except Exception as exc:  # noqa: BLE001 — surface the REAL error, never fake success
         return update_status(action.id, "failed", dsn=dsn, last_error=str(exc))

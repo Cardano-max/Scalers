@@ -17,6 +17,7 @@ customer detail. Drafts are returned for the caller to stage as PENDING actions
 from __future__ import annotations
 
 import os
+import re
 import uuid
 from typing import Any
 
@@ -399,8 +400,15 @@ def _build_email_prompt(
         "voice's approved claims above — nothing else.",
         f"- Reason for reaching out / goal: {goal_line}.",
         "",
-        "Write a specific honest subject and a short plain-text body. End the body "
-        "with a brief visible unsubscribe line containing the exact token {{unsubscribe}}.",
+        "Write a specific honest subject and a short plain-text body. Include ONE clear "
+        "call to action — a single concrete next step the recipient can take ("
+        + (f"point them to the booking link {_booking_link()}" if _booking_link()
+           else "since there is no booking link, invite a reply, e.g. 'reply yes and "
+                "I'll send over a booking link'")
+        + ").",
+        "End the body with a brief visible unsubscribe line containing the exact "
+        "token {{unsubscribe}} (the staging layer resolves it to a real reply-based "
+        "opt-out before the draft is queued).",
     ])
 
 
@@ -440,10 +448,11 @@ def _template_outreach(
     elif notes:
         detail = f" Saw you're {notes.lower()}."
 
+    # The CTA + opt-out line are added by _finalize_outreach_body so there is ONE
+    # place that guarantees a clear next step and a resolved (never raw-token) opt-out.
     body = (
         f"{opener}{detail} I run a small studio{city_phrase} and wanted to say hello "
-        f"and {goal_line}. If it's of interest, I'd love to find a good time to talk. "
-        "No worries at all if not."
+        f"and {goal_line}."
     )
     body = " ".join(body.split())
 
@@ -451,6 +460,101 @@ def _template_outreach(
     if ch in ("gmail", "email"):
         subject = f"Hello from one studio to another, {first}".strip()[:60]
     return subject, body
+
+
+# --------------------------------------------------------------------------- #
+# Send-safety finalizer — resolve the opt-out token + guarantee a clear CTA
+# --------------------------------------------------------------------------- #
+#
+# The gated copywriter email cell is REQUIRED to leave the visible {{unsubscribe}}
+# token in the body (its validators enforce it) because the growth RFC-8058 sequence
+# path fills that token with a one-click URL. The studio outreach path has no such
+# URL infrastructure, so a queued studio draft would otherwise carry the literal
+# token (and, on the deterministic path, a weak/no CTA) into a real inbox. We resolve
+# the token to an honest reply-based opt-out and guarantee a clear next step BEFORE
+# the draft is staged. The send path (actions.publish) additionally REFUSES any draft
+# that still contains an unresolved placeholder.
+
+_UNSUB_TOKEN = "{{unsubscribe}}"
+_PLACEHOLDER_RE = re.compile(r"\{\{[^}]*\}\}")
+_OPT_OUT_LINE = (
+    "If you'd rather not hear from me, just reply STOP and I won't reach out again."
+)
+# Phrases that signal the copy already carries a real next step, so we do not bolt a
+# second CTA onto copy that already asks for one. Deliberately excludes a bare "reply"
+# (the opt-out line uses it) to avoid a false positive.
+_CTA_SIGNALS = (
+    "reply yes", "reply with", "book a", "book your", "booking link", "send over a booking",
+    "schedule", "grab a time", "find a time", "set up a time", "set something up",
+    "let me know if you", "hop on a call", "you can grab a time",
+)
+_OPTOUT_HINTS = (
+    "unsubscribe", "opt out", "opt-out", "opt me out", "stop hearing", "no longer",
+    "reply stop",
+)
+
+
+def _booking_link() -> str | None:
+    """An operator-configured booking link, if one is set. Honest: returns ``None``
+    when no real link is configured, so we never fabricate a URL — the CTA falls back
+    to a reply-based invite instead."""
+    link = (
+        os.environ.get("STUDIO_BOOKING_LINK")
+        or os.environ.get("SCALERS_BOOKING_LINK")
+        or ""
+    ).strip()
+    return link or None
+
+
+def _cta_line() -> str:
+    """One clear next step for the recipient: the real booking link when configured,
+    otherwise an honest reply-based invite that promises nothing we cannot deliver."""
+    link = _booking_link()
+    if link:
+        return f"If you're open to it, you can grab a time here: {link}"
+    return "If you're open to it, just reply YES and I'll send over a booking link."
+
+
+def _has_cta(text: str) -> bool:
+    low = text.lower()
+    return any(sig in low for sig in _CTA_SIGNALS)
+
+
+def _looks_like_optout(line: str) -> bool:
+    low = line.lower()
+    return any(hint in low for hint in _OPTOUT_HINTS)
+
+
+def _finalize_outreach_body(body: str | None, *, ch: str) -> str | None:
+    """Make a staged EMAIL body send-safe and action-oriented BEFORE it is queued.
+
+    1. Resolve the copywriter's visible ``{{unsubscribe}}`` token to a concrete
+       reply-based opt-out line (a real recipient opts out by replying) and strip any
+       other stray placeholder, so no raw template token reaches a human inbox.
+    2. Guarantee a clear CTA: a real booking link when the operator configured one,
+       otherwise an honest reply-based invite. A cold email with no next step does not
+       convert.
+
+    Deterministic and idempotent. Non-email channels pass through unchanged."""
+    if ch not in ("gmail", "email") or not body:
+        return body
+
+    # Drop the copywriter's unsubscribe line (any line carrying the token is an opt-out
+    # line by contract — the cell is told to END with it). An inline token (no dedicated
+    # line) is stripped but its surrounding body text is kept, so no content is lost.
+    kept: list[str] = []
+    for line in body.strip().splitlines():
+        if _UNSUB_TOKEN in line:
+            remainder = line.replace(_UNSUB_TOKEN, "").strip()
+            if remainder and not _looks_like_optout(remainder):
+                kept.append(remainder)
+            continue
+        kept.append(line)
+    core = _PLACEHOLDER_RE.sub("", "\n".join(kept)).strip()
+
+    if not _has_cta(core):
+        core = f"{core}\n\n{_cta_line()}"
+    return f"{core}\n\n{_OPT_OUT_LINE}"
 
 
 def build_outreach_draft(
@@ -557,6 +661,14 @@ def build_outreach_draft(
         subject, body = _template_outreach(facts, goal=goal, ch=ch)
         if not any(g.startswith("copy=") for g in grounding):
             grounding.append("copy=deterministic_template")
+
+    # Resolve the opt-out token + guarantee a clear CTA BEFORE staging, so a queued
+    # draft never carries a raw {{unsubscribe}} token (or a weak/no CTA) into a real
+    # inbox. The send path (actions.publish) refuses any unresolved placeholder too.
+    body = _finalize_outreach_body(body, ch=ch)
+    if ch in ("gmail", "email"):
+        grounding.append("cta=booking-link" if _booking_link() else "cta=reply-based")
+        grounding.append("opt_out=reply-based")
 
     target = None
     if ch in ("gmail", "email"):
