@@ -28,6 +28,7 @@ import {
 import { StudioChatPanel } from './StudioChatPanel';
 import { LiveProgressPanel } from './LiveProgressPanel';
 import { PlanDocPanel } from './PlanDocPanel';
+import { LiveCampaignStudio } from './LiveCampaignStudio';
 
 interface CampaignStudioProps {
   /** Override the adapter (tests inject a fake; default = preview, not wired). */
@@ -36,7 +37,37 @@ interface CampaignStudioProps {
   sessionId?: string;
 }
 
+/**
+ * Dispatcher: decide LIVE (AG-UI) vs PREVIEW WITHOUT calling any hooks, so the
+ * conditional return is safe under the rules-of-hooks. The live branch is selected
+ * only when a studio AG-UI endpoint is configured AND no adapter is injected (tests
+ * inject one / leave it preview). Each branch renders a component that owns its own
+ * hooks unconditionally — so hook order is stable within each rendered subtree.
+ */
 export function CampaignStudio({
+  adapter,
+  sessionId = 'studio-preview-session',
+}: CampaignStudioProps) {
+  const aguiUrl =
+    typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_STUDIO_AGUI_URL : undefined;
+  if (!adapter && aguiUrl) {
+    const graphqlUrl =
+      (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_STUDIO_GRAPHQL_URL) ||
+      '/graphql';
+    const liveSession =
+      sessionId === 'studio-preview-session' ? 'studio-live-session' : sessionId;
+    return (
+      <LiveCampaignStudio aguiUrl={aguiUrl} graphqlUrl={graphqlUrl} sessionId={liveSession} />
+    );
+  }
+  return <PreviewCampaignStudio adapter={adapter} sessionId={sessionId} />;
+}
+
+/**
+ * PreviewCampaignStudio — the not-wired scaffold path (or any injected adapter,
+ * including the test fake). Owns all the studio hooks unconditionally.
+ */
+function PreviewCampaignStudio({
   adapter,
   sessionId = 'studio-preview-session',
 }: CampaignStudioProps) {

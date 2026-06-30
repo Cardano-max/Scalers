@@ -1,9 +1,8 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useData } from '@/lib/data/DataProvider';
 import { useAsync } from '@/lib/useAsync';
-import { useConsole } from '@/state/console-store';
 import { Dot } from './icons';
 import { FeedRow } from './FeedRow';
 import type { FeedEvent, Worker } from '@/lib/data/models';
@@ -21,7 +20,6 @@ const WORKERS: Array<{ id: Worker; label: string }> = [
 
 export function FeedScreen() {
   const { adapter, tenantId } = useData();
-  const console = useConsole();
   const feed = useAsync<FeedEvent[]>(() => adapter.getFeed(tenantId), [tenantId]);
 
   const [filter, setFilter] = useState<Worker | null>(null);

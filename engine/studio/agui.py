@@ -38,7 +38,7 @@ from typing import Any
 
 from fastapi import Request
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent, DeferredToolRequests, RunContext
 from pydantic_ai.ui import StateDeps  # noqa: F401  (re-exported for callers/tests)
 
 from studio.campaign_plan_store import latest_plans, upsert_plan
@@ -111,13 +111,47 @@ _SYSTEM = (
 )
 
 
+# ``output_type`` MUST include ``DeferredToolRequests`` because this agent owns an
+# approval-gated tool (``stage_publish``, ``requires_approval=True``). pydantic-ai's
+# ``AGUIAdapter.run_stream_native`` only appends ``DeferredToolRequests`` automatically
+# when the inbound request carries frontend tools; an AG-UI client that sends no
+# frontend tools would otherwise hit "A deferred tool call was present, but
+# `DeferredToolRequests` is not among output types" and the approval gate would 500
+# instead of surfacing an Approve/Reject interrupt. Declaring it here makes the gate
+# work unconditionally (and matches what the hermetic approval test asserts).
 studio_agent = Agent(
     HOST_AGUI_MODEL,
     deps_type=StudioDeps,
+    output_type=[str, DeferredToolRequests],
     instructions=_SYSTEM,
     model_settings={"temperature": 0.4},
     defer_model_check=True,
 )
+
+
+@studio_agent.instructions
+def _plan_context(ctx: RunContext[StudioDeps]) -> str:
+    """Surface the live shared-state plan to the host on EVERY turn.
+
+    The static system prompt promises the plan is readable each turn, but the AG-UI
+    adapter only loads the inbound ``state`` into ``ctx.deps.state`` — it does NOT
+    inject it into the model context. Without this, when the operator edits a plan
+    field on the frontend and re-plans, the host can't see the change and asks the
+    operator to restate it. This dynamic instruction makes the SHARED STATE (including
+    the operator's just-made field edits) genuinely visible, so the host re-plans
+    from it instead of asking the operator to repeat themselves."""
+    p = ctx.deps.state
+    channels = ", ".join(p.channels) if p.channels else "(none yet)"
+    sections = ", ".join(p.sections) if p.sections else "(none yet)"
+    return (
+        "CURRENT CAMPAIGN PLAN — this is the live SHARED STATE, already reflecting any "
+        "edits the operator just made to the plan fields on the frontend. Treat it as "
+        "ground truth and re-plan around it; never claim you cannot see it:\n"
+        f"- goal: {p.goal or '(empty)'}\n"
+        f"- audience: {p.audience or '(empty)'}\n"
+        f"- channels: {channels}\n"
+        f"- sections: {sections}"
+    )
 
 
 # --------------------------------------------------------------------------- #

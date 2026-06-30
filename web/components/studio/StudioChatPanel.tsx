@@ -21,12 +21,23 @@ import {
   type StudioStreamStatus,
 } from '@/lib/data/studio-adapter';
 
+/** A would-send action paused at the approval gate, surfaced in-thread. */
+export interface ChatApproval {
+  toolName: string;
+  args: string;
+  message?: string;
+}
+
 interface StudioChatPanelProps {
   turns: ChatTurn[];
   onSend: (text: string) => void;
   /** Stream lifecycle; 'preview' drives the honest not-connected note. */
   streamStatus: StudioStreamStatus;
   busy?: boolean;
+  /** When set, render an explicit Approve/Reject card in the thread (HITL gate). */
+  approval?: ChatApproval | null;
+  onApprove?: () => void;
+  onReject?: () => void;
 }
 
 function formatTime(at: string): string {
@@ -40,6 +51,9 @@ export function StudioChatPanel({
   onSend,
   streamStatus,
   busy = false,
+  approval = null,
+  onApprove,
+  onReject,
 }: StudioChatPanelProps) {
   const [draft, setDraft] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -175,6 +189,83 @@ export function StudioChatPanel({
           ))
         )}
       </div>
+
+      {/* Approval gate (HITL): an explicit Approve/Reject card in the thread. The
+          would-send is STAGED on approve (held, never auto-fired); reject denies it. */}
+      {approval && (
+        <div
+          role="alertdialog"
+          aria-label="Approval required"
+          style={{
+            margin: '0 16px 4px',
+            padding: '12px 14px',
+            background: '#FFF7ED',
+            border: '1px solid #F0C99A',
+            borderRadius: 10,
+          }}
+        >
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#B45309', marginBottom: 4 }}>
+            Approval required — nothing is sent until you approve
+          </div>
+          <div style={{ fontSize: 13, color: '#7C2D12', lineHeight: 1.45, marginBottom: 8 }}>
+            {approval.message ?? `The agent wants to run ${approval.toolName}.`}
+          </div>
+          <div
+            style={{
+              fontSize: 12,
+              fontFamily: "'IBM Plex Mono', monospace",
+              color: '#92400E',
+              background: '#FFFBEB',
+              border: '1px solid #FDE8C8',
+              borderRadius: 7,
+              padding: '6px 8px',
+              marginBottom: 10,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            }}
+          >
+            {approval.toolName}({approval.args})
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              type="button"
+              onClick={onApprove}
+              disabled={busy}
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                padding: '8px 16px',
+                border: 'none',
+                borderRadius: 8,
+                background: '#0F8A82',
+                color: '#fff',
+                cursor: busy ? 'not-allowed' : 'pointer',
+                opacity: busy ? 0.6 : 1,
+              }}
+            >
+              Approve &amp; stage (held)
+            </button>
+            <button
+              type="button"
+              onClick={onReject}
+              disabled={busy}
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                padding: '8px 16px',
+                border: '1px solid #E2A66B',
+                borderRadius: 8,
+                background: '#fff',
+                color: '#9A3412',
+                cursor: busy ? 'not-allowed' : 'pointer',
+                opacity: busy ? 0.6 : 1,
+              }}
+            >
+              Reject
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Honest preview note */}
       {isPreview && (

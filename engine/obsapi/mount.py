@@ -22,6 +22,18 @@ CONSOLE_ORIGINS = [
     # never collides with the frozen demo on :3000. Allow it to reach /graphql.
     "http://localhost:3030",
     "http://127.0.0.1:3030",
+    # P3.1 interactive studio: the chat-first Campaign Studio dev FE runs on :3002
+    # and reaches the AG-UI endpoint (POST /studio/agui) + /graphql cross-origin.
+    # Direct (not same-origin-proxied) so the SSE stream is never buffered by a dev
+    # proxy. CORS is applied app-wide below, so it also covers /studio/agui.
+    "http://localhost:3002",
+    "http://127.0.0.1:3002",
+    # Go-live boot: the integrated Campaign Studio web runs on :3031 (backend :8010),
+    # isolated from the operator's :3000/:8000/:3030. Allowed here so a DIRECT
+    # cross-origin bind (NEXT_PUBLIC_STUDIO_AGUI_URL=http://127.0.0.1:8010/...) also
+    # works; the default boot uses the same-origin Next proxy (no CORS needed).
+    "http://localhost:3031",
+    "http://127.0.0.1:3031",
 ]
 
 

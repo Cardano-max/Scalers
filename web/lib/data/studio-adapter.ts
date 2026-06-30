@@ -308,8 +308,6 @@ const SEND_CHAT_MESSAGE = `mutation SendChatMessage($sessionId: String!, $text: 
   }
 }`;
 
-const PROBE_QUERY = `query StudioProbe { __typename }`;
-
 const STUDIO_CHAT_HISTORY = `query StudioChatHistory($sessionId: String!) {
   studioChatHistory(sessionId: $sessionId) { id sessionId seq role text model createdAt }
 }`;
