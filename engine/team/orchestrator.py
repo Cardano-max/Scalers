@@ -31,6 +31,14 @@ When the content nodes are wired, each will: build its cell via
 (for producing roles) append a real asset to state for ``queue`` to enqueue. The
 critic node will run :func:`cells.critic.build_critic_cell` ONCE per asset as an
 independent pass and persist to ``asset_critiques`` — never a staged debate.
+
+UPDATE (Phase A — Dynamic Campaign Workflow Library): the WIRED realization of
+these nodes now exists in :mod:`archetypes.compose`, driven by a selected
+:class:`archetypes.spec.ArchetypeSpec` (research->research pipeline, strategy->
+strategy cell, draft_many->content-brief cell via a capped LangGraph ``Send``,
+critique->critic cell, jury->``harness.router.route`` pinned to HOLD->PENDING).
+Call :meth:`TeamOrchestrator.run_campaign` for that real path. The skeleton nodes
+below remain as the linear reference shape; they still fabricate nothing.
 """
 
 from __future__ import annotations
@@ -212,6 +220,34 @@ class TeamOrchestrator:
     def plan(self) -> list[str]:
         """REAL: the role execution order without running anything."""
         return [r.value for r in PIPELINE_ORDER]
+
+    def run_campaign(
+        self,
+        *,
+        archetype_id: str,
+        tenant_id: str,
+        brief: str = "",
+        campaign_id: str | None = None,
+    ):
+        """REAL wired run: the team spine's content nodes (research/strategy/
+        draft_many/critique) are realized for an :class:`ArchetypeSpec` in
+        :mod:`archetypes.compose` (Phase A of the Dynamic Campaign Workflow Library).
+
+        This resolves the ``TODO(wire)`` skeleton nodes below: it runs the real
+        cells (``strategy`` -> strategy cell, ``draft_many`` -> content-brief cell via
+        a capped LangGraph ``Send`` fan-out, ``critique`` -> critic cell), runs the
+        real research pipeline (honest-empty without a provider key), aggregates the
+        jury, routes with the pure-code ``harness.router.route`` pinned to HOLD, and
+        writes per-role ``agent_runs`` + HELD ``assets`` + PENDING ``actions``.
+        NOTHING SENDS. Returns the final :class:`archetypes.compose.CampaignState`.
+        """
+        from archetypes.compose import run_campaign as _run
+
+        self.setup()
+        return _run(
+            archetype_id=archetype_id, tenant_id=tenant_id, brief=brief,
+            campaign_id=campaign_id, dsn=self.dsn, persist=True,
+        )
 
     def run_skeleton(
         self,
