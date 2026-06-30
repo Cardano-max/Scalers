@@ -105,12 +105,137 @@ def next_question(plan: Any) -> dict[str, str] | None:
     return None
 
 
+def _has_customers(plan: Any) -> bool:
+    cust = getattr(plan, "customers", None) or {}
+    try:
+        return bool(cust.get("rows")) or bool(cust.get("customer_ids"))
+    except AttributeError:
+        return False
+
+
+def select_mode(plan: Any) -> tuple[str, str]:
+    """The orchestration MODE the request needs, derived from the plan. ``(id, label)``.
+
+    Pure + deterministic — the same branch the run dispatch takes (provided-leads vs
+    the archetype content spine), made explicit so the UI can show WHY a given set of
+    agents/tools will run."""
+    action = (getattr(plan, "action_type", "") or "").strip().lower()
+    lead_source = (getattr(plan, "lead_source", "") or "").strip().lower()
+    drafts_only = getattr(plan, "drafts_only", None) is True
+
+    if action in ("results", "report", "performance", "history"):
+        return "performance", "Performance review — read results, not a new campaign"
+    if lead_source in ("provided", "use", "own") or _has_customers(plan):
+        return "personalized_outreach", "Personalized outreach to YOUR leads (CSV / database)"
+    if lead_source in ("new", "source_new", "source", "web"):
+        return "source_and_outreach", "Source new prospects on the web, then outreach"
+    if drafts_only and not _has_customers(plan):
+        return "quick_draft", "Quick draft — skip the full pipeline"
+    return "content_campaign", "Content campaign — strategy, drafts, critique"
+
+
+def planned_steps(plan: Any) -> list[dict[str, Any]]:
+    """The pipeline steps THIS request needs, each marked selected/skipped WITH a
+    reason and the tools it uses. Pure projection of the plan — the supervisor plans
+    which steps to run, and the UI renders which ran and WHY. Honest: a skipped step
+    says why it was skipped; it never silently disappears."""
+    mode, _ = select_mode(plan)
+    has_customers = _has_customers(plan)
+    deep = getattr(plan, "deep_research", None)
+    drafts_only = getattr(plan, "drafts_only", None) is True
+    n = getattr(plan, "output_count", 0) or 0
+
+    is_outreach = mode in ("personalized_outreach", "source_and_outreach")
+    is_content = mode == "content_campaign"
+    is_quick = mode == "quick_draft"
+    is_perf = mode == "performance"
+
+    def step(sid, label, selected, reason, tools=()):
+        return {"id": sid, "label": label, "selected": bool(selected),
+                "reason": reason, "tools": list(tools)}
+
+    steps: list[dict[str, Any]] = [
+        step("interview", "Scope the run", True,
+             "Gathered goal, audience, channels, lead source and output count before launch.",
+             ["interview gate"]),
+    ]
+
+    # Performance mode is a read, not a generation pipeline.
+    if is_perf:
+        steps.append(step("results", "Read results", True,
+                          "You asked for performance — reading run history and outcomes, not generating new drafts.",
+                          ["runs", "actions history"]))
+        return steps
+
+    # Lead analysis (per-lead DB history + memory) — only when there are real leads.
+    steps.append(step(
+        "lead_analysis", "Analyze your leads", is_outreach,
+        ("Pull each lead's real history (city, past tattoos, persona, prior-campaign memories) "
+         "from your customer DB." if is_outreach
+         else "No customer list to analyze — this is a content campaign, not per-lead outreach."),
+        ["customer DB", "lead memory"],
+    ))
+
+    # Web research — gated on the operator's deep_research choice (or web sourcing).
+    web_selected = (deep is True) or mode == "source_and_outreach"
+    if deep is False:
+        web_reason = "You opted out of deep web research — drafting from grounded facts only."
+    elif web_selected:
+        web_reason = "Cited web research (real Firecrawl URLs) about each studio / the niche."
+    else:
+        web_reason = "Deep research not requested — skipping the web research step."
+    steps.append(step("web_research", "Web research", web_selected, web_reason, ["Firecrawl"]))
+
+    # Brand voice — ALWAYS loaded; it grounds every draft (P1).
+    steps.append(step("brand_voice", "Load brand voice", True,
+                      "Load your studio's brand voice so every draft sounds like you and stays on approved claims.",
+                      ["brand-voice pack"]))
+
+    # Strategy — content campaigns plan an angle; outreach/quick drafts do not.
+    steps.append(step("strategy", "Set strategy", is_content,
+                      ("Pick the angle and conversion goal for the campaign." if is_content
+                       else "Skipped — a single personalized message, not a multi-asset campaign strategy."),
+                      ["strategist cell"]))
+
+    # Drafting — always (the actual generation).
+    draft_reason = (
+        f"Write {n} personalized draft(s), one per lead, in your brand voice." if is_outreach and n
+        else "Write one personalized draft per lead in your brand voice." if is_outreach
+        else f"Write {n} on-voice draft(s)." if (is_content and n)
+        else "Rewrite / draft in your brand voice." if is_quick
+        else "Write the on-voice draft(s)."
+    )
+    steps.append(step("draft", "Write drafts", True, draft_reason,
+                      ["copywriter cell"]))
+
+    # Independent critic — runs for content campaigns; skipped for drafts-only.
+    critic_selected = is_content and not drafts_only
+    steps.append(step("critic", "Independent critic", critic_selected,
+                      ("An independent critic judges each asset against your brand voice and approved claims."
+                       if critic_selected
+                       else "Skipped — drafts-only / single message; no separate critique pass."),
+                      ["critic cell"]))
+
+    # Jury aggregate — content + outreach runs produce a HELD jury summary.
+    steps.append(step("jury", "Jury aggregate", not is_quick,
+                      ("Aggregate confidence across the drafts (HELD — approve-first)." if not is_quick
+                       else "Skipped for a quick one-off draft."),
+                      ["jury"]))
+
+    # Review queue — ALWAYS; nothing sends without you.
+    steps.append(step("review", "Stage for approval", True,
+                      "Stage every draft HELD in your Review Queue — nothing is ever sent without your approval.",
+                      ["review queue"]))
+    return steps
+
+
 def interview_state(plan: Any) -> dict[str, Any]:
     """The full gate state for one session plan — exactly what the Agency interview
     panel renders and what gates the Run button. Pure projection of the plan."""
     missing = missing_gating(plan)
     armed = not missing
     collected = {f: getattr(plan, f, None) for f in INTERVIEW_FIELDS}
+    mode, mode_label = select_mode(plan)
     return {
         "armed": armed,
         "missing": missing,
@@ -118,6 +243,10 @@ def interview_state(plan: Any) -> dict[str, Any]:
         "nextQuestion": next_question(plan),
         "readyMessage": READY_MESSAGE if armed else None,
         "gatingFields": list(GATING_FIELDS),
+        # P4 dynamic selection: the steps THIS request needs + WHY (selected/skipped).
+        "mode": mode,
+        "modeLabel": mode_label,
+        "plannedSteps": planned_steps(plan),
     }
 
 
