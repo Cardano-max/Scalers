@@ -35,6 +35,15 @@ from obsapi import mount_obsapi  # noqa: E402
 
 mount_obsapi(app)
 
+# Mount the Campaign Studio AG-UI agent (P3.1) at POST /studio/agui, ALONGSIDE the
+# obs-API's /graphql + SSE. The existing Studio Host + role cells are wrapped in a
+# pydantic-ai AGUIAdapter with an editable campaign-plan shared state and an
+# approval gate. Import is deferred-safe (the route is added; the agent only calls
+# a model at request time).
+from studio.agui import mount_studio_agui  # noqa: E402
+
+mount_studio_agui(app)
+
 
 @app.get("/metrics")
 def metrics_endpoint() -> Response:

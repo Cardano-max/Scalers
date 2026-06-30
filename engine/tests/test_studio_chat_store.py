@@ -40,4 +40,7 @@ def test_rejects_unknown_role() -> None:
     store = InMemoryChatStore()
     with pytest.raises(ValueError):
         store.append_turn("s1", "researcher", "nope")
-    assert set(VALID_ROLES) == {"operator", "host"}
+    # P2 shipped (operator, host); P3.1 added the labeled brainstorm role cells.
+    assert set(VALID_ROLES) == {
+        "operator", "host", "funnel_architect", "copywriter", "critic", "jury"
+    }

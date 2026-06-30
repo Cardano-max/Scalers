@@ -15,6 +15,10 @@ dependencies = [
     # framework itself is provider-agnostic and tests use the built-in
     # Test/Function models, so no other provider extras are pulled in.
     "pydantic-ai-slim[anthropic]==2.0.0",
+    # AG-UI surface for the Campaign Studio (P3.1): wraps the Studio Host + role
+    # cells in an AGUIAdapter with editable campaign-plan shared state (StateDeps)
+    # and an approval gate (DeferredToolRequests). Mounted at POST /studio/agui.
+    "pydantic-ai-slim[ag-ui]==2.0.0",
     # Control spine (HARN-01/03/05): LangGraph StateGraph + Postgres checkpointer.
     "langgraph>=0.2",
     # Thin portal (HARN-01): FastAPI /healthz + webhook ingress + SSE out.

@@ -23,8 +23,17 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol, runtime_checkable
 
-# The only two authors of a studio chat turn this slice ships.
-VALID_ROLES: tuple[str, ...] = ("operator", "host")
+# Authors of a studio chat turn. P2 shipped (operator, host); P3.1 adds the role
+# cells that emit LABELED in-thread brainstorm messages (each carrying its own
+# model pin): funnel_architect, copywriter, critic (independent pass), jury (Opus).
+VALID_ROLES: tuple[str, ...] = (
+    "operator",
+    "host",
+    "funnel_architect",
+    "copywriter",
+    "critic",
+    "jury",
+)
 
 
 @dataclass(frozen=True)
@@ -114,8 +123,7 @@ class PostgresChatStore:
                     id          TEXT PRIMARY KEY,
                     session_id  TEXT        NOT NULL,
                     seq         INTEGER     NOT NULL,
-                    role        TEXT        NOT NULL
-                                CHECK (role IN ('operator','host')),
+                    role        TEXT        NOT NULL,
                     text        TEXT        NOT NULL,
                     model       TEXT,
                     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -123,6 +131,13 @@ class PostgresChatStore:
                 CREATE INDEX IF NOT EXISTS studio_chat_turns_session_idx
                     ON studio_chat_turns (session_id, seq);
                 """
+            )
+            # P3.1 migration: the P2 table shipped a narrow CHECK (operator|host).
+            # Drop it (idempotent) so the role cells can log LABELED brainstorm
+            # turns. Validity is enforced in Python by VALID_ROLES instead.
+            conn.execute(
+                "ALTER TABLE studio_chat_turns "
+                "DROP CONSTRAINT IF EXISTS studio_chat_turns_role_check"
             )
 
     def append_turn(
