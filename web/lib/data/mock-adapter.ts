@@ -543,6 +543,7 @@ const EVIDENCE: Record<string, ActionEvidence> = {
     },
     leadMemories: [{ text: 'Staged gmail outreach to Rae', kind: 'outreach', createdAt: null }],
     internalNotes: null,
+    brandDocuments: [],
     researchSources: [
       {
         url: 'https://austin.culturemap.com/news/city-life/woman-owned-tattoo-studios/',
@@ -592,6 +593,7 @@ const EVIDENCE: Record<string, ActionEvidence> = {
     },
     leadMemories: [],
     internalNotes: null,
+    brandDocuments: [],
     researchSources: [],
     toolCalls: [{ name: 'deterministic_template', detail: null }],
     criticReview: null,

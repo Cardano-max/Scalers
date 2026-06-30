@@ -48,6 +48,7 @@ function fullEvidence(over: Partial<ActionEvidence> = {}): ActionEvidence {
     },
     leadMemories: [{ text: 'Staged gmail outreach to Rae', kind: 'outreach', createdAt: null }],
     internalNotes: null,
+    brandDocuments: [],
     researchSources: [
       { url: 'https://example.com/a', title: 'Source A', snippet: 'snip a', query: 'q a' },
       { url: 'https://example.com/b', title: 'Source B', snippet: 'snip b', query: 'q b' },
@@ -85,6 +86,26 @@ describe('EvidenceProvenance', () => {
     expect(
       screen.getByText('skills/brand-voice/tenants/ladies8391/brand-dna.md'),
     ).toBeInTheDocument();
+  });
+
+  it('renders Brand documents chips for passages the draft used, and none when empty', () => {
+    wrap(
+      <EvidenceProvenance
+        evidence={fullEvidence({
+          brandDocuments: [
+            { document: 'Ladies First Brand & Campaign Playbook', heading: 'Brand identity & voice', documentId: 'doc_seed' },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByText('Brand documents')).toBeInTheDocument();
+    expect(screen.getByText('Ladies First Brand & Campaign Playbook')).toBeInTheDocument();
+    expect(screen.getByText(/Brand identity & voice/)).toBeInTheDocument();
+  });
+
+  it('does NOT render Brand documents when the draft used none', () => {
+    wrap(<EvidenceProvenance evidence={fullEvidence({ brandDocuments: [] })} />);
+    expect(screen.queryByText('Brand documents')).not.toBeInTheDocument();
   });
 
   it('does NOT render any brand-voice text when brandVoice is null', () => {

@@ -384,6 +384,11 @@ export interface EvidenceResearchSource {
   snippet: string | null;
   query: string | null;
 }
+export interface EvidenceDocument {
+  document: string;
+  heading: string | null;
+  documentId: string | null;
+}
 export interface EvidenceToolCall {
   name: string;
   detail: string | null;
@@ -411,6 +416,7 @@ export interface ActionEvidence {
   customer: EvidenceCustomer | null;
   leadMemories: EvidenceMemory[];
   internalNotes: string | null;
+  brandDocuments: EvidenceDocument[]; // [] when the draft used no doc passages (real-only)
   researchSources: EvidenceResearchSource[]; // [] when the draft cited none (real-only)
   toolCalls: EvidenceToolCall[];
   criticReview: EvidenceCritic | null;
