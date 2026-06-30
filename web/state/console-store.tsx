@@ -16,6 +16,8 @@ import {
 } from 'react';
 
 export type ScreenId =
+  | 'voice'
+  | 'agency'
   | 'overview'
   | 'review'
   | 'activity'
@@ -29,14 +31,20 @@ export interface NavItemDef {
   label: string;
 }
 
-/** The locked nav order (Activity included — handoff "NEW" screen / bead 45v.4). */
+/**
+ * Nav order. Voice + Agency are the two headline modes (the flashy front door):
+ * Voice first (talk to the agency), Agency second (watch it work). Command is the
+ * hands-on plan+chat workbench; the real-data tabs follow, unchanged.
+ */
 export const NAV_ITEMS: NavItemDef[] = [
+  { id: 'voice', label: 'Voice' },
+  { id: 'agency', label: 'Agency' },
+  { id: 'command', label: 'Command' },
   { id: 'overview', label: 'Overview' },
   { id: 'review', label: 'Review queue' },
   { id: 'activity', label: 'Activity' },
   { id: 'feed', label: 'Live feed' },
   { id: 'runs', label: 'Runs' },
-  { id: 'command', label: 'Command' },
 ];
 
 interface ConsoleState {

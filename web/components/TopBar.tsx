@@ -8,6 +8,8 @@ import { useConsole, type ScreenId } from '@/state/console-store';
 import { Dot } from './icons';
 
 const TITLES: Record<ScreenId, { title: string; subtitle: string }> = {
+  voice: { title: 'Voice', subtitle: 'Talk to your strategist — it interviews you, then spins up the team' },
+  agency: { title: 'Agency at work', subtitle: 'Watch the team orchestrate, research, draft, re-verify, and evaluate — live' },
   overview: { title: 'Overview', subtitle: 'Autonomy, deliverability, and what needs you' },
   review: { title: 'Review queue', subtitle: 'Actions the engine escalated for your sign-off' },
   activity: { title: 'Activity', subtitle: 'What the agents executed — and why' },

@@ -100,6 +100,9 @@ export interface UseStudioAgui {
   /** Deterministic "Run campaign" — POST /studio/run (returns run_id fast), then
    *  poll GET /studio/run/{id} so per-agent steps surface live, not batch-revealed. */
   runCampaign: () => void;
+  /** Begin polling a run launched elsewhere (e.g. the voice GO-gate) so the shared
+   *  reasoning stream renders its real per-agent steps. Does NOT start a run itself. */
+  attachRun: (runId: string) => void;
   approve: () => void;
   reject: () => void;
 }
@@ -338,27 +341,14 @@ export function useStudioAgui(
   // On completion we refresh history once so the persisted operator trigger + per-agent
   // traces + host summary replace the live placeholders. NOTHING sends (HELD/PENDING).
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const runCampaign = useCallback(() => {
-    if (!connected || busy || runningCampaign) return;
-    setRunningCampaign(true);
-    setBusy(true);
-    setError(null);
-    setRunState({ runId: '', status: 'running', steps: [], nPending: null, archetype: null, error: null });
 
-    (async () => {
-      let runId: string;
-      try {
-        const r = await startRun(aguiUrl, sessionId, planRef.current);
-        runId = r.runId;
-        setRunState((prev) => ({ ...(prev as RunState), runId }));
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'run start failed');
-        setRunningCampaign(false);
-        setBusy(false);
-        setRunState((prev) => (prev ? { ...prev, status: 'error', error: 'run start failed' } : prev));
-        return;
-      }
-
+  // Shared poll loop: GET /studio/run/{id} every ~1.5s, surfacing per-agent steps as
+  // they land, until the run completes/errors or the ~2 min safety cap. Used by both
+  // the button-triggered runCampaign and attachRun (a run launched elsewhere, e.g. the
+  // voice GO-gate) so a single, honest poller drives the live reasoning stream.
+  const pollRun = useCallback(
+    (runId: string) => {
+      if (pollRef.current) clearTimeout(pollRef.current);
       let attempts = 0;
       const poll = async () => {
         attempts += 1;
@@ -385,8 +375,49 @@ export function useStudioAgui(
         pollRef.current = setTimeout(poll, 1500);
       };
       pollRef.current = setTimeout(poll, 1200);
+    },
+    [aguiUrl, refreshHistory],
+  );
+
+  const runCampaign = useCallback(() => {
+    if (!connected || busy || runningCampaign) return;
+    setRunningCampaign(true);
+    setBusy(true);
+    setError(null);
+    setRunState({ runId: '', status: 'running', steps: [], nPending: null, archetype: null, error: null });
+
+    (async () => {
+      let runId: string;
+      try {
+        const r = await startRun(aguiUrl, sessionId, planRef.current);
+        runId = r.runId;
+        setRunState((prev) => ({ ...(prev as RunState), runId }));
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'run start failed');
+        setRunningCampaign(false);
+        setBusy(false);
+        setRunState((prev) => (prev ? { ...prev, status: 'error', error: 'run start failed' } : prev));
+        return;
+      }
+      pollRun(runId);
     })();
-  }, [connected, busy, runningCampaign, aguiUrl, sessionId, refreshHistory]);
+  }, [connected, busy, runningCampaign, aguiUrl, sessionId, pollRun]);
+
+  // Attach to a run that was launched OUTSIDE this hook — specifically the voice
+  // GO-gate (POST /studio/voice/orchestrate launches the same held spine server-side
+  // and returns a runId). We did NOT start it, so we only begin polling: the shared
+  // reasoning stream then fills with the SAME real agent_runs the Command run uses.
+  const attachRun = useCallback(
+    (runId: string) => {
+      if (!runId || runningCampaign) return;
+      setRunningCampaign(true);
+      setBusy(true);
+      setError(null);
+      setRunState({ runId, status: 'running', steps: [], nPending: null, archetype: null, error: null });
+      pollRun(runId);
+    },
+    [runningCampaign, pollRun],
+  );
 
   // Stop polling on unmount.
   useEffect(() => () => {
@@ -410,6 +441,7 @@ export function useStudioAgui(
     setPlanField,
     applyEditsAndReplan,
     runCampaign,
+    attachRun,
     approve: () => resolveApproval(true),
     reject: () => resolveApproval(false),
   };

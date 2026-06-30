@@ -18,6 +18,24 @@ const base = {
 
 export function NavIcon({ id }: { id: ScreenId }) {
   switch (id) {
+    case 'voice':
+      return (
+        <svg {...base} aria-hidden>
+          <rect x="9" y="2" width="6" height="11" rx="3" />
+          <path d="M5 10a7 7 0 0 0 14 0" />
+          <line x1="12" y1="17" x2="12" y2="21" />
+          <line x1="8" y1="21" x2="16" y2="21" />
+        </svg>
+      );
+    case 'agency':
+      return (
+        <svg {...base} aria-hidden>
+          <circle cx="12" cy="5" r="2.4" />
+          <circle cx="5" cy="18" r="2.4" />
+          <circle cx="19" cy="18" r="2.4" />
+          <path d="M12 7.4v3.2M12 12.6 6.4 16M12 12.6 17.6 16" />
+        </svg>
+      );
     case 'overview':
       return (
         <svg {...base} aria-hidden>

@@ -19,7 +19,8 @@ export function Providers({ children }: { children: ReactNode }) {
   return (
     <CopilotKit runtimeUrl={runtimeUrl}>
       <DataProvider>
-        <ConsoleProvider>{children}</ConsoleProvider>
+        {/* Voice-first: the talk-to-your-agency hero is the default landing surface. */}
+        <ConsoleProvider initialScreen="voice">{children}</ConsoleProvider>
       </DataProvider>
     </CopilotKit>
   );

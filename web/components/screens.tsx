@@ -15,9 +15,16 @@ import { ActivityScreen } from './ActivityScreen';
 import { RunsScreen } from './RunsScreen';
 import { FeedScreen } from './FeedScreen';
 import { CampaignStudio } from './studio/CampaignStudio';
+import { VoiceScreen } from './studio/VoiceScreen';
+import { AgencyScreen } from './studio/AgencyScreen';
 import { StepDetailScreen } from './StepDetailScreen';
 
 export const SCREENS: Record<ScreenId, ComponentType> = {
+  // Voice-first: the talk-to-your-agency hero (default landing). Agency: the
+  // full-screen live per-agent reasoning stream. Both bind to the SHARED studio run
+  // (StudioRunProvider in AppShell) so a voice-launched run plays in both, real-only.
+  voice: VoiceScreen,
+  agency: AgencyScreen,
   overview: SmokeScreen,
   review: ReviewScreen,
   activity: ActivityScreen,

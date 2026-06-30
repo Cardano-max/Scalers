@@ -25,6 +25,12 @@ export interface VoiceSessionCallbacks {
   onPlan?: (r: PlanUpdateResult) => void;
   onOrchestrate?: (r: OrchestrateResult) => void;
   onError?: (msg: string) => void;
+  /** The REAL local mic MediaStream once getUserMedia resolves — for the orb's
+   *  input AnalyserNode. Honest by construction: it reacts to your actual voice. */
+  onMicStream?: (stream: MediaStream) => void;
+  /** The REAL remote model-TTS MediaStream once the track arrives — for the orb's
+   *  output AnalyserNode (the orb pulses to what the host is actually saying). */
+  onRemoteStream?: (stream: MediaStream) => void;
 }
 
 export type VoiceConnState = 'idle' | 'minting' | 'connecting' | 'live' | 'closed' | 'error';
@@ -60,10 +66,13 @@ export class RealtimeVoiceSession {
       this.audioEl = audioEl;
       pc.ontrack = (e) => {
         audioEl.srcObject = e.streams[0];
+        // Surface the real model-TTS stream so the orb can analyse the host's voice.
+        if (e.streams[0]) this.cb.onRemoteStream?.(e.streams[0]);
       };
 
       // Mic up.
       this.mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this.cb.onMicStream?.(this.mic);
       for (const track of this.mic.getTracks()) pc.addTrack(track, this.mic);
 
       // Events both ways on the data channel.

@@ -145,3 +145,129 @@ body {
     animation: none;
   }
 }
+
+/*
+ * ── Agency-at-Work + Voice motion system ──────────────────────────────────
+ * EVENT-DRIVEN ONLY. These are applied when a REAL event lands (a RunStep
+ * appears on poll, a handoff edge becomes real because the downstream step's
+ * createdAt exists, an active step has no output yet). Never a decorative loop
+ * that runs with no data behind it. All respect prefers-reduced-motion.
+ */
+
+/* War-room canvas: a slightly cooler near-paper so persona cards pop. */
+:root {
+  --warroom-canvas: #f4f3ef;
+  --orb-idle: #8c877d;
+}
+
+/* (1) Spring-in for each landed RunStep / roster card as it appears on poll. */
+@keyframes step-spring-in {
+  0% {
+    transform: translateY(8px) scale(0.985);
+    opacity: 0;
+  }
+  60% {
+    transform: translateY(-1px) scale(1.004);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+.spring-in {
+  animation: step-spring-in 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* (2) Shimmer skeleton for a step that is ACTIVE but has not returned output. */
+@keyframes shimmer-sweep {
+  100% {
+    background-position: 200% 0;
+  }
+}
+.shimmer {
+  background-image: linear-gradient(
+    100deg,
+    rgba(140, 135, 125, 0.06) 30%,
+    rgba(140, 135, 125, 0.14) 50%,
+    rgba(140, 135, 125, 0.06) 70%
+  );
+  background-size: 200% 100%;
+  background-position: -100% 0;
+  animation: shimmer-sweep 1.25s ease-in-out infinite;
+}
+
+/* (3) Handoff edge draw — only triggered when the downstream createdAt appears. */
+@keyframes edge-draw {
+  from {
+    stroke-dashoffset: var(--edge-len, 120);
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.edge-draw {
+  stroke-dasharray: var(--edge-len, 120);
+  animation: edge-draw 520ms ease-out forwards;
+}
+
+/* (4) Active-stage pulse ring (the single earliest stage with no output yet). */
+@keyframes active-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--pulse-color, rgba(15, 138, 130, 0.45));
+  }
+  70% {
+    box-shadow: 0 0 0 7px rgba(15, 138, 130, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(15, 138, 130, 0);
+  }
+}
+.active-pulse {
+  animation: active-pulse 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* Voice-orb idle breathing (only on the idle/connecting states; live is audio-driven). */
+@keyframes orb-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.82;
+  }
+  50% {
+    transform: scale(1.035);
+    opacity: 1;
+  }
+}
+.orb-breathe {
+  animation: orb-breathe 3.4s ease-in-out infinite;
+}
+
+/* Indeterminate ring sweep for the connecting/minting (busy) voice state. */
+@keyframes ring-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.ring-spin {
+  animation: ring-spin 0.9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spring-in,
+  .shimmer,
+  .edge-draw,
+  .active-pulse,
+  .orb-breathe,
+  .ring-spin {
+    animation: none !important;
+  }
+  /* Springs swap for a plain reveal so content never stays hidden. */
+  .spring-in {
+    opacity: 1;
+    transform: none;
+  }
+  .edge-draw {
+    stroke-dashoffset: 0;
+  }
+}
