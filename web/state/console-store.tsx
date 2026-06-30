@@ -23,7 +23,6 @@ export type ScreenId =
   | 'activity'
   | 'feed'
   | 'runs'
-  | 'command'
   | 'step_detail';
 
 export interface NavItemDef {
@@ -32,14 +31,15 @@ export interface NavItemDef {
 }
 
 /**
- * Nav order. Voice + Agency are the two headline modes (the flashy front door):
- * Voice first (talk to the agency), Agency second (watch it work). Command is the
- * hands-on plan+chat workbench; the real-data tabs follow, unchanged.
+ * Nav order. Voice is the ONE unified conversation (talk OR type — same session,
+ * same transcript); Agency is the live war-room that watches the run it spins up.
+ * Both bind to the SHARED studio run; the real-data tabs follow, unchanged. The
+ * old separate Command chat tab (its own session + its own voice console) was
+ * removed so there is a single conversation surface, not two.
  */
 export const NAV_ITEMS: NavItemDef[] = [
   { id: 'voice', label: 'Voice' },
   { id: 'agency', label: 'Agency' },
-  { id: 'command', label: 'Command' },
   { id: 'overview', label: 'Overview' },
   { id: 'review', label: 'Review queue' },
   { id: 'activity', label: 'Activity' },

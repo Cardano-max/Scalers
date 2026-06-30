@@ -19,7 +19,7 @@ describe('AppShell — locked shell', () => {
   it('renders the full nav including Activity, with the amber Review-queue badge', async () => {
     renderShell();
     const nav = await screen.findByRole('navigation');
-    for (const label of ['Overview', 'Review queue', 'Activity', 'Live feed', 'Runs', 'Command']) {
+    for (const label of ['Overview', 'Review queue', 'Activity', 'Live feed', 'Runs']) {
       expect(within(nav).getByText(label)).toBeInTheDocument();
     }
     // amber badge = remaining review count (mock seeds 3 escalations)

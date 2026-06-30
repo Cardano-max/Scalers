@@ -60,13 +60,19 @@ export function VoiceScreen() {
     disabled: !connected,
     onRunLaunched: studio.attachRun,
     onPlan: (p) => studio.setPlanField(p as Partial<typeof studio.plan>),
+    // Spoken turns flow into the SAME transcript as typed turns — one conversation,
+    // one session id (studio.sessionId). Talking and typing continue each other.
+    onUserFinal: (t) => studio.recordVoiceTurn('OPERATOR', 'You', t),
+    onAssistantFinal: (t) => studio.recordVoiceTurn('SYSTEM', 'Studio Host', t),
   });
 
   const orbDisabled = !connected;
   const cap = caption(voice.conn, voice.awaitingGo, orbDisabled);
 
-  // The center thread is the CONVERSATION only (operator + host). Per-agent run steps
-  // live exclusively in the right reasoning stream — keeping the center calm + minimal.
+  // The center thread is the ONE conversation (operator + host) — interleaving what
+  // you TYPED (studio.send) and what you SAID (recordVoiceTurn), both on the same
+  // session. Per-agent run steps live exclusively in the right reasoning stream, so
+  // the center stays calm and minimal.
   const convoTurns: ChatTurn[] = studio.turns.filter(
     (t) => t.role === 'OPERATOR' || t.role === 'SYSTEM',
   );
@@ -186,19 +192,12 @@ export function VoiceScreen() {
             </div>
           )}
 
-          {/* Live captions (You / Host) while the session runs. */}
-          {(voice.userLine || voice.assistantLine) && (
-            <div style={{ width: '100%', maxWidth: 560, display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {voice.userLine && (
-                <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                  <strong>You:</strong> {voice.userLine}
-                </div>
-              )}
-              {voice.assistantLine && (
-                <div style={{ fontSize: 13, color: 'var(--ink)' }}>
-                  <strong style={{ color: HOST_ACCENT }}>Host:</strong> {voice.assistantLine}
-                </div>
-              )}
+          {/* Transient live caption — the host's current spoken line WHILE it talks.
+              Finalized turns (yours and the host's) land in the single transcript
+              below via recordVoiceTurn, so no line is shown in two places. */}
+          {voice.hostSpeaking && voice.assistantLine && (
+            <div style={{ width: '100%', maxWidth: 560, fontSize: 13, color: 'var(--ink)' }}>
+              <strong style={{ color: HOST_ACCENT }}>Host:</strong> {voice.assistantLine}
             </div>
           )}
 

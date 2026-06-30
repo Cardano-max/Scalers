@@ -75,12 +75,6 @@ export function NavIcon({ id }: { id: ScreenId }) {
           <circle cx="3.5" cy="18" r="1.2" fill="currentColor" stroke="none" />
         </svg>
       );
-    case 'command':
-      return (
-        <svg {...base} aria-hidden>
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-        </svg>
-      );
     default:
       return null;
   }
