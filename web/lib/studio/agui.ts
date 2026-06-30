@@ -44,6 +44,14 @@ export interface CampaignPlan {
   campaign_type?: string;
   deep_research?: boolean | null;
   drafts_only?: boolean | null;
+  // The offer / call-to-action the message drives toward (a booking link, a promo, or
+  // 'reply to book'). A gating field — a campaign with no ask is half a campaign.
+  offer?: string;
+  // per_lead: one personalized message per lead (true / default) vs one shared message
+  // (false). personalize: tailor each message from the lead's history + profile. Both
+  // surface in the plan summary; null/absent = unanswered (sensible default).
+  per_lead?: boolean | null;
+  personalize?: boolean | null;
   // Lead source: 'provided' = use ONLY the operator's CSV / DB leads; 'source_new' =
   // find new prospects on the web. Empty = not chosen. Drives the orchestration mode.
   lead_source?: string;

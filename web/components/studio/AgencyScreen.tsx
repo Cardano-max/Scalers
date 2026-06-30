@@ -18,6 +18,7 @@ import { useConsole } from '@/state/console-store';
 import { useSharedStudio } from '@/lib/studio/StudioRunProvider';
 import { AgencyCanvas } from './AgencyCanvas';
 import { AgencyInterview } from './AgencyInterview';
+import { RunNarration } from './RunNarration';
 import {
   deriveInterview,
   postInterview,
@@ -37,6 +38,7 @@ function toState(r: InterviewResponse): InterviewState {
     mode: r.mode,
     modeLabel: r.modeLabel,
     plannedSteps: r.plannedSteps,
+    planSummary: r.planSummary,
   };
 }
 
@@ -103,13 +105,17 @@ export function AgencyScreen() {
     >
       <div style={{ maxWidth: 1180, margin: '0 auto' }}>
         {hasRun ? (
-          <AgencyCanvas
-            runState={studio.runState}
-            running={studio.runningCampaign}
-            connected={connected}
-            onOpenReview={() => navigate('review')}
-            onDeepReview={(actionId) => navigate('review', actionId)}
-          />
+          <>
+            {/* Live host narration of the run, derived from REAL recorded steps (#11). */}
+            <RunNarration runState={studio.runState} running={studio.runningCampaign} />
+            <AgencyCanvas
+              runState={studio.runState}
+              running={studio.runningCampaign}
+              connected={connected}
+              onOpenReview={() => navigate('review')}
+              onDeepReview={(actionId) => navigate('review', actionId)}
+            />
+          </>
         ) : (
           <AgencyInterview
             state={interview}

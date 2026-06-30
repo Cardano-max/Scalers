@@ -80,6 +80,39 @@ describe('AgencyInterview — gates the run until armed', () => {
     expect(onAnswer).toHaveBeenCalledWith('lead_source', 'new');
   });
 
+  it('shows the senior-exec plan summary + go-ahead prompt only once armed', () => {
+    const withSummary: InterviewState = {
+      ...armed,
+      planSummary: {
+        title: "Here's the plan:",
+        goal: 'win back',
+        lines: [
+          { label: 'Target', value: 'only your uploaded list (10 leads)' },
+          { label: 'Create', value: '10 personalized emails, one per lead' },
+          { label: 'Channels', value: 'email' },
+        ],
+        leadCount: 10,
+        channels: ['email'],
+        confirm: 'Say “go ahead” to run, or change any answer above.',
+      },
+    };
+    render(
+      <AgencyInterview state={withSummary} busy={false} connected running={false} onAnswer={vi.fn()} onRun={vi.fn()} />,
+    );
+    const card = screen.getByTestId('plan-summary');
+    expect(card).toBeInTheDocument();
+    expect(screen.getByText(/only your uploaded list \(10 leads\)/i)).toBeInTheDocument();
+    // the explicit go-ahead prompt lives inside the summary card
+    expect(card.textContent).toMatch(/go ahead/i);
+  });
+
+  it('does NOT show the plan summary before the gate is armed', () => {
+    render(
+      <AgencyInterview state={notArmed} busy={false} connected running={false} onAnswer={vi.fn()} onRun={vi.fn()} />,
+    );
+    expect(screen.queryByTestId('plan-summary')).not.toBeInTheDocument();
+  });
+
   it('shows the honest not-connected state when disconnected', () => {
     render(
       <AgencyInterview state={null} busy={false} connected={false} running={false} onAnswer={vi.fn()} onRun={vi.fn()} />,

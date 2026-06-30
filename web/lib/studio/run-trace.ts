@@ -36,10 +36,22 @@ export interface PendingAction {
   status: string;
 }
 
+/** One live narration line the engine derived from a REAL recorded step (host voice). */
+export interface NarrationLine {
+  seq: number;
+  role: string;
+  line: string;
+  failed: boolean;
+}
+
 export interface RunState {
   runId: string;
   status: RunStatus;
   steps: RunStep[];
+  /** Host-voice narration, one honest line per recorded step (engine-derived).
+   *  Optional so existing RunState constructors (the empty starting state) still
+   *  typecheck; fetchRunState always fills it from the polled response. */
+  narration?: NarrationLine[];
   nPending: number | null;
   /** The real HELD draft rows for this run (empty until drafts stage). */
   pending: PendingAction[];
@@ -87,6 +99,7 @@ export async function fetchRunState(
     runId: string;
     status?: RunStatus;
     steps?: RunStep[];
+    narration?: NarrationLine[];
     nPending?: number | null;
     pending?: PendingAction[];
     archetype?: string | null;
@@ -96,6 +109,7 @@ export async function fetchRunState(
     runId: d.runId ?? runId,
     status: d.status ?? 'unknown',
     steps: Array.isArray(d.steps) ? d.steps : [],
+    narration: Array.isArray(d.narration) ? d.narration : [],
     nPending: d.nPending ?? null,
     pending: Array.isArray(d.pending) ? d.pending : [],
     archetype: d.archetype ?? null,

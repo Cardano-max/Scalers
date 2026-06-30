@@ -17,6 +17,7 @@ function armedPlan(): CampaignPlan {
     lead_source: 'provided',
     campaign_type: 'win-back',
     output_count: 10,
+    offer: 'reply to book your next session',
   };
 }
 
@@ -33,8 +34,15 @@ describe('deriveInterview — the gate', () => {
     const s = deriveInterview(armedPlan());
     expect(s.armed).toBe(true);
     expect(s.missing).toEqual([]);
-    expect(s.readyMessage).toMatch(/enough context/i);
-    expect(s.nextQuestion?.field).toBe('action_type'); // first optional
+    expect(s.readyMessage).toMatch(/go ahead/i);
+    expect(s.nextQuestion?.field).toBe('per_lead'); // first optional
+  });
+
+  it('the offer / CTA is a gating field that blocks the run until answered', () => {
+    expect(GATING_FIELDS).toContain('offer');
+    const s = deriveInterview({ ...armedPlan(), offer: '' });
+    expect(s.armed).toBe(false);
+    expect(s.nextQuestion?.field).toBe('offer');
   });
 
   it('removing any single gating field disarms it and asks for that field', () => {

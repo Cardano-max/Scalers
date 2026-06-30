@@ -31,6 +31,25 @@ export interface PlannedStep {
   tools: string[];
 }
 
+/** One line of the senior-exec plan summary the operator approves before the go-ahead.
+ *  `value` is already rendered from REAL state by the engine; the panel only displays it. */
+export interface PlanSummaryLine {
+  label: string;
+  value: string;
+}
+
+/** The plan summary the supervisor reads back before running — built from REAL state
+ *  (real uploaded lead count, real output count, real chosen channels). Null until the
+ *  gate is armed, so the operator is never shown a go-ahead for a half-answered brief. */
+export interface PlanSummary {
+  title: string;
+  goal: string;
+  lines: PlanSummaryLine[];
+  leadCount: number;
+  channels: string[];
+  confirm: string;
+}
+
 export interface InterviewState {
   armed: boolean;
   missing: string[];
@@ -42,10 +61,19 @@ export interface InterviewState {
   mode?: string;
   modeLabel?: string;
   plannedSteps?: PlannedStep[];
+  // The senior-exec plan summary shown before the go-ahead. Optional/null = not armed.
+  planSummary?: PlanSummary | null;
 }
 
 /** How the panel renders the input for each field (mirrors engine coercion). */
-export type FieldKind = 'text' | 'number' | 'list' | 'yesno' | 'drafts_or_stage' | 'lead_source';
+export type FieldKind =
+  | 'text'
+  | 'number'
+  | 'list'
+  | 'yesno'
+  | 'drafts_or_stage'
+  | 'lead_source'
+  | 'per_lead_or_shared';
 
 export interface FieldMeta {
   field: string;
@@ -56,27 +84,76 @@ export interface FieldMeta {
 }
 
 // Gating fields — ALL must be answered before the run can arm. Order = ask order.
+// Phrasing mirrors engine/studio/interview.py: plain, client-friendly language a
+// senior agency exec would use with a non-technical operator (no bare jargon).
 export const GATING_META: FieldMeta[] = [
-  { field: 'goal', label: 'Goal', kind: 'text', question: "What's the goal of this campaign?" },
-  { field: 'audience', label: 'Audience', kind: 'text', question: "Who's the target audience?" },
-  { field: 'channels', label: 'Channels', kind: 'list', question: 'Which channels? (email, instagram, facebook, sms)' },
+  {
+    field: 'goal',
+    label: 'Goal',
+    kind: 'text',
+    question:
+      "First — what are you hoping this campaign actually does for you? (e.g. fill quiet Tuesdays, win back clients you haven't seen in a while)",
+  },
+  {
+    field: 'audience',
+    label: 'Audience',
+    kind: 'text',
+    question:
+      'Who exactly are we trying to reach? (e.g. your past clients, your Instagram followers, folks nearby)',
+  },
+  {
+    field: 'channels',
+    label: 'Channels',
+    kind: 'list',
+    question: 'How should we reach them — email, Instagram, Facebook, text message, or a mix?',
+  },
   {
     field: 'lead_source',
     label: 'Lead source',
     kind: 'lead_source',
-    question: 'Lead source: source NEW leads from the web, or use ONLY your uploaded CSV / existing database leads?',
+    question:
+      "Should I reach out to ONLY the people on the list you've uploaded, or should I also go find brand-new prospects online?",
   },
-  { field: 'campaign_type', label: 'Type', kind: 'text', question: 'What type? (win-back, artist-spotlight, promo, event, birthday)' },
-  { field: 'output_count', label: 'Drafts', kind: 'number', question: 'How many drafts/outputs should the team produce?' },
+  {
+    field: 'campaign_type',
+    label: 'Type',
+    kind: 'text',
+    question:
+      'What kind of campaign is this — winning back old clients, spotlighting an artist, a promo or sale, an event, or a birthday note?',
+  },
+  {
+    field: 'output_count',
+    label: 'How many',
+    kind: 'number',
+    question: 'Roughly how many people should this go out to — how many messages should the team create?',
+  },
+  {
+    field: 'offer',
+    label: 'The ask',
+    kind: 'text',
+    question: "What's the offer or the ask? (e.g. a booking link, a discount code, or just 'reply to book')",
+  },
 ];
 
-// Optional fields — asked after gating, never block the run.
+// Optional fields — asked after gating, never block the run; each has a sensible default.
 export const OPTIONAL_META: FieldMeta[] = [
-  { field: 'action_type', label: 'Action', kind: 'text', question: 'Outreach, posts, replies, or comments?' },
-  { field: 'deep_research', label: 'Deep research', kind: 'yesno', question: 'Run deep web research first?' },
-  { field: 'lead_count', label: 'Leads', kind: 'number', question: 'How many leads to target? (0 if not a leads campaign)' },
-  { field: 'tone', label: 'Tone', kind: 'text', question: 'Any tone or brand-voice notes?' },
-  { field: 'drafts_only', label: 'Disposition', kind: 'drafts_or_stage', question: 'Drafts only, or stage for your approval?' },
+  {
+    field: 'per_lead',
+    label: 'Per lead',
+    kind: 'per_lead_or_shared',
+    question: 'Should each person get their own personalized message, or one shared message for everyone?',
+  },
+  {
+    field: 'personalize',
+    label: 'Personalize',
+    kind: 'yesno',
+    question: "Want me to use each person's history and social profiles to tailor their message?",
+  },
+  { field: 'deep_research', label: 'Deep research', kind: 'yesno', question: 'Should I dig into each lead with deeper web research first?' },
+  { field: 'tone', label: 'Tone', kind: 'text', question: 'Any particular tone — warm, playful, professional? (or leave it to your brand voice)' },
+  { field: 'action_type', label: 'Action', kind: 'text', question: 'What should the team produce — outreach, posts, replies, or comments?' },
+  { field: 'lead_count', label: 'Leads', kind: 'number', question: "How many leads to target? (0 if this isn't a leads campaign)" },
+  { field: 'drafts_only', label: 'Disposition', kind: 'drafts_or_stage', question: 'Just write drafts, or stage them in your Review Queue for approval?' },
 ];
 
 export const ALL_META: FieldMeta[] = [...GATING_META, ...OPTIONAL_META];
@@ -84,7 +161,7 @@ export const GATING_FIELDS = GATING_META.map((m) => m.field);
 
 const LIST_FIELDS = new Set(['channels']);
 const INT_FIELDS = new Set(['output_count', 'lead_count']);
-const BOOL_FIELDS = new Set(['deep_research', 'drafts_only']);
+const BOOL_FIELDS = new Set(['deep_research', 'drafts_only', 'personalize', 'per_lead']);
 
 /** Whether a field carries a real operator answer (mirrors engine field_present). */
 export function fieldPresent(plan: Partial<CampaignPlan>, field: string): boolean {
@@ -109,9 +186,11 @@ export function deriveInterview(plan: Partial<CampaignPlan>): InterviewState {
     collected,
     nextQuestion: next ? { field: next.field, question: next.question } : null,
     readyMessage: armed
-      ? "I have enough context. Say 'go ahead' or click Run to start the team — everything stays HELD for your approval."
+      ? "Great — I have everything I need. Here's the plan below. Have a quick look, and when it's right, say 'go ahead' (or click Run) and the team gets started. Nothing is sent — every message is held in your Review Queue for your approval."
       : null,
     gatingFields: GATING_FIELDS,
+    // The authoritative summary comes from the engine; the local mirror leaves it null.
+    planSummary: null,
   };
 }
 
@@ -133,6 +212,7 @@ export interface InterviewResponse {
   mode?: string;
   modeLabel?: string;
   plannedSteps?: PlannedStep[];
+  planSummary?: PlanSummary | null;
   error?: string;
 }
 

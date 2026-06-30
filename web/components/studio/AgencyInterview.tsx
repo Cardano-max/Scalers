@@ -12,7 +12,7 @@
  * POST /studio/interview round-trip and passes the authoritative gate state in.
  */
 import { useEffect, useState } from 'react';
-import { ALL_META, type FieldMeta, type InterviewState } from '@/lib/studio/interview';
+import { ALL_META, type FieldMeta, type InterviewState, type PlanSummary } from '@/lib/studio/interview';
 import { PlannedSteps } from './PlannedSteps';
 
 const TEAL = '#0F8A82';
@@ -25,6 +25,7 @@ function chipValue(field: string, value: unknown): string {
   if (Array.isArray(value)) return value.join(', ');
   if (typeof value === 'boolean') {
     if (field === 'drafts_only') return value ? 'drafts only' : 'stage for approval';
+    if (field === 'per_lead') return value ? 'one per lead' : 'one shared';
     return value ? 'yes' : 'no';
   }
   if (value == null || value === '' || value === 0) return '';
@@ -166,6 +167,19 @@ export function AgencyInterview({
                 disabled={busy}
               />
             </div>
+          ) : meta.kind === 'per_lead_or_shared' ? (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <ChoiceButton
+                label="One personalized per lead"
+                onClick={() => onAnswer(next.field, 'personalized')}
+                disabled={busy}
+              />
+              <ChoiceButton
+                label="One shared message"
+                onClick={() => onAnswer(next.field, 'shared')}
+                disabled={busy}
+              />
+            </div>
           ) : (
             <form
               onSubmit={(e) => {
@@ -217,6 +231,10 @@ export function AgencyInterview({
           are skipped. Renders nothing until the engine returns a plan. */}
       <PlannedSteps steps={state?.plannedSteps} modeLabel={state?.modeLabel} />
 
+      {/* The senior-exec PLAN SUMMARY — the supervisor reads the brief back from REAL
+          state and waits for an explicit go-ahead. Only shown once armed. */}
+      {armed && state?.planSummary && <PlanSummaryCard summary={state.planSummary} />}
+
       {/* The gated Run control. */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center' }}>
         {armed && state?.readyMessage && (
@@ -251,6 +269,35 @@ export function AgencyInterview({
         )}
       </div>
     </section>
+  );
+}
+
+/** The senior-exec plan summary card: the brief read back from REAL state (real lead
+ *  count, real channels, real output count), then the explicit go-ahead prompt. */
+function PlanSummaryCard({ summary }: { summary: PlanSummary }) {
+  return (
+    <div
+      data-testid="plan-summary"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        background: 'rgba(15,138,130,0.05)',
+        border: `1px solid rgba(15,138,130,0.28)`,
+        borderRadius: 'var(--radius-card)',
+        padding: 16,
+      }}
+    >
+      <strong style={{ fontSize: 13.5, fontWeight: 640, color: 'var(--ink)' }}>{summary.title}</strong>
+      <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 5 }}>
+        {summary.lines.map((ln) => (
+          <li key={ln.label} style={{ fontSize: 13, lineHeight: 1.45, color: 'var(--text-secondary)' }}>
+            <span style={{ fontWeight: 600, color: 'var(--ink)' }}>{ln.label}:</span> {ln.value}
+          </li>
+        ))}
+      </ul>
+      <p style={{ margin: '2px 0 0', fontSize: 12.5, fontWeight: 560, color: TEAL }}>{summary.confirm}</p>
+    </div>
   );
 }
 
