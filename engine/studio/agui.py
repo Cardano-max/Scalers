@@ -54,6 +54,29 @@ HOST_AGUI_MODEL = "anthropic:claude-haiku-4-5"
 JURY_MODEL = "anthropic:claude-opus-4-8"  # harness.config.DEFAULT_OPUS
 
 
+def _draft_quality_conf(verdict: str | None, confidence: float | None) -> float | None:
+    """Map the per-draft critic's verdict + its OWN confidence into a single ship-quality
+    score for the action's ``conf`` field — what the Review Queue shows per draft.
+
+    The critic's raw confidence is "how sure it is of its verdict", so it cannot be
+    persisted directly (a confidently-rejected draft would read as high-confidence). We
+    fold verdict + confidence into a quality band: a confidently-approved, well-grounded
+    draft lands high; a draft the critic flags for revision/rejection lands low — so the
+    queue shows REAL, VARYING confidence instead of a flat None. A critic that could not
+    judge (error / unknown verdict) yields None (honest unknown), never a fabricated score."""
+    if verdict is None or confidence is None:
+        return None
+    c = max(0.0, min(1.0, float(confidence)))
+    v = verdict.strip().lower()
+    if v == "approve":
+        return round(0.70 + 0.30 * c, 3)
+    if v == "revise":
+        return round(0.60 - 0.30 * c, 3)
+    if v == "reject":
+        return round(0.30 - 0.30 * c, 3)
+    return None  # error / unknown verdict -> honest unknown
+
+
 # --------------------------------------------------------------------------- #
 # Shared state: the editable campaign plan
 # --------------------------------------------------------------------------- #
@@ -1107,13 +1130,19 @@ def _execute_provided_leads_sync(
                 "a concrete issue. Do not invent praise.",
             ] if p
         )
+        # Capture the critic's REAL verdict + confidence so it can land on the draft's
+        # conf field (the operator saw conf=None on every draft). A failed critic leaves
+        # both None -> honest unknown conf, never a fabricated score.
+        crit_verdict: str | None = None
+        crit_confidence: float | None = None
         try:
             crit = critic_cell.run_sync(crit_prompt)
+            crit_verdict, crit_confidence = crit.verdict.value, float(crit.confidence)
             _rec(
                 "critic", _cell_model(critic_cell),
                 {"customer_id": cust_id, "channel": draft["channel"]},
                 {
-                    "verdict": crit.verdict.value, "confidence": float(crit.confidence),
+                    "verdict": crit_verdict, "confidence": crit_confidence,
                     "rationale": crit.rationale,
                 },
             )
@@ -1127,11 +1156,15 @@ def _execute_provided_leads_sync(
                 },
             )
 
+        # Land the critic's quality score on the draft so the Review Queue shows REAL,
+        # varying confidence (a generic draft the critic flags scores lower than a
+        # well-grounded, approved one); None stays honest-unknown.
+        draft_conf = _draft_quality_conf(crit_verdict, crit_confidence)
         action_id = record_pending_action(
             tenant_id=tenant_id, decision_id=None, type="outreach",
             channel=draft["channel"], worker="studio_provided_leads",
             target=draft["target"], draft=draft["draft"], subject=draft.get("subject"),
-            conf=None, threshold=None, esc_kind="approval_required",
+            conf=draft_conf, threshold=None, esc_kind="approval_required",
             esc_label="Provided-lead outreach — operator approval required",
             idempotency_key=f"{run_id}:{cust_id}", run_id=run_id, dsn=dsn,
         )

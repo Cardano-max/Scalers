@@ -476,10 +476,46 @@ def _choose_angle(
     }
 
 
-def _angle_rationale(angle: dict[str, Any], name: str) -> str:
-    """One honest sentence: why THIS draft differs from the others — the distinct angle
-    chosen for this lead and the real basis it stands on. A generic lead is labeled
-    honestly (not dressed up as personalized)."""
+def _real_signals_on_file(
+    facts: dict[str, Any], research: list[dict[str, Any]] | None, *, exclude_key: str,
+) -> list[str]:
+    """The OTHER real, traceable differentiators on file beyond the chosen angle — named
+    so the operator can verify each one against real data. Excludes the signal the angle
+    already stands on. REAL-only: nothing is added that isn't a real DB/CSV/research fact."""
+    traits = facts.get("persona_traits", {}) or {}
+    interests = facts.get("interests", []) or []
+    tattoos = facts.get("tattoo_history", []) or []
+    last_style = tattoos[0]["style"] if tattoos and tattoos[0].get("style") else None
+    aesthetic = traits.get("aesthetic_lean")
+    city = (facts.get("city") or "").strip()
+    notes = (facts.get("notes") or "").strip()
+
+    extras: list[str] = []
+    if last_style and exclude_key != "past-work":
+        extras.append(f"past {last_style} piece")
+    if interests and exclude_key != "shared-craft":
+        extras.append(f"interest: {interests[0]}")
+    elif aesthetic and exclude_key != "shared-craft":
+        extras.append(f"aesthetic lean: {aesthetic} (inferred)")
+    if notes and exclude_key != "csv-note":
+        extras.append(f"note: {notes}")
+    if city and exclude_key != "local":
+        extras.append(f"city: {city}")
+    n_research = sum(1 for r in (research or []) if (r.get("url") or "").strip())
+    if n_research and exclude_key != "their-positioning":
+        extras.append(f"{n_research} verified web source(s)")
+    return extras
+
+
+def _angle_rationale(
+    angle: dict[str, Any], facts: dict[str, Any],
+    research: list[dict[str, Any]] | None, name: str,
+) -> str:
+    """One honest, SPECIFIC sentence: why THIS draft differs from the others — the
+    distinct angle chosen for this lead, the real basis it stands on, and the other real
+    signals on file (each traceable to real data). A generic lead is labeled honestly,
+    and a lead whose only signal is shared (e.g. city-only) says so rather than inventing
+    a distinction."""
     who = (name or "this lead").strip()
     if angle["generic"]:
         return (
@@ -487,7 +523,13 @@ def _angle_rationale(angle: dict[str, Any], name: str) -> str:
             "so this draft stays a general introduction rather than faking personalization."
         )
     qualifier = " (inferred from persona, not a hard fact)" if angle["inferred"] else ""
-    return f"Personalized on {angle['label']}{qualifier}; grounded on {angle['basis']}."
+    msg = f"Personalized on {angle['label']}{qualifier}; grounded on {angle['basis']}."
+    extras = _real_signals_on_file(facts, research, exclude_key=angle["key"])
+    if extras:
+        msg += " Also on file: " + "; ".join(extras) + "."
+    elif angle["key"] == "local":
+        msg += " This is the only differentiating signal on file for this lead."
+    return msg
 
 
 def _build_email_prompt(
@@ -847,7 +889,7 @@ def build_outreach_draft(
     if research is None and ch in ("gmail", "email") and _llm_copy_enabled():
         research = research_studio(facts, enabled=_research_enabled(deep_research))
     angle = _choose_angle(facts, research)
-    why_different = _angle_rationale(angle, name)
+    why_different = _angle_rationale(angle, facts, research, name)
     grounding.append(f"angle={angle['key']}")
     if angle["generic"]:
         grounding.append("personalization=generic-honest")
