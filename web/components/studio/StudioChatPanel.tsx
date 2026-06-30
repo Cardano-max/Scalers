@@ -20,6 +20,8 @@ import {
   type ChatTurn,
   type StudioStreamStatus,
 } from '@/lib/data/studio-adapter';
+import { MicButton } from './MicButton';
+import { appendTranscript, type SttFactoryOptions } from '@/lib/studio/stt';
 
 /** A would-send action paused at the approval gate, surfaced in-thread. */
 export interface ChatApproval {
@@ -38,6 +40,11 @@ interface StudioChatPanelProps {
   approval?: ChatApproval | null;
   onApprove?: () => void;
   onReject?: () => void;
+  /**
+   * STT engine options for the voice mic (DI seam for tests; omit in the app to
+   * use the auto-selected browser engine). See lib/studio/stt.
+   */
+  micOptions?: SttFactoryOptions;
 }
 
 function formatTime(at: string): string {
@@ -54,9 +61,16 @@ export function StudioChatPanel({
   approval = null,
   onApprove,
   onReject,
+  micOptions,
 }: StudioChatPanelProps) {
   const [draft, setDraft] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Voice input drops the FINAL transcript into the existing draft; the same
+  // text path (submit -> onSend) handles it. Nothing else changes.
+  const handleTranscript = (text: string) => {
+    setDraft((prev) => appendTranscript(prev, text));
+  };
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -323,6 +337,7 @@ export function StudioChatPanel({
             opacity: busy ? 0.6 : 1,
           }}
         />
+        <MicButton onTranscript={handleTranscript} disabled={busy} sttOptions={micOptions} />
         <button
           type="button"
           onClick={submit}
