@@ -21,7 +21,7 @@ from typing import Any, Iterator
 
 import psycopg
 
-from kb.embedding import Embedder, DeterministicEmbedder, EMBED_DIM, to_pgvector
+from kb.embedding import EMBED_DIM, Embedder, default_embedder, to_pgvector
 
 PARTITION = "practitioner-wisdom"
 
@@ -56,7 +56,9 @@ class GroundingStore:
 
     def __init__(self, dsn: str, embedder: Embedder | None = None) -> None:
         self._dsn = dsn
-        self._embedder = embedder or DeterministicEmbedder()
+        # Default = the REAL semantic embedder (bge-small-en-v1.5); offline runs
+        # opt into the deterministic stub via $SCALERS_EMBEDDER (make_embedder).
+        self._embedder = embedder or default_embedder()
 
     @contextmanager
     def _conn(self) -> Iterator[psycopg.Connection]:

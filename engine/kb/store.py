@@ -17,7 +17,7 @@ from typing import Any, Iterator
 
 import psycopg
 
-from kb.embedding import DeterministicEmbedder, Embedder, to_pgvector
+from kb.embedding import Embedder, default_embedder, to_pgvector
 from kb.schema import (
     Direction,
     Engine,
@@ -42,7 +42,9 @@ class KbStore:
 
     def __init__(self, dsn: str, embedder: Embedder | None = None) -> None:
         self._dsn = dsn
-        self._embedder = embedder or DeterministicEmbedder()
+        # Default = the REAL semantic embedder (bge-small-en-v1.5); offline runs
+        # opt into the deterministic stub via $SCALERS_EMBEDDER (make_embedder).
+        self._embedder = embedder or default_embedder()
 
     @contextmanager
     def _conn(self, tenant_id: str | None) -> Iterator[psycopg.Connection]:

@@ -5,7 +5,16 @@ the eval-metric history that is the gating source of truth. Generic (the niche
 stays in per-tenant packs); offline (never on the engine hot path).
 """
 
-from kb.embedding import EMBED_DIM, DeterministicEmbedder, Embedder
+from kb.embedding import (
+    DEFAULT_MODEL,
+    EMBED_DIM,
+    DeterministicEmbedder,
+    Embedder,
+    FastEmbedEmbedder,
+    SentenceTransformerEmbedder,
+    default_embedder,
+    make_embedder,
+)
 from kb.schema import (
     Direction,
     Engine,
@@ -55,6 +64,11 @@ __all__ = [
     "KINDS",
     "Embedder",
     "DeterministicEmbedder",
+    "FastEmbedEmbedder",
+    "SentenceTransformerEmbedder",
+    "make_embedder",
+    "default_embedder",
+    "DEFAULT_MODEL",
     "EMBED_DIM",
     "Engine",
     "Split",
