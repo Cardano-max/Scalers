@@ -146,9 +146,13 @@ class Query:
 class Mutation:
     @strawberry.mutation
     async def approve_action(
-        self, id: strawberry.ID, idempotency_key: str
+        self, id: strawberry.ID, idempotency_key: str, live: bool = False
     ) -> Optional[Action]:
-        return await asyncio.to_thread(repo.approve_action, str(id), idempotency_key)
+        # ``live`` is the operator's EXPLICIT live-send authorization (default False =
+        # safe redirect). It threads straight into approve_and_publish so a per-draft
+        # approve from the Review Queue can send clean to the real recipient instead of
+        # always redirecting with a [TEST] marker.
+        return await asyncio.to_thread(repo.approve_action, str(id), idempotency_key, live)
 
     @strawberry.mutation
     async def reject_action(

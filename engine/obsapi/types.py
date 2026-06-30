@@ -135,6 +135,12 @@ class Action:
     agent_step_id: Optional[strawberry.ID] = None
     # Run-level Langfuse trace url (per-step span ids are not persisted).
     trace_url: Optional[str] = None
+    # The resolved send mode of the LAST approve→publish on this action: 'live' (real
+    # recipient, clean subject) or 'test_redirect' (rerouted to the operator inbox with a
+    # [TEST] marker). Honest-null until an approve actually sends — it is a transient,
+    # NON-persisted value set on the approveAction mutation response (mirrors how
+    # last_error surfaces the real send outcome), never read from a column.
+    mode: Optional[str] = None
 
 
 @strawberry.type

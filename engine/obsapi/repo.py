@@ -1117,9 +1117,17 @@ def _seam(module: str, *names: str) -> Callable[..., Any]:
     )
 
 
-def approve_action(action_id: str, idempotency_key: str) -> Action | None:
-    _seam("actions.publish", "approve_and_publish")(action_id)
-    return action(action_id)
+def approve_action(action_id: str, idempotency_key: str, live: bool = False) -> Action | None:
+    # ``live`` (default False = safe redirect) is the operator's explicit live-send
+    # authorization, passed through to approve_and_publish. The send returns the resolved
+    # row carrying a transient ``mode`` ('live' | 'test_redirect'); we re-read the row for
+    # the response shape and surface that real mode on it so the Review Queue can badge
+    # how the send was actually routed (never an assumed mode).
+    row = _seam("actions.publish", "approve_and_publish")(action_id, live=live)
+    act = action(action_id)
+    if act is not None:
+        act.mode = getattr(row, "mode", None)
+    return act
 
 
 def reject_action(action_id: str, reason: str | None = None) -> Action | None:
