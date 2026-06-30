@@ -44,6 +44,15 @@ export interface CampaignPlan {
   campaign_type?: string;
   deep_research?: boolean | null;
   drafts_only?: boolean | null;
+  // Uploaded customer list — a real parse of the operator's CSV, surfaced to the
+  // supervisor so it can truthfully read the rows. Empty/absent = no CSV uploaded.
+  customers?: {
+    filename?: string;
+    rows?: number;
+    columns?: string[];
+    sample?: Array<Record<string, string>>;
+    ingested?: boolean;
+  };
 }
 
 export function emptyPlan(): CampaignPlan {

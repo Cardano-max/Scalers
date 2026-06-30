@@ -51,6 +51,9 @@ interface StudioChatPanelProps {
    * ingestion). Omit in preview — the control then shows an honest not-connected note.
    */
   uploadEndpoint?: string;
+  /** The live studio session id — threaded to the CSV upload so the supervisor sees
+   *  THIS upload (persisted to the same session plan). Omit in preview. */
+  sessionId?: string;
   /**
    * True while a LIVE campaign run is in flight. Surfaces the orchestration strip
    * immediately (even before the first agent card lands) and lights the active stage
@@ -286,6 +289,7 @@ export function StudioChatPanel({
   onReject,
   micOptions,
   uploadEndpoint,
+  sessionId,
   runActive = false,
 }: StudioChatPanelProps) {
   const [draft, setDraft] = useState('');
@@ -341,7 +345,7 @@ export function StudioChatPanel({
         </h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span style={{ fontSize: 11, color: '#A8A299' }}>operator + agent team</span>
-          <CustomerUpload endpoint={uploadEndpoint} />
+          <CustomerUpload endpoint={uploadEndpoint} sessionId={sessionId} />
         </div>
       </header>
 

@@ -213,6 +213,7 @@ export function LiveCampaignStudio({ aguiUrl, graphqlUrl, sessionId }: LiveCampa
             onApprove={studio.approve}
             onReject={studio.reject}
             uploadEndpoint={connected ? uploadEndpoint : undefined}
+            sessionId={sessionId}
             runActive={studio.runningCampaign}
           />
           <LiveProgressPanel steps={studio.steps} streamStatus={studio.streamStatus} />

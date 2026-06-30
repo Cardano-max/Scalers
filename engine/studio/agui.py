@@ -91,6 +91,12 @@ class CampaignPlan(BaseModel):
     campaign_type: str = ""
     deep_research: bool | None = None
     drafts_only: bool | None = None
+    # Uploaded customer list — a REAL parse of the operator's CSV ({filename, rows,
+    # columns, sample, ingested}). Persisted with the plan and surfaced to the
+    # supervisor on every turn (see `_customers_context`) so it can truthfully say
+    # "I see your CSV, N rows: col, col" and reason over the rows. Empty = no CSV
+    # uploaded (the supervisor must NOT pretend a list exists).
+    customers: dict[str, Any] = Field(default_factory=dict)
 
 
 @dataclass
@@ -257,6 +263,47 @@ def _memory_and_db_context(ctx: RunContext[StudioDeps]) -> str:
         lines.append(
             "MEMORIES: memory layer present; no memories loaded this turn."
         )
+    return "\n".join(lines)
+
+
+@studio_agent.instructions
+def _customers_context(ctx: RunContext[StudioDeps]) -> str:
+    """Surface the operator's UPLOADED customer list to the supervisor on EVERY turn.
+
+    This is what lets the supervisor truthfully say "I see your CSV — N rows: name,
+    email, city" and reason over the real rows, instead of being blind to the upload.
+    The list is a REAL parse of the operator's file (persisted on the plan by
+    ``/studio/upload``). HONESTY: when no CSV was uploaded this adds NOTHING — the
+    supervisor must not pretend a list exists — and it never invents rows beyond the
+    real sample it was given."""
+    c = ctx.deps.state.customers or {}
+    rows = c.get("rows")
+    if not c or not rows:
+        return ""  # no CSV uploaded -> say nothing (no fabrication)
+    cols = ", ".join(str(x) for x in (c.get("columns") or [])) or "(no header row)"
+    lines = [
+        "UPLOADED CUSTOMER LIST — the operator uploaded a real CSV and this is a REAL "
+        "parse of it. You CAN see this list; when asked how many leads or what columns, "
+        "answer from HERE. Treat it as ground truth and never invent rows beyond it:",
+        f"- file: {c.get('filename') or 'upload.csv'}",
+        f"- rows: {rows}",
+        f"- columns: {cols}",
+        f"- ingested into the customer DB: {'yes' if c.get('ingested') else 'no (parsed only)'}",
+    ]
+    sample = c.get("sample") or []
+    if sample:
+        lines.append("- sample rows (first few, verbatim from the file):")
+        for r in sample[:5]:
+            if isinstance(r, dict):
+                pairs = ", ".join(f"{k}={v}" for k, v in r.items() if str(v).strip())
+            else:
+                pairs = str(r)
+            lines.append(f"    - {pairs[:200]}")
+    lines.append(
+        "To act on these leads call `research_and_stage_leads`"
+        + (" (they are in the customer DB)" if c.get("ingested") else "")
+        + " — per-lead, grounded, staged HELD for approval. Nothing is sent."
+    )
     return "\n".join(lines)
 
 
@@ -462,6 +509,13 @@ def _brief_from_plan(plan: CampaignPlan) -> str:
         brief += f"\nTone / brand voice: {plan.tone.strip()}"
     if plan.output_count and plan.output_count > 0:
         brief += f"\nDrafts requested: {plan.output_count}"
+    # Carry a REAL summary of the uploaded customer list so the downstream draft agents
+    # know who they're writing for (size + columns). The full per-lead rows are handled
+    # by the grounded research_and_stage_leads path; this is the spine-level summary.
+    cust = plan.customers or {}
+    if cust.get("rows"):
+        cols = ", ".join(str(x) for x in (cust.get("columns") or []))
+        brief += f"\nUploaded customer list: {cust['rows']} row(s)" + (f"; columns: {cols}" if cols else "")
     # Carry uploaded brand / strategy notes into the run brief too. Bounded so a large
     # notes file can't blow the brief out.
     notes = plan.notes.strip()
@@ -1246,14 +1300,18 @@ def mount_studio_agui(app) -> None:
 
     @app.post("/studio/upload")
     async def studio_upload_route(request: Request):  # noqa: ANN202
-        """Parse an uploaded customers CSV and return an HONEST preview.
+        """Parse an uploaded customers CSV, ingest it, and ATTACH it to the supervisor.
 
-        REAL parse only — this reads the bytes the operator picked and reports the
-        row count + columns + a small sample. It deliberately does NOT ingest into the
-        customers table (``ingested: false``); full ingestion is a separate later step.
-        Accepts either JSON ``{filename, content}`` or a raw ``text/csv`` body."""
+        REAL parse of the bytes the operator picked (row count + columns + sample),
+        then: (1) upsert the rows into ``customers`` so the research tools can find
+        them, and (2) attach a real summary onto the session plan so the SUPERVISOR
+        genuinely sees the list (`_customers_context` renders it every turn) and the
+        interview's lead_count is answered from the real row count. Honest throughout:
+        ingestion / attach failures are reported, never hidden, and nothing is sent.
+        Accepts JSON ``{sessionId, filename, content}`` or a raw ``text/csv`` body."""
         from fastapi.responses import JSONResponse
 
+        dsn = get_dsn()  # previously undefined here -> ingest + attach both NameError'd
         raw = await request.body()
         filename = request.query_params.get("filename") or "upload.csv"
         content = ""
@@ -1266,6 +1324,12 @@ def mount_studio_agui(app) -> None:
             filename = payload.get("filename") or filename
         else:
             content = raw.decode("utf-8", "replace")
+
+        session_id = (
+            (payload.get("sessionId") or payload.get("threadId") if isinstance(payload, dict) else None)
+            or request.query_params.get("session_id")
+            or "studio-default"
+        )
 
         try:
             result = parse_customers_csv(content, filename)
@@ -1294,6 +1358,34 @@ def mount_studio_agui(app) -> None:
         except Exception as exc:  # honest: report the failure, keep the preview
             result["ingested"] = False
             result["ingest_error"] = f"{type(exc).__name__}: {exc}"
+
+        # ATTACH the real parse summary onto the session plan so the SUPERVISOR can SEE
+        # the uploaded list (rendered by `_customers_context` on every turn) and so the
+        # interview's lead_count is answered from the real row count — the same way
+        # brand notes are surfaced. Honest: only a real parse is stored; if no rows
+        # parsed nothing is attached, and a persistence hiccup is reported, not hidden.
+        try:
+            def _attach_customers() -> None:
+                plan = _load_plan(session_id, dsn)
+                plan.customers = {
+                    "filename": result.get("filename"),
+                    "rows": int(result.get("rows") or 0),
+                    "columns": list(result.get("columns") or []),
+                    "sample": list(result.get("sample") or []),
+                    "ingested": bool(result.get("ingested")),
+                }
+                if result.get("rows"):
+                    plan.lead_count = int(result["rows"])
+                _persist_plan(dsn, session_id, plan)
+
+            if result.get("rows"):
+                await asyncio.to_thread(_attach_customers)
+                result["attachedToPlan"] = True
+            else:
+                result["attachedToPlan"] = False
+        except Exception as exc:  # honest: report, never claim the supervisor can see it
+            result["attachedToPlan"] = False
+            result["attach_error"] = f"{type(exc).__name__}: {exc}"
         return JSONResponse(result)
 
     @app.post("/studio/notes")

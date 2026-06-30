@@ -193,7 +193,7 @@ export function VoiceTweakPanel({
         <span style={{ fontSize: 11, color: 'var(--text-faint)', marginRight: 'auto' }}>
           Add context the team will use:
         </span>
-        <CustomerUpload endpoint={uploadEndpoint} />
+        <CustomerUpload endpoint={uploadEndpoint} sessionId={sessionId} />
         <BrandNotesUpload endpoint={notesEndpoint} sessionId={sessionId} />
       </div>
 

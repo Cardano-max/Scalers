@@ -50,6 +50,22 @@ describe('CustomerUpload', () => {
     expect(JSON.parse(init.body).content).toContain('name,email,city');
   });
 
+  it('includes sessionId in the POST so the upload targets the live studio session', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, filename: 'c.csv', rows: 1, columns: ['name'], sample: [], ingested: true }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<CustomerUpload endpoint="http://api/studio/upload" sessionId="studio-live-session" />);
+    fireEvent.change(screen.getByTestId('customer-csv-input'), {
+      target: { files: [csvFile('c.csv', 'name\nAda\n')] },
+    });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).sessionId).toBe('studio-live-session');
+  });
+
   it('does not fake a parse when there is no live endpoint (preview)', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);

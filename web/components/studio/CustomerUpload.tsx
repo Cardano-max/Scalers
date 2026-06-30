@@ -42,7 +42,7 @@ function readFileText(file: File): Promise<string> {
   });
 }
 
-export function CustomerUpload({ endpoint }: { endpoint?: string }) {
+export function CustomerUpload({ endpoint, sessionId }: { endpoint?: string; sessionId?: string }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [status, setStatus] = useState<Status>('idle');
   const [ack, setAck] = useState<UploadAck | null>(null);
@@ -71,7 +71,9 @@ export function CustomerUpload({ endpoint }: { endpoint?: string }) {
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ filename: file.name, content: text }),
+        // sessionId targets the operator's live studio session so the supervisor sees
+        // THIS upload (not a stray default session). Omitted only in tests/preview.
+        body: JSON.stringify({ filename: file.name, content: text, ...(sessionId ? { sessionId } : {}) }),
       });
       const data = (await res.json()) as UploadAck;
       if (!res.ok || !data.ok) {
