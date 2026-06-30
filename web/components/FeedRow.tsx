@@ -16,6 +16,45 @@ export function FeedRow({ event }: { event: FeedEvent }) {
   const console = useConsole();
   const [isOpen, setIsOpen] = useState(false);
 
+  // Small monospace id pill that deep-links to the run (Runs tab, run selected).
+  // Rendered as a real <span role="button"> so it can live inside the row's own
+  // <button> without nesting interactive <button>s (invalid HTML).
+  const idPill = (label: string, runId: string, key: string) => (
+    <span
+      key={key}
+      role="button"
+      tabIndex={0}
+      title={`Open run ${runId}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        console.navigate('runs', runId);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          e.stopPropagation();
+          console.navigate('runs', runId);
+        }
+      }}
+      style={{
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontSize: 10,
+        color: '#0B6F68',
+        background: '#EAF4F2',
+        border: '1px solid #C9E5E1',
+        padding: '1px 6px',
+        borderRadius: 5,
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
+        maxWidth: 220,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+      }}
+    >
+      {label}
+    </span>
+  );
+
   return (
     <div style={{ animation: 'feedIn 0.3s ease-out' }}>
       <button
@@ -74,6 +113,10 @@ export function FeedRow({ event }: { event: FeedEvent }) {
                 {event.chip}
               </span>
             )}
+            {/* Clickable real-id pills — only render when the real id exists. */}
+            {event.runId && idPill(`run:${event.runId}`, event.runId, 'run-pill')}
+            {event.runId && event.campaignId &&
+              idPill(`campaign:${event.campaignId}`, event.runId, 'campaign-pill')}
           </div>
           <span style={{ fontSize: 13.5, color: '#1A1A17', lineHeight: 1.45 }}>{event.text}</span>
         </div>

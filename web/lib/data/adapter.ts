@@ -13,6 +13,7 @@ import type {
   AutonomyMode,
   Channel,
   ActionFilter,
+  CampaignSpec,
   EngineState,
   FeedEvent,
   FeedFilter,
@@ -46,6 +47,12 @@ export interface DataAdapter {
   getActivityItem(id: string): Promise<ActivityItem | null>;
   getRuns(tenantId: string, filter?: RunFilter): Promise<Run[]>;
   getRun(id: string): Promise<Run | null>;
+  /**
+   * The per-campaign SPEC DOC for a run, assembled from already-persisted REAL
+   * rows (plan + agent_runs + archetype). Resolves null (honest-null) when the
+   * run has no spec and nothing to reconstruct. `runId` IS the spec key.
+   */
+  getCampaignSpec(runId: string): Promise<CampaignSpec | null>;
   getFeed(
     tenantId: string,
     filter?: FeedFilter,

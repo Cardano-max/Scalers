@@ -463,7 +463,81 @@ def _execute_campaign_sync(
             for ar in summary["agent_runs"]
         }
         _persist_plan(dsn, session_id, plan)
+    # Assemble + persist the per-campaign spec doc from the REAL plan + the real
+    # per-role agent_runs + the selected archetype spec. Best-effort: never break a
+    # real run if the spec store or registry is unavailable. NOTHING here sends.
+    _persist_campaign_spec(plan, summary, session_id, tenant_id, dsn)
     return summary
+
+
+def _persist_campaign_spec(
+    plan: CampaignPlan, summary: dict[str, Any], session_id: str,
+    tenant_id: str, dsn: str | None,
+) -> None:
+    """Assemble the per-campaign spec from ALREADY-REAL fields and upsert it.
+
+    ``plan`` provides goal/audience/channels/sections/schedule; ``summary`` provides
+    run_id/campaign_id/archetype_id + the per-role agent_runs; the archetype
+    registry provides success_metric/trigger/steps_enabled. Wrapped best-effort so a
+    spec-store/registry hiccup can never fail an otherwise-successful run."""
+    try:
+        from studio import campaign_spec_store as spec_store
+
+        run_id = summary.get("run_id")
+        if not run_id:
+            return
+
+        archetype_id = summary.get("archetype_id")
+        archetype_meta: dict[str, Any] | None = None
+        if archetype_id:
+            try:
+                from archetypes import registry
+
+                aspec = registry.get(archetype_id)
+                trig = getattr(aspec.trigger, "value", aspec.trigger)
+                archetype_meta = {
+                    "success_metric": aspec.success_metric,
+                    "trigger": trig,
+                    "steps_enabled": sorted(
+                        getattr(s, "value", s) for s in aspec.steps_enabled
+                    ),
+                }
+            except Exception:
+                archetype_meta = None
+
+        content, markdown = spec_store.assemble_spec(
+            run_id=str(run_id),
+            campaign_id=summary.get("campaign_id"),
+            tenant_id=tenant_id,
+            session_id=session_id,
+            archetype_id=archetype_id,
+            plan={
+                "goal": plan.goal,
+                "audience": plan.audience,
+                "channels": list(plan.channels or []),
+                "sections": list(plan.sections or []),
+                "schedule": dict(plan.schedule or {}),
+            },
+            agent_runs=summary.get("agent_runs") or [],
+            n_pending=summary.get("n_pending"),
+            n_queued=summary.get("n_queued"),
+            channels=summary.get("channels") or [],
+            step_notes=summary.get("step_notes") or [],
+            archetype_meta=archetype_meta,
+        )
+        spec_store.upsert_spec(
+            str(run_id),
+            campaign_id=summary.get("campaign_id"),
+            tenant_id=tenant_id,
+            session_id=session_id,
+            archetype_id=archetype_id,
+            content=content,
+            markdown=markdown,
+            dsn=dsn,
+        )
+    except Exception:
+        # Spec doc is a read-surface convenience; never let it break a real run.
+        pass
 
 
 @studio_agent.tool

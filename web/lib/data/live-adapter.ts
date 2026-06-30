@@ -16,6 +16,7 @@ import type {
   AutonomyMode,
   Channel,
   ActionFilter,
+  CampaignSpec,
   ChatMessage,
   EngineState,
   FeedEvent,
@@ -95,6 +96,11 @@ export class LiveAdapter implements DataAdapter {
   }
   getRun(id: string) {
     return this.query<{ run: Run | null }>(Q.RUN_QUERY, { id }).then((d) => d.run);
+  }
+  getCampaignSpec(runId: string) {
+    return this.query<{ campaignSpec: CampaignSpec | null }>(Q.CAMPAIGN_SPEC_QUERY, {
+      runId,
+    }).then((d) => d.campaignSpec ?? null);
   }
   getFeed(tenantId: string, filter?: FeedFilter, after?: string, limit?: number) {
     return this.query<{ feed: FeedEvent[] }>(Q.FEED_QUERY, {
