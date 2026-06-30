@@ -124,20 +124,27 @@ def _parse_csv(content: str) -> tuple[list[str], list[list[str]]]:
 
 
 def _looks_like_csv(content: str) -> bool:
-    """Conservative CSV sniff for content uploaded without an explicit ``kind``.
+    """Deliberately CONSERVATIVE CSV sniff — used ONLY when content arrives without an
+    explicit ``kind`` (the panel always sends ``kind``, so this is a backend fallback
+    for direct API callers). When in doubt it returns False so prose/markdown stays a
+    plain doc — a brand playbook must NEVER be row-chunked.
 
-    Requires a delimited header (>= 2 columns), at least one data row, and the
-    header not being a markdown heading — so prose / markdown is never misrouted."""
+    Requires strong, table-shaped signals, all of:
+      - the content is not a markdown heading,
+      - a delimited header of >= 2 columns,
+      - MULTIPLE data rows (>= 2), not a single comma-bearing line, and
+      - EXACT column-count consistency: every data row has the header's width.
+    An explicit ``kind=='csv'`` upload bypasses this entirely and is always row-chunked,
+    so a genuinely ragged CSV picked in the UI is still honored."""
     text = (content or "").strip()
     if not text or text.lstrip().startswith("#"):
         return False
     header, data = _parse_csv(text)
-    if len(header) < 2 or not data:
+    if len(header) < 2 or len(data) < 2:
         return False
-    # Most data rows should line up with the header width (a real table), not a
-    # paragraph that merely happens to contain a comma.
-    aligned = sum(1 for r in data if abs(len(r) - len(header)) <= 1)
-    return aligned >= max(1, (len(data) + 1) // 2)
+    # A real table has a consistent column count across every row; a prose snippet
+    # that merely contains commas does not. Demand exact agreement (strong signal).
+    return all(len(r) == len(header) for r in data)
 
 
 def _format_csv_row(header: list[str], row: list[str], rownum: int) -> str:

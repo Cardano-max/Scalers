@@ -88,6 +88,24 @@ def test_markdown_doc_not_misrouted_as_csv() -> None:
     assert not any(t.startswith("Row ") for _, t in chunks)
 
 
+def test_autodetect_is_conservative_for_comma_prose() -> None:
+    # No-kind fallback must be STRICT: comma-bearing prose (no consistent table shape)
+    # stays a doc. A brand playbook must never be row-chunked.
+    assert docstore._looks_like_csv("# Title\n\nWe are warm, direct, kind.\n") is False
+    # Two prose lines that happen to share a comma count are NOT a table (no header
+    # semantics) — but a single comma line definitely is not.
+    assert docstore._looks_like_csv("Ladies First is woman-owned, Austin-based.\n") is False
+    # A real header + multiple consistent rows DOES sniff as CSV.
+    assert docstore._looks_like_csv("name,email\nA,a@x.com\nB,b@x.com\n") is True
+
+
+def test_brand_playbook_kind_is_not_row_chunked() -> None:
+    # An explicit non-csv kind always uses the prose path regardless of content.
+    doc = "Section one is here.\n\nSection two follows with more detail.\n"
+    chunks = docstore.chunk_document(doc, kind="brand")
+    assert not any(t.startswith("Row ") for _, t in chunks)
+
+
 # --- headline: host context lists active docs, excludes removed ones -------- #
 _ACTIVE = [
     {
