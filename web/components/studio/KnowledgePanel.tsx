@@ -37,13 +37,25 @@ function readFileText(file: File): Promise<string> {
   });
 }
 
-export function KnowledgePanel({ endpoint }: { endpoint?: string }) {
+interface KnowledgePanelProps {
+  endpoint?: string;
+  /** Render as a collapsed-by-default summary that expands to the full panel. */
+  collapsible?: boolean;
+  /** Initial open state when collapsible (defaults closed). Ignored when not collapsible. */
+  defaultOpen?: boolean;
+}
+
+export function KnowledgePanel({ endpoint, collapsible = false, defaultOpen = false }: KnowledgePanelProps) {
   const [docs, setDocs] = useState<DocRow[]>([]);
   const [name, setName] = useState('');
   const [content, setContent] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  // Collapsible mode (Voice page): start collapsed so the live transcript stays the
+  // hero and this never grows into a page-dominating card. Non-collapsible callers
+  // (e.g. a dedicated knowledge route) always render the full body.
+  const [open, setOpen] = useState(collapsible ? defaultOpen : true);
   // Document kind sent to the store: a picked .csv becomes a CSV doc (chunked per
   // row); .txt/.md and pasted text are plain docs. Reset to 'doc' on manual edit —
   // the backend still sniffs pasted CSV as a safety net.
@@ -138,26 +150,121 @@ export function KnowledgePanel({ endpoint }: { endpoint?: string }) {
     }
   };
 
+  // Real, summarized context for the collapsed header chips — no fabrication: counts
+  // come straight from the live document list (CSV rows = the per-row chunk count).
+  const csvRows = docs.reduce((n, d) => (d.kind === 'csv' && d.chunks ? n + d.chunks : n), 0);
+  const csvCount = docs.filter((d) => d.kind === 'csv').length;
+  const docCount = docs.length - csvCount;
+  const summaryChips: string[] = [];
+  if (csvCount > 0) summaryChips.push(csvRows > 0 ? `CSV · ${csvRows} rows` : `${csvCount} CSV`);
+  if (docCount > 0) summaryChips.push(`${docCount} doc${docCount === 1 ? '' : 's'}`);
+
+  const summaryText = !endpoint
+    ? 'Needs the live studio backend'
+    : !loaded
+      ? 'Loading…'
+      : docs.length === 0
+        ? 'No documents yet'
+        : null; // chips carry the summary when we have docs
+
+  const showBody = !collapsible || open;
+
   return (
     <div
       aria-label="Knowledge documents"
       style={{
         display: 'flex',
         flexDirection: 'column',
-        gap: 10,
+        gap: showBody ? 10 : 0,
         border: '1px solid var(--hairline)',
         borderRadius: 12,
         background: '#fff',
-        padding: 12,
+        padding: collapsible ? 0 : 12,
+        minWidth: 0,
+        overflow: 'hidden',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-        <span style={{ fontSize: 12.5, fontWeight: 600, color: '#46423B' }}>Knowledge</span>
-        <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
-          Documents the whole team reads
-        </span>
-      </div>
+      {collapsible ? (
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          aria-label="Toggle knowledge documents"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            width: '100%',
+            minWidth: 0,
+            padding: '10px 12px',
+            border: 'none',
+            background: 'transparent',
+            cursor: 'pointer',
+            textAlign: 'left',
+          }}
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="#8C877D"
+            strokeWidth="2.4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+            style={{ flex: '0 0 auto', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 140ms ease' }}
+          >
+            <polyline points="9 6 15 12 9 18" />
+          </svg>
+          <span style={{ fontSize: 12.5, fontWeight: 600, color: '#46423B', flex: '0 0 auto' }}>Context</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', minWidth: 0, flex: 1 }}>
+            {summaryText ? (
+              <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>{summaryText}</span>
+            ) : (
+              summaryChips.map((c) => (
+                <span
+                  key={c}
+                  style={{
+                    fontSize: 10.5,
+                    color: '#46423B',
+                    background: 'var(--surface-alt)',
+                    border: '1px solid var(--hairline)',
+                    borderRadius: 999,
+                    padding: '2px 9px',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {c}
+                </span>
+              ))
+            )}
+          </div>
+          <span style={{ fontSize: 11, color: '#0F8A82', fontWeight: 600, flex: '0 0 auto' }}>
+            {open ? 'Hide' : 'Manage'}
+          </span>
+        </button>
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+          <span style={{ fontSize: 12.5, fontWeight: 600, color: '#46423B' }}>Knowledge</span>
+          <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+            Documents the whole team reads
+          </span>
+        </div>
+      )}
 
+      {showBody && (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+          minWidth: 0,
+          maxHeight: collapsible ? 340 : undefined,
+          overflowY: collapsible ? 'auto' : undefined,
+          padding: collapsible ? '0 12px 12px' : 0,
+        }}
+      >
       {/* Active docs list */}
       {docs.length > 0 ? (
         <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 6 }}>
@@ -179,11 +286,12 @@ export function KnowledgePanel({ endpoint }: { endpoint?: string }) {
                 {d.summary ? (
                   <span
                     style={{
-                      display: 'block',
+                      display: '-webkit-box',
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: 'vertical',
                       color: '#8C877D',
                       overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
+                      wordBreak: 'break-word',
                     }}
                   >
                     {d.summary}
@@ -306,6 +414,8 @@ export function KnowledgePanel({ endpoint }: { endpoint?: string }) {
           {error}
         </div>
       ) : null}
+      </div>
+      )}
     </div>
   );
 }

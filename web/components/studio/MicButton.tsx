@@ -12,6 +12,7 @@
  * Degrades honestly: in a browser without the Web Speech API the button is
  * rendered disabled with an explanatory title — never hidden, never faked.
  */
+import { useEffect, useState } from 'react';
 import { useStt } from '@/lib/studio/stt/useStt';
 import type { SttFactoryOptions } from '@/lib/studio/stt';
 
@@ -47,7 +48,15 @@ function MicIcon({ active }: { active: boolean }) {
 export function MicButton({ onTranscript, disabled = false, sttOptions }: MicButtonProps) {
   const stt = useStt(onTranscript, sttOptions);
 
-  if (!stt.supported) {
+  // Mic support depends on browser-only globals (SpeechRecognition), so it differs
+  // between the server render (always unsupported) and the client. Gate the live UI
+  // behind a post-mount flag so SSR and the FIRST client render are identical (the
+  // disabled placeholder), then swap to the real control after hydration. Without
+  // this the button flips on hydration and React throws a mismatch warning.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  if (!mounted || !stt.supported) {
     return (
       <button
         type="button"
