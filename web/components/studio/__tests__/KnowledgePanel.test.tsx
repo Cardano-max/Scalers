@@ -66,6 +66,48 @@ describe('KnowledgePanel', () => {
     expect(body.content).toContain('Austin color studio');
   });
 
+  it('accepts a .csv file and uploads it with kind="csv"', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes({ ok: true, documents: [] })) // initial list
+      .mockResolvedValueOnce(jsonRes({ ok: true, id: 'doc_3', name: 'leads', kind: 'csv' })) // upload
+      .mockResolvedValueOnce(jsonRes({ ok: true, documents: [{ id: 'doc_3', name: 'leads' }] })); // refresh
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<KnowledgePanel endpoint="http://api/studio/documents" />);
+    await waitFor(() => expect(screen.getByText(/No documents yet/i)).toBeInTheDocument());
+
+    // the hidden file input accepts .csv (and text/csv)
+    const fileInput = screen.getByTestId('knowledge-file-input') as HTMLInputElement;
+    expect(fileInput.accept).toContain('.csv');
+    expect(fileInput.accept).toContain('text/csv');
+
+    const csv = new File(
+      ['name,email,city\nMonolith Tattoo,a@m.com,Austin\n'],
+      'leads.csv',
+      { type: 'text/csv' },
+    );
+    fireEvent.change(fileInput, { target: { files: [csv] } });
+
+    // name is derived from the file (extension stripped) and content is read in
+    await waitFor(() => expect(screen.getByLabelText('Document name')).toHaveValue('leads'));
+    await waitFor(() =>
+      expect(screen.getByLabelText('Document text')).toHaveValue(
+        'name,email,city\nMonolith Tattoo,a@m.com,Austin\n',
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Add document/i }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+
+    const postCall = fetchMock.mock.calls[1];
+    expect(postCall[0]).toBe('http://api/studio/documents');
+    const body = JSON.parse(postCall[1].body);
+    expect(body.kind).toBe('csv');
+    expect(body.name).toBe('leads');
+    expect(body.content).toContain('Monolith Tattoo');
+  });
+
   it('shows the honest not-connected note in preview (no endpoint)', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
