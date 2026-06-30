@@ -128,6 +128,19 @@ def _materialize_runs_row(
             )
         store.append_spans(run_id, spans)
         store.finish_run(run_id, status=RunStatus.COMPLETED, review_count=len(agent_runs))
+
+        # Best-effort Langfuse mirror so the studio campaign run emits a trace with
+        # one span per agent (strategist/draft/critic/jury) WHEN keys are present.
+        # The studio path writes the runs row directly (it does not go through the
+        # harness `execute_and_record` helper that mirrors), so without this call a
+        # configured Langfuse would receive nothing for studio runs. ``mirror_run``
+        # never raises and no-ops cleanly when unconfigured — it never gates the run.
+        try:
+            from observability import mirror_run
+
+            mirror_run(run_id, tenant_id, spans, run_type="campaign")
+        except Exception:
+            pass
         return True
     except Exception:
         return False
