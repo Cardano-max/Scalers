@@ -13,6 +13,7 @@
  */
 import { useEffect, useState } from 'react';
 import { ALL_META, type FieldMeta, type InterviewState } from '@/lib/studio/interview';
+import { PlannedSteps } from './PlannedSteps';
 
 const TEAL = '#0F8A82';
 
@@ -211,6 +212,10 @@ export function AgencyInterview({
           )}
         </div>
       )}
+
+      {/* The plan the engine selected for this run: which steps run and why, and which
+          are skipped. Renders nothing until the engine returns a plan. */}
+      <PlannedSteps steps={state?.plannedSteps} modeLabel={state?.modeLabel} />
 
       {/* The gated Run control. */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center' }}>

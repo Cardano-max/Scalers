@@ -20,6 +20,17 @@ export interface InterviewQuestion {
   question: string;
 }
 
+/** One step the engine has planned for this run, with WHY it is (or is not) running.
+ *  `selected` steps execute; the rest are skipped. `tools` are the tools a selected
+ *  step will use. Surfaced so the operator sees the plan before the run starts. */
+export interface PlannedStep {
+  id: string;
+  label: string;
+  selected: boolean;
+  reason: string;
+  tools: string[];
+}
+
 export interface InterviewState {
   armed: boolean;
   missing: string[];
@@ -27,6 +38,10 @@ export interface InterviewState {
   nextQuestion: InterviewQuestion | null;
   readyMessage: string | null;
   gatingFields: string[];
+  // Dynamic step selection (P4). Optional so older responses still typecheck.
+  mode?: string;
+  modeLabel?: string;
+  plannedSteps?: PlannedStep[];
 }
 
 /** How the panel renders the input for each field (mirrors engine coercion). */
@@ -114,6 +129,10 @@ export interface InterviewResponse {
   nextQuestion: InterviewQuestion | null;
   readyMessage: string | null;
   gatingFields: string[];
+  // Dynamic step selection (P4) — optional so older responses still typecheck.
+  mode?: string;
+  modeLabel?: string;
+  plannedSteps?: PlannedStep[];
   error?: string;
 }
 

@@ -27,6 +27,7 @@ import { StepSpanRow } from './StepSpanRow';
 import { ResearchSourcesRail } from './ResearchSourcesRail';
 import { SpecArtifactCard } from './SpecArtifactCard';
 import { StagedDraftsReview } from './StagedDraftsReview';
+import { CampaignSendControls } from './CampaignSendControls';
 
 const TEAL = '#0F8A82';
 
@@ -203,6 +204,13 @@ export function AgencyCanvas({
           Approve / Reject / Deep-Review, right where it was streaming. */}
       {showReview && (
         <StagedDraftsReview pending={pendingDrafts} onDeepReview={onDeepReview} />
+      )}
+
+      {/* Campaign-level SAFE-SEND: one-click send of ONLY the eligible drafts plus an
+          audited per-draft override for the held ones. Gated on a finished jury with
+          real staged drafts; classify is read-only and sends nothing on its own. */}
+      {juryDone && runState?.runId && pendingDrafts.length > 0 && (
+        <CampaignSendControls runId={runState.runId} />
       )}
 
       {/* War-room grid: roster · timeline (evidence) · research. */}
