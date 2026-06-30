@@ -33,6 +33,17 @@ export interface CampaignPlan {
   tasks_per_role: Record<string, string[]>;
   assets: Array<Record<string, unknown>>;
   schedule: Record<string, string>;
+  // Operator brand/strategy notes (uploaded). Free text, persisted with the plan.
+  notes?: string;
+  // Interview-gathered run parameters (Agency-page scoping gate). Optional because a
+  // plan starts empty and the supervisor interview fills them in before a run arms.
+  output_count?: number;
+  action_type?: string;
+  lead_count?: number;
+  tone?: string;
+  campaign_type?: string;
+  deep_research?: boolean | null;
+  drafts_only?: boolean | null;
 }
 
 export function emptyPlan(): CampaignPlan {

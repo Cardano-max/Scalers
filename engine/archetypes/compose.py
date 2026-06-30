@@ -51,6 +51,14 @@ class CampaignState(BaseModel):
     brief: str = ""
     strategy_text: str = ""
     research_text: str = ""
+    # Operator-chosen run parameters carried in from the interview-gated plan.
+    # ``force_research`` turns the B2 web-research node ON even for an archetype that
+    # toggles it off by default (the operator answered "deep research: yes"); the
+    # router shape is untouched — the compose conditional edge just selects 'research'.
+    # ``output_count`` sizes the draft fan-out (produce exactly N drafts, capped) so a
+    # plan that asks for 10 drafts gets 10, not the per-channel default.
+    force_research: bool = False
+    output_count: int = 0
     # Per-worker channel, set on the Send payload for a draft_one worker. Workers
     # never write it back, so there is no concurrent-write conflict at fan-in.
     channel: str = ""
@@ -79,39 +87,65 @@ def _record_run(team_store, *, campaign_id, run_id, role, model, inp, out) -> No
 def _plan_node(state: CampaignState) -> dict[str, Any]:
     spec = registry.get(state.archetype_id)
     path = router.enabled_path(spec)
+    # When the operator forced deep research on a B2-off archetype, reflect the real
+    # executed path (plan -> research -> …) in the log so it matches what runs.
+    if getattr(state, "force_research", False) and "research" not in path:
+        path = [path[0], "research", *path[1:]]
     return {"step_log": [f"plan[{spec.id}]: {' -> '.join(path)}"]}
 
 
 def _make_research_node(team_store, dsn):
     def _research_node(state: CampaignState) -> dict[str, Any]:
-        """REAL research pipeline; honest-empty (no fabrication) when no provider key."""
+        """REAL research pipeline; honest-empty (no fabrication) when no provider key.
+
+        ALWAYS records a ``researcher`` agent_run — on success it carries the real
+        cited ``sources`` ([{url,title,snippet}] verbatim from the provider) so the
+        agency rail can show which URLs were used; on a degrade/failure it records an
+        honest ``degraded`` run with the real reason (never a fabricated source, and
+        never a SILENT skip that would leave the UI stuck 'queued'). The only time NO
+        researcher run is written is when this node is not visited at all — which the
+        UI reads as 'research not required for this campaign'."""
         from cells.base import DEFAULT_MODEL
+
+        # ``map_market`` is the demand/pain/angle research intent (research.adapter
+        # `Intent` is a Literal — its members are map_market / find_communities /
+        # competitor_creatives; there is NO `DEMAND`, so the prior `Intent.DEMAND`
+        # raised AttributeError and silently degraded EVERY research run before it
+        # ever reached Firecrawl. Use the real intent so the live provider is called.
+        inp = {"intent": "map_market", "tenant": state.tenant_id}
         try:
-            from research.adapter import Intent, ResearchQuery
+            from research.adapter import ResearchQuery
             from research.pipeline import gather_and_persist, live_registry
             from research.router import ResearchRouter
 
             reg = live_registry()  # firecrawl/exa enabled only when key present
             r = ResearchRouter(list(reg.values()))
             query = ResearchQuery(
-                intent=Intent.DEMAND, niche="tattoo studio", tenant_id=state.tenant_id,
+                intent="map_market", niche="tattoo studio", tenant_id=state.tenant_id,
             )
             result, ids = gather_and_persist(
                 r, query, run_id=state.run_id, tenant_id=state.tenant_id, dsn=dsn,
             )
-            cited = list(getattr(result, "sources_cited", []) or [])
-            text = "\n".join(
-                f"- {s.get('title') or s.get('url')}" for s in (dict(x) for x in cited)
-            )
+            cited = [dict(x) for x in (getattr(result, "sources_cited", []) or [])]
+            # Verbatim provider hits the rail renders (real URLs only — drop urlless).
+            sources = [
+                {"url": s.get("url"), "title": s.get("title"), "snippet": s.get("snippet")}
+                for s in cited
+                if s.get("url")
+            ][:8]
+            text = "\n".join(f"- {s.get('title') or s.get('url')}" for s in cited)
             note = (f"research: {len(cited)} cited source(s), {len(ids)} persisted"
                     if cited else
-                    "research: no live provider key -> honest-empty (KB-only); 0 citations")
+                    "research: ran, no live citations returned (keyless/no hits); 0 citations, no fabrication")
             _record_run(team_store, campaign_id=state.campaign_id, run_id=state.run_id,
-                        role="researcher", model=DEFAULT_MODEL,
-                        inp={"intent": "demand", "tenant": state.tenant_id},
-                        out={"cited": len(cited), "persisted": len(ids)})
+                        role="researcher", model=DEFAULT_MODEL, inp=inp,
+                        out={"cited": len(cited), "persisted": len(ids), "sources": sources})
             return {"research_text": text, "step_log": [note]}
-        except Exception as exc:  # never fabricate; record the honest degrade
+        except Exception as exc:  # never fabricate, never silently skip: record honest failure
+            _record_run(team_store, campaign_id=state.campaign_id, run_id=state.run_id,
+                        role="researcher", model=DEFAULT_MODEL, inp=inp,
+                        out={"cited": 0, "persisted": 0, "sources": [],
+                             "degraded": True, "error": f"{type(exc).__name__}: {exc}"})
             return {"step_log": [f"research: degraded ({type(exc).__name__}); 0 citations, no fabrication"]}
 
     return _research_node
@@ -137,30 +171,47 @@ def _make_strategy_node(team_store):
     return _strategy_node
 
 
+# A hard ceiling on how many drafts one run can fan out, independent of the plan, so
+# an absurd interview answer ("make 5000 emails") can never spawn a runaway of real
+# model calls. The interview-chosen ``output_count`` is honored up to this cap.
+_OUTPUT_HARD_CAP = 12
+
+
+def _planned_channels(state: CampaignState) -> list[str]:
+    """The ordered channel list the draft fan-out will actually produce.
+
+    Default (no ``output_count``): one draft per spec channel, capped at fanout_cap —
+    the original behavior. With ``output_count`` set (the operator asked for N drafts
+    in the interview): exactly N drafts, round-robined across the spec's channels and
+    bounded by :data:`_OUTPUT_HARD_CAP`. So "10 emails" on an email-only plan yields
+    10 email drafts; "10" across IG+email yields 5 + 5."""
+    spec = registry.get(state.archetype_id)
+    chosen = [c.value for c in spec.channels[: spec.fanout_cap]] or ["ig"]
+    n = state.output_count if (state.output_count and state.output_count > 0) else len(chosen)
+    n = max(1, min(int(n), _OUTPUT_HARD_CAP))
+    return [chosen[i % len(chosen)] for i in range(n)]
+
+
 def _draft_dispatch_node(state: CampaignState) -> dict[str, Any]:
     """Passthrough; the capped Send fan-out is the conditional edge after this."""
-    spec = registry.get(state.archetype_id)
-    chosen = spec.channels[: spec.fanout_cap]
-    return {"step_log": [f"draft_dispatch: fan-out {len(chosen)} channel(s) "
-                         f"(cap={spec.fanout_cap}): {', '.join(c.value for c in chosen)}"]}
+    chans = _planned_channels(state)
+    return {"step_log": [f"draft_dispatch: fan-out {len(chans)} draft(s): {', '.join(chans)}"]}
 
 
 def _draft_fanout(state: CampaignState):
-    """B7 fan-out: one Send per channel, HARD-capped at fanout_cap. Worker logic is
-    FIXED; only cardinality + content vary."""
+    """B7 fan-out: one Send per planned draft, HARD-capped. Worker logic is FIXED;
+    only cardinality + content vary (cardinality driven by the agreed plan)."""
     from langgraph.types import Send
 
-    spec = registry.get(state.archetype_id)
-    chosen = spec.channels[: spec.fanout_cap]
     return [
         Send("draft_one", {
             "campaign_id": state.campaign_id, "run_id": state.run_id,
             "tenant_id": state.tenant_id, "archetype_id": state.archetype_id,
             "brief": state.brief, "strategy_text": state.strategy_text,
             "research_text": state.research_text,
-            "channel": c.value,
+            "channel": channel,
         })
-        for c in chosen
+        for channel in _planned_channels(state)
     ]
 
 
@@ -308,6 +359,16 @@ def _make_queue_node(team_store):
 # --------------------------------------------------------------------------- #
 
 
+def _after_plan(state: CampaignState) -> str:
+    """Select the node after ``plan``: the spec-driven route, OR 'research' when the
+    operator forced deep research on an archetype that toggles it off. Returns only a
+    pre-declared spine node ('research' | 'strategy') — never invents topology."""
+    nxt = router.route_archetype(state, after="plan")  # 'research' or 'strategy'
+    if nxt != "research" and getattr(state, "force_research", False):
+        return "research"
+    return nxt
+
+
 def build_campaign_graph(*, team_store=None, dsn: str | None = None, checkpointer=None):
     """Compile the wired campaign spine. Shape is fixed; the spec only toggles the
     research segment + parameterizes channels/fanout_cap.
@@ -329,9 +390,12 @@ def build_campaign_graph(*, team_store=None, dsn: str | None = None, checkpointe
     b.add_node("queue", _make_queue_node(team_store))
 
     b.add_edge(START, "plan")
-    # Pure-code toggle: route past B2 research when the spec disables it.
+    # Pure-code toggle: route past B2 research when the spec disables it — UNLESS the
+    # operator explicitly requested deep research (``force_research``), in which case
+    # we select the same pre-declared 'research' node. The router's spec-driven shape
+    # is unchanged; this only flips the toggle ON when the plan asks for it.
     b.add_conditional_edges(
-        "plan", lambda s: router.route_archetype(s, after="plan"),
+        "plan", _after_plan,
         {"research": "research", "strategy": "strategy"},
     )
     b.add_edge("research", "strategy")
@@ -349,7 +413,7 @@ def build_campaign_graph(*, team_store=None, dsn: str | None = None, checkpointe
 def run_campaign(
     *, archetype_id: str, tenant_id: str, brief: str = "",
     campaign_id: str | None = None, dsn: str | None = None, persist: bool = True,
-    run_id: str | None = None,
+    run_id: str | None = None, force_research: bool = False, output_count: int = 0,
 ) -> CampaignState:
     """Classify-free direct run for a KNOWN archetype id, in-process to completion.
 
@@ -380,6 +444,7 @@ def run_campaign(
     init = CampaignState(
         campaign_id=campaign_id, run_id=run_id, tenant_id=tenant_id,
         archetype_id=archetype_id, brief=brief,
+        force_research=force_research, output_count=output_count,
     )
     final = graph.invoke(init, config={"configurable": {"thread_id": run_id}})
     return CampaignState.model_validate(final)

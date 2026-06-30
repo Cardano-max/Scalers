@@ -32,6 +32,26 @@ from typing import Any
 # explicit — not a silent guess; the summary reports which archetype actually ran.
 _DEFAULT_ARCHETYPE = "artist_spotlight"
 
+# Map an interview campaign-type answer onto a REGISTERED archetype id when one
+# exists, so a plan that says "win-back" deterministically runs the win_back spine
+# (consent gating, SMS+email) instead of a classifier guess. Types with no anchor
+# row yet (promo / event / birthday) fall through to the classifier + default.
+_TYPE_TO_ARCHETYPE = {
+    "win-back": "win_back", "win_back": "win_back", "winback": "win_back",
+    "artist-spotlight": "artist_spotlight", "artist_spotlight": "artist_spotlight",
+    "spotlight": "artist_spotlight", "holiday": "holiday",
+}
+
+
+def archetype_for_campaign_type(campaign_type: str | None) -> str | None:
+    """A registered archetype id for an interview campaign-type, or None to defer to
+    the classifier. Pure lookup — never invents a row."""
+    from archetypes import registry
+
+    key = (campaign_type or "").strip().lower()
+    aid = _TYPE_TO_ARCHETYPE.get(key)
+    return aid if aid in registry.REGISTRY else None
+
 # Cap how much of an agent's input/output we mirror into a span (matches the
 # harness span truncation budget so one row can't bloat).
 _MAX_IO = 2000
@@ -148,7 +168,8 @@ def _materialize_runs_row(
 
 def run_and_trace(
     *, brief: str, tenant_id: str, dsn: str | None = None, archetype_id: str | None = None,
-    run_id: str | None = None,
+    run_id: str | None = None, force_research: bool = False, output_count: int = 0,
+    campaign_type: str | None = None,
 ) -> dict[str, Any]:
     """Run the real, traced Phase-A campaign for ``brief`` and return a structured
     summary (NOTHING sends; all outputs are HELD/PENDING).
@@ -159,17 +180,21 @@ def run_and_trace(
     ``runs_row`` (bool: whether the Runs-UI trace row was materialized).
 
     ``run_id`` may be supplied so the async studio run endpoint knows the id up front
-    and can poll ``agent_runs`` live as each role lands.
+    and can poll ``agent_runs`` live as each role lands. ``force_research`` forces the
+    web-research node ON (deep research requested in the interview); ``output_count``
+    sizes the draft fan-out to the agreed plan; ``campaign_type`` deterministically
+    selects a matching registered archetype when one exists.
     """
     from archetypes import registry
     from archetypes.compose import run_campaign as _compose_run
 
-    aid = archetype_id or pick_archetype(brief)
+    aid = archetype_id or archetype_for_campaign_type(campaign_type) or pick_archetype(brief)
     if aid not in registry.REGISTRY:
         aid = pick_archetype(brief)
 
     state = _compose_run(
-        archetype_id=aid, tenant_id=tenant_id, brief=brief, dsn=dsn, persist=True, run_id=run_id
+        archetype_id=aid, tenant_id=tenant_id, brief=brief, dsn=dsn, persist=True,
+        run_id=run_id, force_research=force_research, output_count=output_count,
     )
 
     # Read back the per-role traces the spine just wrote (authoritative source).

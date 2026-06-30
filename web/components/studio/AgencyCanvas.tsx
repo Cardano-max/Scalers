@@ -260,7 +260,11 @@ export function AgencyCanvas({
 
         {/* Right rail: deep research + jury evidence. */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <ResearchSourcesRail sources={sources} researchRan={!!stages.find((s) => s.key === 'research')?.done} />
+          <ResearchSourcesRail
+            sources={sources}
+            researchRan={!!stages.find((s) => s.key === 'research')?.done}
+            skipped={!!stages.find((s) => s.key === 'research')?.skipped}
+          />
           {juryStage?.done && juryStage.steps.length > 0 && (
             <JuryEvidence summary={stepSummaryLine(juryStage.steps[juryStage.steps.length - 1])} />
           )}
@@ -350,6 +354,10 @@ function LaneNode({ stage }: { stage: AgencyStage }) {
           <span style={{ fontVariantNumeric: 'tabular-nums' }}>
             done{stage.countable && stage.count > 0 ? ` · ×${stage.count}` : ''}
           </span>
+        ) : stage.skipped ? (
+          <span style={{ color: 'var(--text-faint)' }} title="Not required for this campaign">
+            skipped
+          </span>
         ) : (
           'queued'
         )}
@@ -438,6 +446,8 @@ function Roster({ stages }: { stages: AgencyStage[] }) {
                   <span style={{ color: stage.accent }}>{stage.verb}…</span>
                 ) : stage.done ? (
                   'done'
+                ) : stage.skipped ? (
+                  <span style={{ color: 'var(--text-faint)' }}>skipped</span>
                 ) : (
                   'queued'
                 )}

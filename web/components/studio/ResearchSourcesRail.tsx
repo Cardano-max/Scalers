@@ -17,10 +17,14 @@ const RESEARCHER_ACCENT = '#1D6FB8';
 export function ResearchSourcesRail({
   sources,
   researchRan,
+  skipped = false,
 }: {
   sources: ResearchSource[];
   /** Whether a researcher step actually ran (drives the empty-state wording). */
   researchRan: boolean;
+  /** The run FINISHED without research — honest "not required", not a forever-queued
+   *  placeholder. Distinct from "ran but returned no citations". */
+  skipped?: boolean;
 }) {
   return (
     <section
@@ -64,9 +68,11 @@ export function ResearchSourcesRail({
       <div style={{ padding: sources.length ? '8px' : '14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
         {sources.length === 0 ? (
           <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: 'var(--text-muted)' }}>
-            {researchRan
-              ? 'The researcher ran, but no web citations are exposed in the run-state yet. Sources surface here once list_sources is included in the run JSON (or when a Firecrawl key is configured). Nothing is fabricated to fill this in.'
-              : 'No deep-research step has run yet. When the strategist commissions web research, the cited sources (domain, title, URL) appear here — real citations only.'}
+            {skipped
+              ? 'Deep Research skipped: not required for this campaign. (Enable it in the interview to research the web before drafting.)'
+              : researchRan
+                ? 'The researcher ran but returned no usable web citations (no Firecrawl key, or no hits). Real sources surface here when the live provider returns them — nothing is fabricated to fill this in.'
+                : 'No deep-research step has run yet. When deep research is requested, the cited sources (domain, title, URL) appear here — real citations only.'}
           </p>
         ) : (
           sources.map((s, i) => (

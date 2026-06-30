@@ -27,6 +27,9 @@ export interface AgencyStage {
   done: boolean;
   /** The single earliest expected stage with no landed step, while running. */
   active: boolean;
+  /** Research only: the run FINISHED without a researcher step — honestly "not
+   *  required for this campaign" rather than a forever-"queued" placeholder. */
+  skipped: boolean;
   /** ISO createdAt of this stage's FIRST landed step (gates the handoff edge draw). */
   firstCreatedAt: string | null;
   /** The real steps that belong to this stage, in seq order. */
@@ -62,6 +65,10 @@ export function personaForRunRole(role: string): StudioPersona {
 
 export function deriveAgencyStages(runState: RunState | null, running = false): AgencyStage[] {
   const steps = runState?.steps ?? [];
+  // A finished run with no researcher step means deep research was not required for
+  // this campaign (the operator answered "no", or the type doesn't need it) — show
+  // that honestly instead of leaving the lane "queued" forever (the old bug).
+  const completed = runState?.status === 'completed';
   const stages: AgencyStage[] = STAGE_DEFS.map((def) => {
     const mine = steps
       .filter((s) => def.roles.includes((s.role || '').toLowerCase()))
@@ -77,14 +84,27 @@ export function deriveAgencyStages(runState: RunState | null, running = false): 
       countable: def.countable,
       done: mine.length > 0,
       active: false,
+      skipped: def.key === 'research' && completed && mine.length === 0,
       firstCreatedAt,
       steps: mine,
     };
   });
 
   if (running) {
-    // The active stage is the earliest expected stage that has not landed a step.
-    const next = stages.find((s) => !s.done);
+    // Index of the last stage that has actually landed a step.
+    let lastLanded = -1;
+    stages.forEach((s, i) => {
+      if (s.done) lastLanded = i;
+    });
+    // A not-done stage BEFORE the last landed one was surpassed: only research is
+    // legitimately optional, so mark it skipped (e.g. strategy landed first because
+    // deep research wasn't requested) instead of showing it forever "researching".
+    for (let i = 0; i < lastLanded; i += 1) {
+      if (!stages[i].done && stages[i].key === 'research') stages[i].skipped = true;
+    }
+    // The active stage is the earliest not-done, not-skipped stage at/after the last
+    // landed step (the one currently in flight).
+    const next = stages.find((s, i) => !s.done && !s.skipped && i >= lastLanded);
     if (next) next.active = true;
   }
 

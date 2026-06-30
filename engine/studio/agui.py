@@ -78,6 +78,19 @@ class CampaignPlan(BaseModel):
     # REAL context the host reads on every turn (see ``_plan_context``) and that the
     # run loads with the plan — not a badge. Free text, persisted with the plan.
     notes: str = ""
+    # --- interview-gathered run parameters (Agency-page scoping gate, P1a) -------- #
+    # Collected by the supervisor interview BEFORE a run may start (studio.interview).
+    # They make the run match what the operator agreed to: output_count sizes the draft
+    # fan-out (P2), deep_research forces the web-research node ON (P1b), campaign_type
+    # selects a matching archetype, and action_type / lead_count / tone / drafts_only
+    # refine the posture. Defaults mean "unset" (the interview asks for them).
+    output_count: int = 0
+    action_type: str = ""
+    lead_count: int = 0
+    tone: str = ""
+    campaign_type: str = ""
+    deep_research: bool | None = None
+    drafts_only: bool | None = None
 
 
 @dataclass
@@ -438,9 +451,19 @@ def _brief_from_plan(plan: CampaignPlan) -> str:
         f"Channels: {', '.join(plan.channels) or 'instagram, email'}"
         + (f"\nSections: {', '.join(plan.sections)}" if plan.sections else "")
     )
-    # Carry uploaded brand / strategy notes into the run brief so the deterministic
-    # spine's cells (not just the conversational host) ground in the operator's
-    # context. Bounded so a large notes file can't blow the brief out.
+    # Carry the interview-gathered framing into the run brief so the deterministic
+    # spine's cells (strategist/copywriter/critic) ground in exactly what the operator
+    # agreed to — not just the conversational host. Each line is only added when set.
+    if plan.campaign_type.strip():
+        brief += f"\nCampaign type: {plan.campaign_type.strip()}"
+    if plan.action_type.strip():
+        brief += f"\nAction: {plan.action_type.strip()}"
+    if plan.tone.strip():
+        brief += f"\nTone / brand voice: {plan.tone.strip()}"
+    if plan.output_count and plan.output_count > 0:
+        brief += f"\nDrafts requested: {plan.output_count}"
+    # Carry uploaded brand / strategy notes into the run brief too. Bounded so a large
+    # notes file can't blow the brief out.
     notes = plan.notes.strip()
     if notes:
         if len(notes) > 2000:
@@ -476,7 +499,10 @@ def _execute_campaign_sync(
     from studio.campaign_runner import run_and_trace
 
     summary = run_and_trace(
-        brief=_brief_from_plan(plan), tenant_id=tenant_id, dsn=dsn, run_id=run_id
+        brief=_brief_from_plan(plan), tenant_id=tenant_id, dsn=dsn, run_id=run_id,
+        force_research=bool(plan.deep_research),
+        output_count=plan.output_count or 0,
+        campaign_type=plan.campaign_type or None,
     )
     for ar in summary.get("agent_runs", []):
         role = str(ar.get("role") or "host")
@@ -1167,6 +1193,56 @@ def mount_studio_agui(app) -> None:
 
         data = await asyncio.to_thread(_load)
         return JSONResponse({"ok": True, "runId": run_id, **data})
+
+    @app.post("/studio/interview")
+    async def studio_interview_route(request: Request):  # noqa: ANN202
+        """The Agency-page INTERVIEW GATE (P1a). The supervisor must gather enough
+        context BEFORE a run can start — this route applies the operator's answers to
+        the session plan and returns the authoritative gate state (armed / missing /
+        next question / ready message). It is the server-side decision; the client
+        only renders it and gates the Run button on ``armed``. NOTHING is launched
+        here — arming merely UNLOCKS the existing held ``POST /studio/run`` button.
+
+        Body: ``{sessionId, fields:{field:value}}`` (or a single ``{field, value}``).
+        A POST with no fields just reads the current gate state."""
+        from fastapi.responses import JSONResponse
+
+        from studio.interview import apply_fields, interview_state
+
+        dsn = get_dsn()
+        try:
+            payload = json.loads(await request.body() or b"{}")
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        session_id = (
+            payload.get("sessionId")
+            or payload.get("threadId")
+            or request.query_params.get("session_id")
+            or "studio-default"
+        )
+        fields = payload.get("fields")
+        if not isinstance(fields, dict):
+            # accept a single {field, value} shape too
+            single = payload.get("field")
+            fields = {single: payload.get("value")} if single else {}
+
+        def _apply() -> CampaignPlan:
+            plan = _load_plan(session_id, dsn)
+            apply_fields(plan, fields)
+            if fields:  # only persist when the operator actually answered something
+                _persist_plan(dsn, session_id, plan)
+            return plan
+
+        try:
+            plan = await asyncio.to_thread(_apply)
+        except Exception as exc:
+            return JSONResponse(
+                {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500
+            )
+        state = interview_state(plan)
+        return JSONResponse({"ok": True, "plan": plan.model_dump(), **state})
 
     @app.post("/studio/upload")
     async def studio_upload_route(request: Request):  # noqa: ANN202

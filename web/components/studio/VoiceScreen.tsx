@@ -245,12 +245,14 @@ export function VoiceScreen() {
           padding: 16,
         }}
       >
+        {/* No bare Run button here: on the Voice tab the run starts through the voice
+            interview + server-side GO-gate (request_orchestration). The canvas only
+            WATCHES that held run — it never auto-runs blindly. */}
         <AgencyCanvas
           runState={studio.runState}
           running={studio.runningCampaign}
           connected={connected}
           compact
-          onRunCampaign={connected ? studio.runCampaign : undefined}
           onOpenReview={() => navigate('review')}
           onDeepReview={(actionId) => navigate('review', actionId)}
         />
