@@ -19,6 +19,7 @@ import type { RunState, RunStep } from '@/lib/studio/run-trace';
 import { StudioChatPanel } from './StudioChatPanel';
 import { LiveProgressPanel } from './LiveProgressPanel';
 import { PlanDocPanel } from './PlanDocPanel';
+import { VoiceConsole } from './VoiceConsole';
 
 interface LiveCampaignStudioProps {
   aguiUrl: string;
@@ -190,6 +191,16 @@ export function LiveCampaignStudio({ aguiUrl, graphqlUrl, sessionId }: LiveCampa
           Backend error: {studio.error}
         </div>
       )}
+
+      <VoiceConsole
+        aguiUrl={aguiUrl}
+        sessionId={sessionId}
+        disabled={!connected}
+        onPlan={(p) => {
+          // Reflect the server-persisted voice plan edit into the shared plan panel.
+          studio.setPlanField(p as Partial<typeof studio.plan>);
+        }}
+      />
 
       <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 14 }}>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 14, minHeight: 0 }}>
