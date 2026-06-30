@@ -9,11 +9,11 @@ import type { RunStep } from '../run-trace';
  */
 function steps(): RunStep[] {
   return [
-    { seq: 0, role: 'strategist', model: null, input: { goal: 'win-back' }, output: { target_angle: 'warm 90-day check-in' } },
+    { seq: 0, role: 'strategist', model: null, input: { goal: 'win-back', n_leads: 10 }, output: { target_angle: 'warm 90-day check-in' } },
     { seq: 1, role: 'researcher', model: null, input: { customer_id: 'c1', name: 'Mia' }, output: { cited: 2 } },
     { seq: 2, role: 'draft', model: null, input: { customer_id: 'c1', channel: 'email' }, output: { hook: '...' } },
     { seq: 3, role: 'critic', model: null, input: { customer_id: 'c1', channel: 'email' }, output: { verdict: 'ship' } },
-    { seq: 4, role: 'jury', model: null, input: { n_leads: 1 }, output: { note: '1 draft staged HELD' } },
+    { seq: 4, role: 'jury', model: null, input: { n_leads: 10 }, output: { note: '1 draft staged HELD' } },
   ];
 }
 
@@ -28,6 +28,28 @@ describe('runNarration', () => {
     expect(byRole.draft).toContain('email');
     expect(byRole.critic).toContain('ship');
     expect(lines.every((l) => l.failed === false)).toBe(true);
+  });
+
+  it('carries the REAL "X of N" progress on per-lead roles, none on strategist/jury', () => {
+    const byRole = Object.fromEntries(runNarration(steps()).map((l) => [l.role, l.line]));
+    expect(byRole.researcher).toContain('1 of 10'); // N = real recorded n_leads
+    expect(byRole.draft).toContain('1 of 10');
+    expect(byRole.critic).toContain('1 of 10');
+    expect(byRole.strategist).not.toContain('of 10');
+    expect(byRole.jury).not.toContain('of 10');
+  });
+
+  it('counts X up per role and drops "X of N" when the total is genuinely unknown', () => {
+    const withTotal = runNarration([
+      { seq: 0, role: 'strategist', model: null, input: { n_leads: 2 }, output: { target_angle: 'a' } },
+      { seq: 1, role: 'researcher', model: null, input: { name: 'Mia' }, output: { cited: 1 } },
+      { seq: 2, role: 'researcher', model: null, input: { name: 'Sam' }, output: { cited: 1 } },
+    ]);
+    expect(withTotal[1].line).toContain('1 of 2');
+    expect(withTotal[2].line).toContain('2 of 2');
+    // No recorded total (content campaign) -> no fabricated "X of N".
+    const noTotal = runNarration([{ seq: 0, role: 'draft', model: null, input: { channel: 'instagram' }, output: { hook: 'x' } }]);
+    expect(noTotal[0].line).not.toMatch(/\d+ of \d+/);
   });
 
   it('narrates failed steps honestly as snags', () => {

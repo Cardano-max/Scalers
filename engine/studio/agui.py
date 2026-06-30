@@ -652,15 +652,39 @@ def _lead_label(step: dict[str, Any]) -> str:
     return str(name).strip() if name else ""
 
 
-def _narration_line(step: dict[str, Any]) -> str:
+# Per-lead roles whose narration carries an "X of N" progress tag when the planned
+# total N is genuinely known. Strategist / jury are one-shot and get no tag.
+_PER_LEAD_ROLES = ("researcher", "draft", "critic")
+
+
+def _planned_lead_total(steps: list[dict[str, Any]]) -> int:
+    """The REAL planned lead count for this run, read straight from the recorded steps
+    (the strategist / jury steps record ``n_leads`` — the actual lead count the run
+    operated on). 0 when no step carries it, so the "X of N" framing is dropped only
+    when the total is genuinely unknown — never fabricated."""
+    for s in steps:
+        if not isinstance(s, dict):
+            continue
+        inp = s.get("input") if isinstance(s.get("input"), dict) else {}
+        n = inp.get("n_leads")
+        if isinstance(n, bool):  # guard: bool is an int subclass
+            continue
+        if isinstance(n, int) and n > 0:
+            return n
+    return 0
+
+
+def _narration_line(step: dict[str, Any], progress: str = "") -> str:
     """The host-voice narration for ONE recorded step. Pure: reads only the step's own
-    role / input / output, so the line can never describe a stage that did not run."""
+    role / input / output (plus an already-computed REAL ``progress`` tag like "3 of
+    10"), so the line can never describe a stage that did not run."""
     role = str(step.get("role") or "").strip().lower()
     inp = step.get("input") if isinstance(step.get("input"), dict) else {}
     out = step.get("output") if isinstance(step.get("output"), dict) else {}
     failed = _step_failed(step.get("output"))
     lead = _lead_label(step)
     channel = str(inp.get("channel") or "").strip()
+    prog = f" ({progress})" if progress else ""
 
     if role == "strategist":
         if failed:
@@ -671,22 +695,23 @@ def _narration_line(step: dict[str, Any]) -> str:
     if role == "researcher":
         who = lead or "this lead"
         if failed:
-            return f"Research on {who} ran into trouble — continuing from what's already on file."
+            return f"Research on {who}{prog} ran into trouble — continuing from what's already on file."
         if out.get("degraded"):
-            return f"Researching {who} — no fresh web sources came back, so drafting from their record."
-        return f"Researching {who} — pulling their history and profile."
+            return f"Researching {who}{prog} — no fresh web sources came back, so drafting from their record."
+        return f"Researching {who}{prog} — pulling their history and profile."
     if role == "draft":
         ch = f"{channel} " if channel else ""
-        return f"The copywriter is drafting a personalized {ch}message for {lead}." if lead else \
-            f"The copywriter is drafting a personalized {ch}message."
+        base = f"The copywriter is drafting a personalized {ch}message for {lead}" if lead else \
+            f"The copywriter is drafting a personalized {ch}message"
+        return f"{base}{prog}."
     if role == "critic":
         ch = f"{channel} " if channel else ""
-        if failed:
-            return f"The critic couldn't finish its review on the {ch}draft — flagged for you to check."
-        verdict = str(out.get("verdict") or "").strip()
         who = f" for {lead}" if lead else ""
-        return f"The critic reviewed the {ch}draft{who} — verdict: {verdict}." if verdict else \
-            f"The critic is reviewing the {ch}draft{who}."
+        if failed:
+            return f"The critic couldn't finish its review on the {ch}draft{who}{prog} — flagged for you to check."
+        verdict = str(out.get("verdict") or "").strip()
+        return f"The critic reviewed the {ch}draft{who}{prog} — verdict: {verdict}." if verdict else \
+            f"The critic is reviewing the {ch}draft{who}{prog}."
     if role == "jury":
         note = str(out.get("note") or "").strip()
         return f"Wrapping up — {note}" if note else \
@@ -700,15 +725,28 @@ def run_narration(steps: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     """Project the run's REAL recorded steps into host-voice narration — one entry per
     recorded ``agent_run``, in order. Pure + DB-free (takes the already-loaded steps),
     so it is unit-testable and can never narrate a stage that did not actually run.
+
+    Per-lead steps (researcher / draft / critic) carry an "X of N" progress tag when
+    the planned total N is genuinely known from the run data: N is the real ``n_leads``
+    the strategist / jury recorded, and X is the real count of that role's steps done so
+    far. The tag is omitted only when N is genuinely unknown — never invented.
+
     Each entry: ``{seq, role, line, failed}``."""
+    steps = [s for s in (steps or []) if isinstance(s, dict)]
+    total = _planned_lead_total(steps)
+    role_done: dict[str, int] = {}
     out: list[dict[str, Any]] = []
-    for i, step in enumerate(steps or []):
-        if not isinstance(step, dict):
-            continue
+    for i, step in enumerate(steps):
+        role = str(step.get("role") or "").strip().lower()
+        progress = ""
+        if role in _PER_LEAD_ROLES:
+            role_done[role] = role_done.get(role, 0) + 1
+            if total:
+                progress = f"{role_done[role]} of {total}"
         out.append({
             "seq": step.get("seq", i),
             "role": str(step.get("role") or ""),
-            "line": _narration_line(step),
+            "line": _narration_line(step, progress),
             "failed": _step_failed(step.get("output")),
         })
     return out

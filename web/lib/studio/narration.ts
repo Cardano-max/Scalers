@@ -35,14 +35,30 @@ function leadLabel(input: Record<string, unknown>): string {
   return name ? String(name).trim() : '';
 }
 
-/** The host-voice narration for ONE recorded step (pure — reads only that step). */
-export function narrationLine(step: RunStep): string {
+// Per-lead roles whose narration carries an "X of N" progress tag when N is known.
+const PER_LEAD_ROLES = new Set(['researcher', 'draft', 'critic']);
+
+/** The REAL planned lead count for this run, read from the recorded steps (the
+ *  strategist / jury record n_leads). 0 when none carries it, so "X of N" is dropped
+ *  only when the total is genuinely unknown — never fabricated. */
+function plannedLeadTotal(steps: RunStep[]): number {
+  for (const s of steps) {
+    const n = asRecord(s.input).n_leads;
+    if (typeof n === 'number' && Number.isInteger(n) && n > 0) return n;
+  }
+  return 0;
+}
+
+/** The host-voice narration for ONE recorded step (pure — reads only that step plus an
+ *  already-computed REAL `progress` tag like "3 of 10"). */
+export function narrationLine(step: RunStep, progress = ''): string {
   const role = String(step.role ?? '').trim().toLowerCase();
   const input = asRecord(step.input);
   const output = asRecord(step.output);
   const failed = stepFailed(step.output);
   const lead = leadLabel(input);
   const channel = String(input.channel ?? '').trim();
+  const prog = progress ? ` (${progress})` : '';
 
   if (role === 'strategist') {
     if (failed) return 'The strategist hit a snag setting the angle, so the team is drafting straight from your goal.';
@@ -51,22 +67,25 @@ export function narrationLine(step: RunStep): string {
   }
   if (role === 'researcher') {
     const who = lead || 'this lead';
-    if (failed) return `Research on ${who} ran into trouble — continuing from what's already on file.`;
-    if (output.degraded) return `Researching ${who} — no fresh web sources came back, so drafting from their record.`;
-    return `Researching ${who} — pulling their history and profile.`;
+    if (failed) return `Research on ${who}${prog} ran into trouble — continuing from what's already on file.`;
+    if (output.degraded) return `Researching ${who}${prog} — no fresh web sources came back, so drafting from their record.`;
+    return `Researching ${who}${prog} — pulling their history and profile.`;
   }
   if (role === 'draft') {
     const ch = channel ? `${channel} ` : '';
-    return lead
-      ? `The copywriter is drafting a personalized ${ch}message for ${lead}.`
-      : `The copywriter is drafting a personalized ${ch}message.`;
+    const base = lead
+      ? `The copywriter is drafting a personalized ${ch}message for ${lead}`
+      : `The copywriter is drafting a personalized ${ch}message`;
+    return `${base}${prog}.`;
   }
   if (role === 'critic') {
     const ch = channel ? `${channel} ` : '';
-    if (failed) return `The critic couldn't finish its review on the ${ch}draft — flagged for you to check.`;
-    const verdict = String(output.verdict ?? '').trim();
     const who = lead ? ` for ${lead}` : '';
-    return verdict ? `The critic reviewed the ${ch}draft${who} — verdict: ${verdict}.` : `The critic is reviewing the ${ch}draft${who}.`;
+    if (failed) return `The critic couldn't finish its review on the ${ch}draft${who}${prog} — flagged for you to check.`;
+    const verdict = String(output.verdict ?? '').trim();
+    return verdict
+      ? `The critic reviewed the ${ch}draft${who}${prog} — verdict: ${verdict}.`
+      : `The critic is reviewing the ${ch}draft${who}${prog}.`;
   }
   if (role === 'jury') {
     const note = String(output.note ?? '').trim();
@@ -76,12 +95,25 @@ export function narrationLine(step: RunStep): string {
   return `${label.charAt(0).toUpperCase()}${label.slice(1)} step ${failed ? 'failed' : 'completed'}.`;
 }
 
-/** Project the run's REAL steps into host-voice narration — one line per recorded step. */
+/** Project the run's REAL steps into host-voice narration — one line per recorded step.
+ *  Per-lead steps carry an "X of N" tag when the planned total N is genuinely known
+ *  from the run data (the recorded n_leads); X is the real count of that role done so far. */
 export function runNarration(steps: RunStep[] | null | undefined): NarrationLine[] {
-  return (steps ?? []).map((step, i) => ({
-    seq: typeof step.seq === 'number' ? step.seq : i,
-    role: String(step.role ?? ''),
-    line: narrationLine(step),
-    failed: stepFailed(step.output),
-  }));
+  const list = (steps ?? []).filter((s): s is RunStep => !!s && typeof s === 'object');
+  const total = plannedLeadTotal(list);
+  const roleDone: Record<string, number> = {};
+  return list.map((step, i) => {
+    const role = String(step.role ?? '').trim().toLowerCase();
+    let progress = '';
+    if (PER_LEAD_ROLES.has(role)) {
+      roleDone[role] = (roleDone[role] ?? 0) + 1;
+      if (total) progress = `${roleDone[role]} of ${total}`;
+    }
+    return {
+      seq: typeof step.seq === 'number' ? step.seq : i,
+      role: String(step.role ?? ''),
+      line: narrationLine(step, progress),
+      failed: stepFailed(step.output),
+    };
+  });
 }
