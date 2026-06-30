@@ -17,7 +17,6 @@ than crashing the server, so read-only queries keep working.
 from __future__ import annotations
 
 import importlib
-import os
 from typing import Any, Callable
 
 from . import mappers
@@ -87,6 +86,26 @@ def _kind_for_node(node_name: str) -> str:
     return "tool"
 
 
+def _step_text(value: Any) -> str | None:
+    """Coerce a step's input/output JSONB value to text for the GraphQL field.
+
+    Steps store input/output as already-truncated JSON strings, but a value could
+    also arrive as a dict/list (e.g. a pre-stringified step). Returns ``None`` for a
+    genuinely-absent value (honest-null, never fabricated) and a JSON string for a
+    structured one so the per-agent trace view always gets renderable text.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    try:
+        import json
+
+        return json.dumps(value, default=str)
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def _build_span(step: dict[str, Any]) -> Span:
     """Convert a step JSONB dict to a Span (one of: tool|llm)."""
     node_name = step.get("node") or step.get("cell") or ""
@@ -152,6 +171,15 @@ def _build_run_events(steps_jsonb: list[dict[str, Any]] | None) -> list[RunEvent
                 action_id=top_step.get("action_id"),
                 run_id=top_step.get("run_id"),
                 decision_id=top_step.get("decision_id"),
+                # Per-agent trace detail straight from the step JSONB (no synthesis):
+                # node (role), the real model pin, and the captured input/output, so
+                # the Runs UI can render what each agent actually thought. None stays
+                # None — an uncaptured value is never fabricated.
+                node=top_step.get("node"),
+                model=top_step.get("model"),
+                input=_step_text(top_step.get("input")),
+                output=_step_text(top_step.get("output")),
+                status=status,
             )
         )
 
@@ -608,11 +636,11 @@ def _build_run(conn: Any, row: dict[str, Any]) -> Run:
     # v2 observability: build events from steps JSONB
     events = _build_run_events(row.get("steps"))
 
-    # Compute trace_url: if Langfuse is configured, construct the URL; else None
-    trace_url: str | None = None
-    if observability.is_configured():
-        langfuse_host = os.environ.get("LANGFUSE_HOST", observability._DEFAULT_HOST)
-        trace_url = f"{langfuse_host.rstrip('/')}/traces/{row['run_id']}"
+    # Compute trace_url: if Langfuse is configured, build a best-effort deep link
+    # to the run's trace; else None (so the UI shows no dead link). Centralized in
+    # observability.trace_url so it honors LANGFUSE_HOST *or* LANGFUSE_BASE_URL and
+    # points at the same trace id mirror_run emits under the v3/v4 SDK.
+    trace_url: str | None = observability.trace_url(row["run_id"])
 
     return Run(
         id=row["run_id"],
