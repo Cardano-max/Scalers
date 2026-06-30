@@ -45,6 +45,38 @@ const STEP_LABEL: Record<string, { label: string; agent: AgentStep['agent'] }> =
   stage_publish: { label: 'Stage publish — approval required', agent: 'SAFETY' },
 };
 
+/** Persisted thread roles that represent a completed PIPELINE step (vs the
+ *  operator or the conversational host). Used to rebuild the live-progress strip
+ *  from history so a finished run survives a tab switch. */
+const PIPELINE_STEP_ROLES = new Set<ChatTurn['role']>([
+  'RESEARCHER',
+  'STRATEGIST',
+  'COPYWRITER',
+  'CRITIC',
+  'JURY',
+]);
+
+/**
+ * Re-derive the live-progress steps from a persisted thread. Each persisted
+ * agent-role trace (strategist, draft, critic, jury, …) becomes a DONE step so
+ * returning to the Command tab shows the run's progress again instead of an empty
+ * panel — the steps array is otherwise in-memory only and lost on unmount.
+ * Operator and conversational-host turns are not pipeline steps.
+ */
+export function deriveStepsFromHistory(turns: ChatTurn[]): AgentStep[] {
+  const steps: AgentStep[] = [];
+  for (const t of turns) {
+    if (!PIPELINE_STEP_ROLES.has(t.role)) continue;
+    steps.push({
+      id: `hist_${t.id}`,
+      agent: t.role,
+      label: t.label || t.role,
+      status: 'done',
+    });
+  }
+  return steps;
+}
+
 export interface UseStudioAgui {
   connected: boolean | null;
   streamStatus: StudioStreamStatus;
@@ -91,25 +123,33 @@ export function useStudioAgui(
   const planRef = useRef<CampaignPlan>(plan);
   planRef.current = plan;
 
-  // Probe reachability + restore persisted transcript on mount.
+  // Restore the persisted thread + run state on mount, THEN probe reachability.
+  //
+  // The Command tab UNMOUNTS when the operator navigates away (AppShell mounts only
+  // the active screen), so on return this effect is the only thing that rebuilds the
+  // studio. The persisted transcript is a plain read — it must NOT be gated on the
+  // slow, side-effectful AG-UI probe, or a flaky/slow probe leaves the operator on a
+  // blank "no messages" studio even though the whole run is on disk. So we restore
+  // the conversation AND the live-progress steps FIRST, then probe purely for the
+  // connected/preview banner and to (re-)enable send/run.
   useEffect(() => {
     const ctl = new AbortController();
     let cancelled = false;
     (async () => {
-      const ok = await probeAgui(aguiUrl, ctl.signal);
-      if (cancelled) return;
-      setConnected(ok);
-      if (!ok) {
-        setStreamStatus('preview');
-        return;
-      }
-      setStreamStatus('open');
       try {
         const history = await fetchStudioHistory(graphqlUrl, sessionId, ctl.signal);
-        if (!cancelled) setTurns(history);
+        if (!cancelled && history.length > 0) {
+          setTurns(history);
+          // Only seed steps from history if a live run hasn't already populated them.
+          setSteps((prev) => (prev.length === 0 ? deriveStepsFromHistory(history) : prev));
+        }
       } catch {
         /* history is best-effort; an empty thread is still honest */
       }
+      const ok = await probeAgui(aguiUrl, ctl.signal);
+      if (cancelled) return;
+      setConnected(ok);
+      setStreamStatus(ok ? 'open' : 'preview');
     })();
     return () => {
       cancelled = true;
