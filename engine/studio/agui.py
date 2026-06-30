@@ -442,6 +442,51 @@ async def revise_plan(
 
 
 @studio_agent.tool
+async def describe_brand_voice(ctx: RunContext[StudioDeps]) -> str:
+    """Return the studio's REAL, currently-loaded brand voice so you can tell the
+    operator EXACTLY what voice you write in — tone, structure, preferred + banned
+    lexicon, and the approved-claims allow-list — resolved from the tenant pack
+    (the same source the copywriter + critic cells write/judge in). Call this whenever
+    the operator asks what brand voice you are using; never claim you don't know it.
+    Honest: if the pack genuinely cannot resolve, say so and name the tenant."""
+
+    def _resolve() -> tuple[str, tuple[str, ...], str]:
+        from studio.customer_research import _DEFAULT_TENANT, resolve_brand_voice
+
+        # Prefer the run's tenant; fall back to the configured default tenant so the
+        # real voice surfaces even when deps carry a placeholder tenant.
+        tid = ctx.deps.tenant_id
+        voice, claims = resolve_brand_voice(tid)
+        if not voice.strip():
+            tid = _DEFAULT_TENANT
+            voice, claims = resolve_brand_voice(tid)
+        return voice, claims, tid
+
+    voice, claims, tid = await asyncio.to_thread(_resolve)
+    if not voice.strip():
+        return (
+            f"BRAND VOICE: the brand-voice pack for tenant '{tid}' could not be "
+            "resolved right now, so I cannot quote the exact dimensions. It is "
+            "configured per pack and the copywriter cell loads it at draft time — "
+            "I do have a brand voice; I just can't render its text this moment."
+        )
+    parts = [
+        f"Brand voice in use (tenant '{tid}'), resolved from the tenant pack — this "
+        "is what the copywriter writes in and the critic judges against:",
+        "",
+        voice.strip(),
+    ]
+    if claims:
+        parts += [
+            "",
+            "Approved claims (the ONLY factual/credential/offer claims I may make; "
+            "anything else is blocked as off-voice):",
+            *(f"- {c}" for c in claims),
+        ]
+    return "\n".join(parts)
+
+
+@studio_agent.tool
 async def brainstorm_with_roles(ctx: RunContext[StudioDeps]) -> str:
     """Run the REAL role cells over the current plan: funnel-architect → copywriter
     → independent critic → Opus jury. Each contribution is logged to
@@ -1694,3 +1739,26 @@ def mount_studio_agui(app) -> None:
                 "them when planning and running. Nothing was sent.",
             }
         )
+
+    @app.get("/studio/action/{action_id}/evidence")
+    async def studio_action_evidence_route(action_id: str):  # noqa: ANN202
+        """The REAL, real-only provenance for ONE staged draft: the Brand Voice it
+        wrote in, the Customer/CSV facts it used, Lead Memory, Internal Notes, the
+        Research Source URLs it cited, Tool Calls, the producing agent + reasoning,
+        and the Critic / Jury verdicts — assembled by joining the draft's own run_id
+        (and lead) against agent_runs / research_sources / memories. Only genuinely
+        used sources appear; an absent category is omitted. 404 if no such action."""
+        from fastapi.responses import JSONResponse
+
+        from studio.evidence import build_action_evidence
+
+        dsn = get_dsn()
+        try:
+            ev = await asyncio.to_thread(build_action_evidence, action_id, dsn=dsn)
+        except Exception as exc:
+            return JSONResponse(
+                {"error": f"{type(exc).__name__}: {exc}"}, status_code=500
+            )
+        if ev is None:
+            return JSONResponse({"error": "no such action"}, status_code=404)
+        return JSONResponse(ev.model_dump(by_alias=True))

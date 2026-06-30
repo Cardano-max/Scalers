@@ -38,6 +38,38 @@ from archetypes import registry, router
 from archetypes.spec import ArchetypeSpec, StepKind
 
 
+def _brand_voice_block(tenant_id: str) -> str:
+    """The tenant's REAL resolved brand voice (tone / structure / lexicon / bans) +
+    the approved-claims allow-list, formatted for a cell prompt so the content draft
+    is WRITTEN in it and the critic JUDGES against it.
+
+    Resolved from the per-tenant pack via ``resolve_brand_voice`` (the same source the
+    supervisor instruction + the per-lead copywriter use). Degrades to ``""`` honestly
+    when the pack / dimensions cannot be resolved — the cell then writes from the brief
+    alone, never a fabricated voice. Lazy import keeps the archetypes package free of a
+    studio import at module load."""
+    try:
+        from studio.customer_research import resolve_brand_voice
+
+        voice, claims = resolve_brand_voice(tenant_id)
+    except Exception:
+        return ""
+    if not voice.strip():
+        return ""
+    lines = [
+        "# BRAND VOICE — the studio's own voice; write/judge IN this voice:",
+        voice.strip(),
+    ]
+    if claims:
+        lines += [
+            "",
+            "# APPROVED CLAIMS — the ONLY factual / credential / offer claims allowed "
+            "(anything else is off-voice and must be flagged, never asserted):",
+            *(f"- {c}" for c in claims),
+        ]
+    return "\n".join(lines)
+
+
 # --------------------------------------------------------------------------- #
 # State (fan-in safe: assets carry an additive reducer for the Send workers).
 # --------------------------------------------------------------------------- #
@@ -228,10 +260,21 @@ def _make_draft_one_node(team_store):
         # `channel` rides in on the Send payload; workers never write it back.
         channel = state.channel or "ig"
         cell = build_content_brief_cell()
-        prompt = (
-            f"Campaign brief: {state.brief or state.archetype_id}\n"
-            f"Strategy:\n{state.strategy_text}\n"
-            f"Produce one organic post for channel '{channel}'. Caption in the brand voice."
+        # Ground the draft in the tenant's REAL resolved brand voice (tone / lexicon /
+        # bans / approved claims) instead of merely telling the cell "in the brand
+        # voice" with no voice attached. Honest-empty when the pack can't resolve.
+        voice_block = _brand_voice_block(state.tenant_id)
+        prompt = "\n".join(
+            p for p in [
+                voice_block,
+                f"Campaign brief: {state.brief or state.archetype_id}",
+                f"Strategy:\n{state.strategy_text}",
+                f"Produce one organic post for channel '{channel}'. Write the caption "
+                "in the BRAND VOICE above" + (
+                    ", using ONLY the approved claims." if voice_block
+                    else " for this studio."
+                ),
+            ] if p
         )
         brief_out = cell.run_sync(prompt)
         asset_id = f"as_{uuid.uuid4().hex[:16]}"
@@ -250,7 +293,9 @@ def _make_draft_one_node(team_store):
             )
         _record_run(team_store, campaign_id=state.campaign_id, run_id=state.run_id,
                     role="draft", model=cell.model if isinstance(cell.model, str) else str(cell.model),
-                    inp={"channel": channel}, out=brief_out.model_dump())
+                    inp={"channel": channel, "tenant_id": state.tenant_id,
+                         "brand_voice_applied": bool(voice_block)},
+                    out=brief_out.model_dump())
         return {"assets": [asset], "step_log": [f"draft[{channel}]: real caption produced"]}
 
     return _draft_one_node
@@ -262,15 +307,29 @@ def _make_critique_node(team_store):
         from cells.critic import build_critic_cell
 
         cell = build_critic_cell()
+        # Give the critic the SAME real brand voice + approved-claims the draft was
+        # written in, so "brand-voice mismatch" / "unapproved claim" are judged against
+        # the loaded voice, not the critic's generic prior. Resolved once per run.
+        voice_block = _brand_voice_block(state.tenant_id)
         crits: list[dict[str, Any]] = []
         for asset in state.assets:
             content = asset.get("content", {})
             caption = content.get("caption") or content.get("headline") or str(content)
-            prompt = (
-                f"Campaign objective: {state.strategy_text or state.archetype_id}\n"
-                f"Channel: {asset.get('channel')}\n"
-                f"ASSET TO JUDGE (caption):\n{caption}\n"
-                f"Headline: {content.get('headline','')}\nCTA: {content.get('call_to_action','')}"
+            prompt = "\n".join(
+                p for p in [
+                    voice_block,
+                    f"Campaign objective: {state.strategy_text or state.archetype_id}",
+                    f"Channel: {asset.get('channel')}",
+                    f"ASSET TO JUDGE (caption):\n{caption}",
+                    f"Headline: {content.get('headline','')}",
+                    f"CTA: {content.get('call_to_action','')}",
+                    (
+                        "Judge whether the asset is IN the brand voice above and uses "
+                        "ONLY the approved claims; flag any off-voice phrase, banned "
+                        "lexicon, or unapproved claim as a concrete issue."
+                        if voice_block else ""
+                    ),
+                ] if p
             )
             crit = cell.run_sync(prompt)
             row = {"asset_id": asset["id"], "verdict": crit.verdict.value,
