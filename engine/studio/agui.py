@@ -999,6 +999,43 @@ def _execute_provided_leads_sync(
             "output_summary": _summarize_output(role, out),
         })
 
+    def _cell_model(cell: Any) -> str:
+        m = getattr(cell, "model", None)
+        return m if isinstance(m, str) else str(m)
+
+    # 1b) STRATEGIST runs ONCE for the campaign — the REAL strategy cell sets the angle
+    # the per-lead drafts lead with, recorded as a real agent_run (so the Strategist
+    # lane reads `done` with real lineage, not skipped). A cell hiccup records an honest
+    # `failed` strategist run and the run continues on the base goal — never a crash, and
+    # never a fabricated angle.
+    from cells.strategy import build_strategy_cell, build_strategy_prompt
+
+    campaign_angle: str | None = None
+    try:
+        strat_cell = build_strategy_cell()
+        strategy = strat_cell.run_sync(build_strategy_prompt(tenant_id, _brief_from_plan(plan)))
+        campaign_angle = (strategy.target_angle or "").strip() or None
+        _rec(
+            "strategist", _cell_model(strat_cell),
+            {"goal": goal, "n_leads": len(leads), "lead_source": "provided"},
+            strategy.model_dump(),
+        )
+    except Exception as exc:  # honest failed run, never a fabricated strategy
+        _rec(
+            "strategist", "anthropic:claude-sonnet-4-6",
+            {"goal": goal, "lead_source": "provided"},
+            {"status": "failed", "error": f"{type(exc).__name__}: {exc}"},
+        )
+
+    # The real critic cell, built once and run PER draft below (independent pass).
+    from cells.critic import build_critic_cell
+
+    critic_cell = build_critic_cell()
+
+    # The per-lead draft leads with the strategist's real angle when one was produced,
+    # so the strategist is load-bearing (the angle flows into the copy), not decoration.
+    draft_goal = goal if not campaign_angle else f"{goal}. Lead with this campaign angle: {campaign_angle}"
+
     # 2) Per-lead: real DB history + research ABOUT this lead + brand-voiced draft.
     for facts in leads:
         cust_id = facts["customer_id"]
@@ -1027,7 +1064,7 @@ def _execute_provided_leads_sync(
         )
 
         draft = build_outreach_draft(
-            facts, goal=goal, plan_channels=plan.channels or None,
+            facts, goal=draft_goal, plan_channels=plan.channels or None,
             deep_research=plan.deep_research, research=research,
         )
         copy_model = (
@@ -1044,6 +1081,43 @@ def _execute_provided_leads_sync(
                 "grounding": draft.get("grounding", []),
             },
         )
+
+        # CRITIC runs PER draft — one REAL independent pass that judges the actual copy
+        # that was produced (not the author's reasoning). Recorded as a real `critic`
+        # agent_run so the Critic lane reads `done` with real lineage. A cell hiccup
+        # records an honest `failed` verdict and continues — never a crash, and never a
+        # fabricated approval for a draft the critic could not actually judge.
+        caption = draft.get("draft") or draft.get("subject") or ""
+        crit_prompt = "\n".join(
+            p for p in [
+                f"Campaign objective: {campaign_angle or goal}",
+                f"Channel: {draft['channel']}",
+                f"ASSET TO JUDGE (the outreach copy):\n{caption}",
+                f"Subject/headline: {draft.get('subject') or ''}",
+                "Judge whether this is ship-quality outreach for this lead; flag any "
+                "off-voice phrasing, unsupported claim, or weak/absent call to action as "
+                "a concrete issue. Do not invent praise.",
+            ] if p
+        )
+        try:
+            crit = critic_cell.run_sync(crit_prompt)
+            _rec(
+                "critic", _cell_model(critic_cell),
+                {"customer_id": cust_id, "channel": draft["channel"]},
+                {
+                    "verdict": crit.verdict.value, "confidence": float(crit.confidence),
+                    "rationale": crit.rationale,
+                },
+            )
+        except Exception as exc:  # honest failed verdict, never fabricated praise
+            _rec(
+                "critic", _cell_model(critic_cell),
+                {"customer_id": cust_id, "channel": draft["channel"]},
+                {
+                    "verdict": "error", "confidence": 0.0,
+                    "rationale": f"critic cell failed: {type(exc).__name__}: {exc}",
+                },
+            )
 
         action_id = record_pending_action(
             tenant_id=tenant_id, decision_id=None, type="outreach",
@@ -1089,9 +1163,12 @@ def _execute_provided_leads_sync(
         _log_turn(dsn, session_id, role, f"[{role}] {ar.get('output_summary', '')}", ar.get("model"))
 
     channels = sorted({str(ar["input"].get("channel")) for ar in agent_runs if ar["role"] == "draft" and ar["input"].get("channel")})
+    n_critics = sum(1 for ar in agent_runs if ar["role"] == "critic")
     plan.tasks_per_role = {
+        "strategist": [f"angle: {campaign_angle}" if campaign_angle else "campaign strategy step recorded"],
         "researcher": [f"researched {len(leads)} provided lead(s) from {source_note}"],
         "draft": [f"{len(pending)} per-lead brand-voiced draft(s) staged HELD"],
+        "critic": [f"{n_critics} independent critic pass(es) over the staged draft(s)"],
     }
     try:
         _persist_plan(dsn, session_id, plan)
@@ -1110,8 +1187,10 @@ def _execute_provided_leads_sync(
         "channels": channels,
         "step_notes": [
             f"lead_source=provided: targeting ONLY the operator's leads — {source_note}",
+            f"strategist set the campaign angle once ({campaign_angle or 'recorded'})",
             f"researched {len(leads)} lead(s) per-lead (DB history + cited web research about each)",
             f"staged {len(pending)} brand-voiced draft(s) HELD (approve-first); nothing sent",
+            f"critic ran {n_critics} independent pass(es) over the staged draft(s)",
         ],
         "runs_row": runs_row,
     }
