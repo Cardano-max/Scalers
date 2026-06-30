@@ -44,6 +44,9 @@ export interface CampaignPlan {
   campaign_type?: string;
   deep_research?: boolean | null;
   drafts_only?: boolean | null;
+  // Lead source: 'provided' = use ONLY the operator's CSV / DB leads; 'source_new' =
+  // find new prospects on the web. Empty = not chosen. Drives the orchestration mode.
+  lead_source?: string;
   // Uploaded customer list — a real parse of the operator's CSV, surfaced to the
   // supervisor so it can truthfully read the rows. Empty/absent = no CSV uploaded.
   customers?: {
@@ -52,6 +55,7 @@ export interface CampaignPlan {
     columns?: string[];
     sample?: Array<Record<string, string>>;
     ingested?: boolean;
+    customer_ids?: string[];
   };
 }
 

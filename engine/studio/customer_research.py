@@ -461,6 +461,7 @@ def build_outreach_draft(
     plan_channels: list[str] | None = None,
     tenant_id: str | None = None,
     deep_research: bool | None = None,
+    research: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build ONE personalized outreach draft for a lead — REAL copywriter-written,
     brand-voiced, and grounded only in facts the system can substantiate.
@@ -529,7 +530,11 @@ def build_outreach_draft(
     if ch in ("gmail", "email") and _llm_copy_enabled():
         try:
             brand_voice_context, approved_claims = resolve_brand_voice(tenant_id)
-            research = research_studio(facts, enabled=_research_enabled(deep_research))
+            # Use pre-fetched research when the caller already ran it for THIS lead (the
+            # provided-leads traced run records it on the researcher step) so we make ONE
+            # Firecrawl call per lead, not two; otherwise fetch it here as before.
+            if research is None:
+                research = research_studio(facts, enabled=_research_enabled(deep_research))
             from cells.copywriter import build_copywriter_email_cell
 
             cell = build_copywriter_email_cell(

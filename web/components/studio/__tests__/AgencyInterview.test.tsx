@@ -8,7 +8,7 @@ import type { InterviewState } from '@/lib/studio/interview';
  * gate is armed, the current question renders an input, and answering routes through
  * onAnswer. These pin that a blind run is impossible before the interview completes.
  */
-const GATING = ['goal', 'audience', 'channels', 'campaign_type', 'output_count'];
+const GATING = ['goal', 'audience', 'channels', 'lead_source', 'campaign_type', 'output_count'];
 
 const notArmed: InterviewState = {
   armed: false,
@@ -63,6 +63,21 @@ describe('AgencyInterview — gates the run until armed', () => {
     expect(run).not.toBeDisabled();
     fireEvent.click(run);
     expect(onRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks LEAD SOURCE as a choice (provided vs source-new) and routes the choice', () => {
+    const onAnswer = vi.fn();
+    const askLeadSource: InterviewState = {
+      ...notArmed,
+      nextQuestion: { field: 'lead_source', question: 'Lead source: source NEW leads, or use ONLY your CSV / DB leads?' },
+    };
+    render(
+      <AgencyInterview state={askLeadSource} busy={false} connected running={false} onAnswer={onAnswer} onRun={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Use my CSV / DB leads' }));
+    expect(onAnswer).toHaveBeenCalledWith('lead_source', 'provided');
+    fireEvent.click(screen.getByRole('button', { name: 'Source new leads (web)' }));
+    expect(onAnswer).toHaveBeenCalledWith('lead_source', 'new');
   });
 
   it('shows the honest not-connected state when disconnected', () => {

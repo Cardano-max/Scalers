@@ -91,6 +91,10 @@ class CampaignPlan(BaseModel):
     campaign_type: str = ""
     deep_research: bool | None = None
     drafts_only: bool | None = None
+    # Lead source (hard compliance branch): "provided" = use ONLY the operator's own
+    # leads (uploaded CSV / existing DB), researched per-lead; "source_new" = find new
+    # prospects on the web. Empty = not chosen yet. Drives the orchestration mode.
+    lead_source: str = ""
     # Uploaded customer list — a REAL parse of the operator's CSV ({filename, rows,
     # columns, sample, ingested}). Persisted with the plan and surfaced to the
     # supervisor on every turn (see `_customers_context`) so it can truthfully say
@@ -305,6 +309,36 @@ def _customers_context(ctx: RunContext[StudioDeps]) -> str:
         + " — per-lead, grounded, staged HELD for approval. Nothing is sent."
     )
     return "\n".join(lines)
+
+
+@studio_agent.instructions
+def _brand_voice_context(ctx: RunContext[StudioDeps]) -> str:
+    """Tell the supervisor it HAS a brand voice on file and to USE it — never claim it
+    lacks one. The studio's own brand voice (tone / structure / preferred + banned
+    lexicon + approved claims) is resolved from the tenant pack by
+    ``resolve_brand_voice`` and the copywriter cell writes in it. HONESTY: if the pack
+    can't be resolved this degrades to stating the brand voice is configured per pack
+    and loaded by the copywriter at draft time — it NEVER says 'no brand voice'."""
+    try:
+        from studio.customer_research import resolve_brand_voice
+
+        brand_voice, _claims = resolve_brand_voice()
+        if brand_voice.strip():
+            snippet = brand_voice.strip()
+            if len(snippet) > 1500:
+                snippet = snippet[:1500] + " …[truncated]"
+            return (
+                "BRAND VOICE IS ON FILE — you have the studio's own brand voice (tone, "
+                "structure, preferred + banned lexicon). USE it when drafting; NEVER "
+                "claim you have no brand voice. The copywriter cell writes every draft "
+                "in this voice:\n" + snippet
+            )
+    except Exception:
+        pass
+    return (
+        "BRAND VOICE: the studio's brand-voice pack is configured and the copywriter "
+        "cell loads it at draft time. You DO have a brand voice — never claim otherwise."
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -541,6 +575,14 @@ def _summary_text(summary: dict[str, Any]) -> str:
     )
 
 
+def _use_provided_leads(plan: CampaignPlan) -> bool:
+    """The hard compliance branch: True iff the operator chose to use ONLY their own
+    leads (uploaded CSV / existing DB) rather than sourcing new ones from the web."""
+    from studio.interview import LEAD_SOURCE_PROVIDED
+
+    return (plan.lead_source or "").strip().lower() == LEAD_SOURCE_PROVIDED
+
+
 def _execute_campaign_sync(
     plan: CampaignPlan, session_id: str, tenant_id: str, dsn: str | None,
     run_id: str | None = None,
@@ -549,7 +591,14 @@ def _execute_campaign_sync(
     surfaces — mirror each per-role trace into the thread as a LABELED turn (so the
     operator can watch what each agent thought) and reflect the work into the shared
     plan. ``run_id`` lets the async endpoint poll the per-role ``agent_runs`` live.
-    Returns the runner summary. NOTHING is sent (HELD/PENDING only)."""
+    Returns the runner summary. NOTHING is sent (HELD/PENDING only).
+
+    Branches on the operator's LEAD-SOURCE choice: ``provided`` runs the per-lead
+    compliance path (target ONLY the operator's leads, research each one); otherwise
+    the web-sourcing Phase-A spine runs."""
+    if _use_provided_leads(plan):
+        return _execute_provided_leads_sync(plan, session_id, tenant_id, dsn, run_id)
+
     from studio.campaign_runner import run_and_trace
 
     summary = run_and_trace(
@@ -573,6 +622,200 @@ def _execute_campaign_sync(
     # real run if the spec store or registry is unavailable. NOTHING here sends.
     _persist_campaign_spec(plan, summary, session_id, tenant_id, dsn)
     return summary
+
+
+def _execute_provided_leads_sync(
+    plan: CampaignPlan, session_id: str, tenant_id: str, dsn: str | None,
+    run_id: str | None = None,
+) -> dict[str, Any]:
+    """SYNC: the LEAD-SOURCE=provided compliance run. Targets ONLY the operator's own
+    leads — the uploaded CSV (its ingested ``customer_ids``) or, if none uploaded, the
+    existing-DB churn-risk cohort — and for EACH lead:
+
+      * pulls its REAL grounded facts (DB history: persona, tattoo history, city,
+        prior-campaign memories) via ``lookup_leads`` — never a substituted/random lead,
+      * runs deep research ABOUT that specific lead's studio (Firecrawl, cited, real
+        URLs only) when deep research is on, recorded on a per-lead ``researcher`` step,
+      * writes a personalized draft in the studio's OWN brand voice
+        (``build_outreach_draft`` -> ``resolve_brand_voice`` + the copywriter cell),
+        grounded ONLY in that lead's real facts/sources (no fabrication),
+      * stages the draft as a PENDING ``actions`` row keyed to this run (HELD), and
+      * records a memory of the outreach.
+
+    Records per-lead ``researcher`` + ``draft`` ``agent_runs`` plus a final ``jury``
+    summary and materializes a ``runs`` row, so the agency war-room renders it like any
+    run and each staged draft deep-links to its exact Review-Queue row. NOTHING sends."""
+    import uuid as _uuid
+
+    from actions.store import ensure_schema, record_pending_action
+    from memory import MemoryStore
+    from studio.campaign_runner import _materialize_runs_row, _summarize_output
+    from studio.customer_research import (
+        _research_enabled,
+        build_outreach_draft,
+        churn_risk_leads,
+        lookup_leads,
+        research_studio,
+    )
+
+    if not run_id:
+        campaign_id = f"camp_{_uuid.uuid4().hex[:12]}"
+        run_id = f"team-{campaign_id}-{_uuid.uuid4().hex[:12]}"
+    else:
+        parts = run_id.split("-")
+        campaign_id = parts[1] if len(parts) >= 2 and parts[1].startswith("camp_") else f"camp_{_uuid.uuid4().hex[:12]}"
+
+    store = MemoryStore(dsn=dsn)
+    store.ensure_schema()
+    ensure_schema(dsn)
+    from team.store import TeamStore
+
+    ts = TeamStore(dsn)
+    ts.setup()
+
+    # 1) Resolve ONLY the operator's leads — uploaded CSV ids first, else DB cohort.
+    cust_ids = list((plan.customers or {}).get("customer_ids") or [])
+    if cust_ids:
+        leads = lookup_leads(
+            tenant_id, [{"customer_id": i} for i in cust_ids], dsn=dsn, memory_store=store
+        )
+        source_note = f"uploaded CSV ({len(leads)} of {len(cust_ids)} rows resolved in DB)"
+    else:
+        limit = plan.lead_count or plan.output_count or 10
+        leads = churn_risk_leads(tenant_id, limit=limit, dsn=dsn, memory_store=store)
+        source_note = f"existing-database win-back / lapsing cohort ({len(leads)})"
+
+    goal = plan.goal or "win back lapsed clients"
+    deep = _research_enabled(plan.deep_research)
+    agent_runs: list[dict[str, Any]] = []
+    pending: list[str] = []
+
+    def _rec(role: str, model: str, inp: dict[str, Any], out: dict[str, Any]) -> None:
+        ts.record_agent_run(
+            id=f"ar_{_uuid.uuid4().hex[:16]}", campaign_id=campaign_id, run_id=run_id,
+            role=role, model=model, input=inp, output=out,
+        )
+        agent_runs.append({
+            "role": role, "model": model, "input": inp, "output": out,
+            "output_summary": _summarize_output(role, out),
+        })
+
+    # 2) Per-lead: real DB history + research ABOUT this lead + brand-voiced draft.
+    for facts in leads:
+        cust_id = facts["customer_id"]
+        research = research_studio(facts, enabled=deep)  # real Firecrawl about THIS studio
+        th = facts.get("tattoo_history", []) or []
+        traits = facts.get("persona_traits", {}) or {}
+        sources = [
+            {"url": r.get("url"), "title": r.get("title"), "snippet": r.get("snippet")}
+            for r in research if r.get("url")
+        ][:5]
+        _rec(
+            "researcher", "firecrawl+customer_db",
+            {"customer_id": cust_id, "name": facts.get("name")},
+            {
+                "cited": len(sources), "sources": sources,
+                "lead": facts.get("name"), "customer_id": cust_id,
+                "db_history": {
+                    "city": facts.get("city"), "past_tattoos": len(th),
+                    "interests": facts.get("interests", []),
+                    "lifecycle": traits.get("lifecycle_stage"),
+                    "win_back_candidate": traits.get("win_back_candidate"),
+                    "prior_memories": len(facts.get("memories", []) or []),
+                },
+                "degraded": deep and len(sources) == 0,
+            },
+        )
+
+        draft = build_outreach_draft(
+            facts, goal=goal, plan_channels=plan.channels or None,
+            deep_research=plan.deep_research, research=research,
+        )
+        copy_model = (
+            "anthropic:claude-sonnet-4-6"
+            if any(g == "copy=copywriter_email_cell" for g in draft.get("grounding", []))
+            else "grounded_template"
+        )
+        _rec(
+            "draft", copy_model,
+            {"customer_id": cust_id, "channel": draft["channel"]},
+            {
+                "hook": draft.get("subject") or "", "headline": draft.get("subject") or "",
+                "caption": draft.get("draft") or "", "channel": draft["channel"],
+                "grounding": draft.get("grounding", []),
+            },
+        )
+
+        action_id = record_pending_action(
+            tenant_id=tenant_id, decision_id=None, type="outreach",
+            channel=draft["channel"], worker="studio_provided_leads",
+            target=draft["target"], draft=draft["draft"], subject=draft.get("subject"),
+            conf=None, threshold=None, esc_kind="approval_required",
+            esc_label="Provided-lead outreach — operator approval required",
+            idempotency_key=f"{run_id}:{cust_id}", run_id=run_id, dsn=dsn,
+        )
+        pending.append(action_id)
+        try:
+            store.write(
+                tenant_id=tenant_id, subject_type="customer", subject_id=cust_id,
+                text=(
+                    f"Staged {draft['channel']} outreach to {facts.get('name')} for goal "
+                    f"'{goal}'. Grounded on: {', '.join(draft.get('grounding', []))}."
+                ),
+                metadata={"kind": "outreach", "session_id": session_id,
+                          "action_id": action_id, "run_id": run_id},
+            )
+        except Exception:
+            pass
+
+    # 3) A final jury summary over the per-lead drafts (offline aggregate, HELD).
+    _rec(
+        "jury", JURY_MODEL,
+        {"n_leads": len(leads), "lead_source": "provided"},
+        {
+            "aggregate": 1.0 if pending else 0.0, "decision": "review",
+            "note": (f"{len(pending)} per-lead draft(s) staged HELD from {source_note}; "
+                     "approve-first — nothing sent"),
+        },
+    )
+
+    runs_row = _materialize_runs_row(
+        dsn=dsn, run_id=run_id, tenant_id=tenant_id, agent_runs=agent_runs
+    )
+
+    # Mirror each per-role trace into the chat thread (same as the spine path).
+    for ar in agent_runs:
+        role = str(ar.get("role") or "host")
+        role = role if role in VALID_ROLES else "host"
+        _log_turn(dsn, session_id, role, f"[{role}] {ar.get('output_summary', '')}", ar.get("model"))
+
+    channels = sorted({str(ar["input"].get("channel")) for ar in agent_runs if ar["role"] == "draft" and ar["input"].get("channel")})
+    plan.tasks_per_role = {
+        "researcher": [f"researched {len(leads)} provided lead(s) from {source_note}"],
+        "draft": [f"{len(pending)} per-lead brand-voiced draft(s) staged HELD"],
+    }
+    try:
+        _persist_plan(dsn, session_id, plan)
+    except Exception:
+        pass
+
+    return {
+        "run_id": run_id,
+        "campaign_id": campaign_id,
+        "archetype_id": "provided_leads",
+        "lead_source": "provided",
+        "source_note": source_note,
+        "agent_runs": agent_runs,
+        "n_pending": len(pending),
+        "n_queued": len(pending),
+        "channels": channels,
+        "step_notes": [
+            f"lead_source=provided: targeting ONLY the operator's leads — {source_note}",
+            f"researched {len(leads)} lead(s) per-lead (DB history + cited web research about each)",
+            f"staged {len(pending)} brand-voiced draft(s) HELD (approve-first); nothing sent",
+        ],
+        "runs_row": runs_row,
+    }
 
 
 def _persist_campaign_spec(
@@ -1367,12 +1610,17 @@ def mount_studio_agui(app) -> None:
         try:
             def _attach_customers() -> None:
                 plan = _load_plan(session_id, dsn)
+                # Capture the ingested customer_ids so the provided-leads run can target
+                # EXACTLY these rows (compliance: only the operator's own leads).
+                ingest_info = result.get("ingest") or {}
+                cust_ids = list(ingest_info.get("customer_ids") or [])
                 plan.customers = {
                     "filename": result.get("filename"),
                     "rows": int(result.get("rows") or 0),
                     "columns": list(result.get("columns") or []),
                     "sample": list(result.get("sample") or []),
                     "ingested": bool(result.get("ingested")),
+                    "customer_ids": cust_ids,
                 }
                 if result.get("rows"):
                     plan.lead_count = int(result["rows"])

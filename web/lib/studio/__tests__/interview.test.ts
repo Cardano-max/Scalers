@@ -14,6 +14,7 @@ function armedPlan(): CampaignPlan {
     goal: 'win back lapsed clients',
     audience: "clients who haven't booked in 90 days",
     channels: ['email'],
+    lead_source: 'provided',
     campaign_type: 'win-back',
     output_count: 10,
   };

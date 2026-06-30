@@ -27,6 +27,7 @@ def _full_plan() -> CampaignPlan:
         goal="win back lapsed clients",
         audience="clients who haven't booked in 90 days",
         channels=["email"],
+        lead_source="provided",
         campaign_type="win-back",
         output_count=10,
     )
@@ -88,6 +89,17 @@ def test_coercion_of_answer_types() -> None:
     assert coerce_field("channels", "email and instagram") == ["email", "instagram"]
     assert coerce_field("channels", ["Email", " IG "]) == ["Email", "IG"]
     assert coerce_field("goal", "  fill Tuesdays  ") == "fill Tuesdays"
+
+
+def test_lead_source_coercion_to_two_canonical_modes() -> None:
+    for provided in ("provided", "use my CSV", "database", "existing", "uploaded", "use my leads"):
+        assert coerce_field("lead_source", provided) == "provided", provided
+    for new in ("new", "scrape from the web", "find new leads", "source new", "internet"):
+        assert coerce_field("lead_source", new) == "source_new", new
+    # unrecognized -> "" (unanswered, no guess) so the gate keeps asking
+    assert coerce_field("lead_source", "hmm not sure") == ""
+    # and lead_source is a GATING field the interview must ask
+    assert "lead_source" in GATING_FIELDS
 
 
 def test_apply_fields_skips_unrecognized_yes_no_and_non_interview_keys() -> None:

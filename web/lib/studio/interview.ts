@@ -30,7 +30,7 @@ export interface InterviewState {
 }
 
 /** How the panel renders the input for each field (mirrors engine coercion). */
-export type FieldKind = 'text' | 'number' | 'list' | 'yesno' | 'drafts_or_stage';
+export type FieldKind = 'text' | 'number' | 'list' | 'yesno' | 'drafts_or_stage' | 'lead_source';
 
 export interface FieldMeta {
   field: string;
@@ -45,6 +45,12 @@ export const GATING_META: FieldMeta[] = [
   { field: 'goal', label: 'Goal', kind: 'text', question: "What's the goal of this campaign?" },
   { field: 'audience', label: 'Audience', kind: 'text', question: "Who's the target audience?" },
   { field: 'channels', label: 'Channels', kind: 'list', question: 'Which channels? (email, instagram, facebook, sms)' },
+  {
+    field: 'lead_source',
+    label: 'Lead source',
+    kind: 'lead_source',
+    question: 'Lead source: source NEW leads from the web, or use ONLY your uploaded CSV / existing database leads?',
+  },
   { field: 'campaign_type', label: 'Type', kind: 'text', question: 'What type? (win-back, artist-spotlight, promo, event, birthday)' },
   { field: 'output_count', label: 'Drafts', kind: 'number', question: 'How many drafts/outputs should the team produce?' },
 ];

@@ -27,6 +27,13 @@ function chipValue(field: string, value: unknown): string {
     return value ? 'yes' : 'no';
   }
   if (value == null || value === '' || value === 0) return '';
+  if (field === 'lead_source') {
+    return value === 'provided'
+      ? 'use my CSV / DB leads'
+      : value === 'source_new'
+        ? 'source new (web)'
+        : String(value);
+  }
   return String(value);
 }
 
@@ -144,6 +151,19 @@ export function AgencyInterview({
             <div style={{ display: 'flex', gap: 8 }}>
               <ChoiceButton label="Drafts only" onClick={() => onAnswer(next.field, 'drafts')} disabled={busy} />
               <ChoiceButton label="Stage for approval" onClick={() => onAnswer(next.field, 'stage')} disabled={busy} />
+            </div>
+          ) : meta.kind === 'lead_source' ? (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <ChoiceButton
+                label="Use my CSV / DB leads"
+                onClick={() => onAnswer(next.field, 'provided')}
+                disabled={busy}
+              />
+              <ChoiceButton
+                label="Source new leads (web)"
+                onClick={() => onAnswer(next.field, 'new')}
+                disabled={busy}
+              />
             </div>
           ) : (
             <form

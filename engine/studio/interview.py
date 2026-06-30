@@ -26,12 +26,17 @@ from typing import Any
 # may arm; OPTIONAL fields are asked once gating is complete but never block.
 # --------------------------------------------------------------------------- #
 
-# (field, question) in the order the supervisor asks. These five define a runnable
-# campaign: what for, who, where, what kind, and how much.
+# (field, question) in the order the supervisor asks. These define a runnable
+# campaign: what for, who, where, WHICH LEADS, what kind, and how much.
 GATING: tuple[tuple[str, str], ...] = (
     ("goal", "What's the goal of this campaign? (e.g. fill quiet Tuesdays, win back lapsed clients)"),
     ("audience", "Who's the target audience?"),
     ("channels", "Which channels should we use? (email, instagram, facebook, sms)"),
+    # LEAD SOURCE — a hard branch the operator MUST choose: go FIND new prospects on
+    # the web, or comply strictly and use ONLY the operator's own leads (uploaded CSV
+    # / existing database). This drives the whole orchestration mode downstream.
+    ("lead_source", "Lead source: should the team SOURCE new leads from the web, or use "
+                    "ONLY your uploaded CSV / existing database leads? (new / provided)"),
     ("campaign_type", "What type of campaign is this? (win-back, artist-spotlight, promo, event, birthday)"),
     ("output_count", "How many drafts/outputs should the team produce?"),
 )
@@ -123,6 +128,38 @@ def interview_state(plan: Any) -> dict[str, Any]:
 _YES = {"yes", "y", "true", "1", "on", "sure", "yep", "please do", "do it"}
 _NO = {"no", "n", "false", "0", "off", "nope", "skip", "don't", "dont"}
 
+# Lead-source answers, normalized to the two canonical modes. PROVIDED = comply
+# strictly with the operator's own leads (uploaded CSV / existing DB); SOURCE_NEW =
+# go find new prospects on the web. Unrecognized -> "" (stays unanswered, no guess).
+LEAD_SOURCE_PROVIDED = "provided"
+LEAD_SOURCE_NEW = "source_new"
+_LS_PROVIDED = {
+    "provided", "use provided", "use my leads", "my leads", "csv", "uploaded csv",
+    "database", "db", "existing", "existing db", "existing database", "uploaded",
+    "list", "mine", "use csv", "use db", "use database", "use existing", "only mine",
+}
+_LS_NEW = {
+    "new", "source_new", "source new", "source new leads", "scrape", "web", "internet",
+    "find", "find new", "fresh", "rough", "new leads", "source", "scrape new",
+}
+
+
+def _coerce_lead_source(value: Any) -> str:
+    s = str(value or "").strip().lower()
+    if not s:
+        return ""
+    if s in _LS_PROVIDED:
+        return LEAD_SOURCE_PROVIDED
+    if s in _LS_NEW:
+        return LEAD_SOURCE_NEW
+    # substring fallback so a sentence answer still classifies, provided-biased on
+    # explicit ownership words ("my", "csv", "database", "existing", "uploaded").
+    if any(w in s for w in ("csv", "database", " db", "existing", "uploaded", "my lead", "provided", "only mine")):
+        return LEAD_SOURCE_PROVIDED
+    if any(w in s for w in ("scrape", "web", "internet", "new lead", "find", "source new", "fresh", "rough")):
+        return LEAD_SOURCE_NEW
+    return ""
+
 
 def _coerce_bool(value: Any, *, field: str) -> bool | None:
     if isinstance(value, bool):
@@ -165,6 +202,8 @@ def _coerce_list(value: Any) -> list[str]:
 def coerce_field(field: str, value: Any) -> Any:
     """Coerce a raw interview answer into the typed value the plan field expects.
     Unknown fields pass through as a stripped string."""
+    if field == "lead_source":
+        return _coerce_lead_source(value)
     if field in _BOOL_FIELDS:
         return _coerce_bool(value, field=field)
     if field in _INT_FIELDS:
