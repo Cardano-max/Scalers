@@ -40,12 +40,18 @@ export interface CampaignClassification {
   n_review_required: number;
 }
 
+/** The resolved send mode the engine reports per send: a real CLEAN live send, or a
+ *  safe send rerouted to the operator inbox with a [TEST] marker. */
+export type SendMode = 'live' | 'test_redirect';
+
 /** One row in a send result bucket. Shape is loose: the engine echoes the action id
- *  plus, on failure/skip, a reason or provider error. We only render the counts. */
+ *  plus, on failure/skip, a reason or provider error, and (on a sent/failed row) the
+ *  resolved send `mode` so the Live Feed can badge Live vs Test. */
 export interface SendItem {
   action_id?: string;
   reason?: string;
   error?: string;
+  mode?: SendMode | null;
   [k: string]: unknown;
 }
 
@@ -66,6 +72,8 @@ export interface OverrideResult {
   was_eligible: boolean;
   eligibility_reason: string;
   result: unknown;
+  /** The resolved send mode ('live' | 'test_redirect'), or null if the send did not run. */
+  mode: SendMode | null;
   last_error: string | null;
 }
 
@@ -103,15 +111,21 @@ export async function classifyCampaign(
   };
 }
 
-/** Send ONLY the eligible drafts, each through the existing approve path. */
+/** Send ONLY the eligible drafts, each through the existing approve path.
+ *
+ *  `live` is the operator's EXPLICIT live-send authorization (default false = safe
+ *  test-redirect). It is sent to the engine ONLY when true; absent/false keeps the
+ *  GMAIL_REDIRECT_TO redirect default. Eligibility is a confidence/compliance gate,
+ *  NOT a live-vs-redirect decision — so the toggle is independent of eligibility. */
 export async function sendEligible(
   runId: string,
   operator?: string,
+  live = false,
 ): Promise<SendEligibleResult> {
   const res = await fetch(`/studio/campaign/${encodeURIComponent(runId)}/send-eligible`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(operator ? { operator } : {}),
+    body: JSON.stringify({ ...(operator ? { operator } : {}), ...(live ? { live: true } : {}) }),
   });
   if (!res.ok) throw new Error(await errorFrom(res));
   const d = (await res.json()) as Partial<SendEligibleResult>;
@@ -134,11 +148,12 @@ export async function overrideSend(
   actionId: string,
   reason: string,
   operator?: string,
+  live = false,
 ): Promise<OverrideResult> {
   const res = await fetch(`/studio/campaign/action/${encodeURIComponent(actionId)}/override`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(operator ? { reason, operator } : { reason }),
+    body: JSON.stringify({ reason, ...(operator ? { operator } : {}), ...(live ? { live: true } : {}) }),
   });
   if (!res.ok) throw new Error(await errorFrom(res));
   const d = (await res.json()) as Partial<OverrideResult>;
@@ -148,6 +163,7 @@ export async function overrideSend(
     was_eligible: d.was_eligible ?? false,
     eligibility_reason: d.eligibility_reason ?? '',
     result: d.result ?? null,
+    mode: d.mode ?? null,
     last_error: d.last_error ?? null,
   };
 }

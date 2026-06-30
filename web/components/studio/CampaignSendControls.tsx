@@ -27,6 +27,7 @@ import {
   type CampaignDraft,
   type OverrideResult,
   type SendEligibleResult,
+  type SendMode,
 } from '@/lib/studio/campaign-send';
 
 const TEAL = '#0F8A82';
@@ -47,6 +48,12 @@ export function CampaignSendControls({ runId }: { runId: string }) {
   const [sending, setSending] = useState(false);
   const [sendResult, setSendResult] = useState<SendEligibleResult | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
+
+  // Send mode: default Test (safe) — sends are rerouted to the operator inbox with a
+  // [TEST] marker. Live is the EXPLICIT operator authorization that lets a send reach
+  // the real recipient with a clean subject. It applies to BOTH send-eligible and
+  // override; it is independent of eligibility (which is a confidence/compliance gate).
+  const [liveMode, setLiveMode] = useState(false);
 
   // Per-draft override flow: which held draft's form is open, its typed reason, and
   // the lifecycle of each override keyed by action_id.
@@ -74,7 +81,7 @@ export function CampaignSendControls({ runId }: { runId: string }) {
     setSending(true);
     setSendError(null);
     try {
-      const r = await sendEligible(runId);
+      const r = await sendEligible(runId, undefined, liveMode);
       setSendResult(r);
       setConfirming(false);
       await classify();
@@ -93,7 +100,7 @@ export function CampaignSendControls({ runId }: { runId: string }) {
     if (!reason) return;
     setOverrideState(actionId, { kind: 'busy' });
     try {
-      const r = await overrideSend(actionId, reason);
+      const r = await overrideSend(actionId, reason, undefined, liveMode);
       setOverrideState(actionId, { kind: 'done', result: r });
       setOverrideOpen(null);
       setOverrideReason('');
@@ -149,6 +156,63 @@ export function CampaignSendControls({ runId }: { runId: string }) {
       <p style={{ margin: 0, fontSize: 11.5, color: 'var(--text-muted)', lineHeight: 1.45 }}>
         Only drafts above the confidence bar can be sent in one click. Everything else is
         held and needs an explicit, audited override. Nothing below the bar is ever swept along.
+      </p>
+
+      {/* ── Send mode: default Test (safe redirect) vs explicit Live ───────────── */}
+      <div
+        role="group"
+        aria-label="Send mode"
+        style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
+      >
+        <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>Mode</span>
+        <div
+          style={{
+            display: 'inline-flex',
+            border: '1px solid var(--hairline-strong)',
+            borderRadius: 'var(--radius-pill)',
+            overflow: 'hidden',
+          }}
+        >
+          <button
+            type="button"
+            aria-pressed={!liveMode}
+            onClick={() => setLiveMode(false)}
+            style={{
+              fontSize: 11.5,
+              fontWeight: 600,
+              padding: '4px 12px',
+              border: 'none',
+              cursor: 'pointer',
+              color: !liveMode ? '#fff' : 'var(--text-secondary)',
+              background: !liveMode ? TEAL : '#fff',
+            }}
+          >
+            Test (safe)
+          </button>
+          <button
+            type="button"
+            aria-pressed={liveMode}
+            onClick={() => setLiveMode(true)}
+            style={{
+              fontSize: 11.5,
+              fontWeight: 600,
+              padding: '4px 12px',
+              border: 'none',
+              borderLeft: '1px solid var(--hairline-strong)',
+              cursor: 'pointer',
+              color: liveMode ? '#fff' : 'var(--text-secondary)',
+              background: liveMode ? 'var(--danger-text)' : '#fff',
+            }}
+          >
+            Live
+          </button>
+        </div>
+        <ModeBadge mode={liveMode ? 'live' : 'test_redirect'} />
+      </div>
+      <p style={{ margin: 0, fontSize: 11, color: liveMode ? 'var(--danger-text)' : 'var(--text-muted)', lineHeight: 1.45 }}>
+        {liveMode
+          ? 'Live: sends reach the REAL recipient with a clean subject. Use only when you intend real outreach.'
+          : 'Test: every send is rerouted to the operator inbox with a [TEST] marker — no real recipient is contacted.'}
       </p>
 
       {error && (
@@ -306,6 +370,29 @@ export function CampaignSendControls({ runId }: { runId: string }) {
                 {sendResult.n_failed} failed
               </span>
               <span style={{ color: 'var(--text-muted)' }}>{sendResult.n_skipped} skipped</span>
+              {/* Per-send mode from the engine response — the Live Feed reads these so
+                  the operator can see exactly how each send was routed. */}
+              {(() => {
+                const liveSent = sendResult.sent.filter((s) => s.mode === 'live').length;
+                const testSent = sendResult.sent.filter((s) => s.mode === 'test_redirect').length;
+                if (liveSent === 0 && testSent === 0) return null;
+                return (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    {liveSent > 0 && (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        <ModeBadge mode="live" />
+                        {liveSent}
+                      </span>
+                    )}
+                    {testSent > 0 && (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        <ModeBadge mode="test_redirect" />
+                        {testSent}
+                      </span>
+                    )}
+                  </span>
+                );
+              })()}
             </div>
           )}
         </div>
@@ -425,7 +512,10 @@ function OverrideRow({
 
       {done ? (
         <div style={{ fontSize: 12, fontWeight: 600, color: state.result.ok ? 'var(--success-text)' : 'var(--danger-text)' }}>
-          {state.result.ok ? '✓ Overridden and sent' : `Override recorded — ${state.result.last_error ?? 'send did not complete'}`}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            {state.result.ok ? '✓ Overridden and sent' : `Override recorded — ${state.result.last_error ?? 'send did not complete'}`}
+            {state.result.mode && <ModeBadge mode={state.result.mode} />}
+          </span>
           <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-muted)', marginTop: 2 }}>
             An audit entry was recorded for this override.
           </div>
@@ -524,5 +614,29 @@ function OverrideRow({
         </button>
       )}
     </article>
+  );
+}
+
+/** A small pill badging the resolved send mode — Live (real recipient, clean) vs Test
+ *  (rerouted to the operator inbox with a [TEST] marker). Honest: it reflects the mode
+ *  the engine actually reported, never an assumed one. */
+function ModeBadge({ mode }: { mode: SendMode }) {
+  const live = mode === 'live';
+  return (
+    <span
+      data-mode={mode}
+      style={{
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: '0.02em',
+        color: live ? '#fff' : 'var(--text-secondary)',
+        background: live ? 'var(--danger-text)' : 'var(--surface-alt)',
+        border: `1px solid ${live ? 'var(--danger-text)' : 'var(--hairline-strong)'}`,
+        borderRadius: 'var(--radius-pill)',
+        padding: '2px 8px',
+      }}
+    >
+      {live ? 'LIVE' : 'TEST'}
+    </span>
   );
 }

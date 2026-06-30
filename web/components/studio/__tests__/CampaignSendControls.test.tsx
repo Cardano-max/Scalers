@@ -86,7 +86,25 @@ describe('CampaignSendControls', () => {
     expect(sendEligibleMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: /confirm send/i }));
-    await waitFor(() => expect(sendEligibleMock).toHaveBeenCalledWith('run_1'));
+    // Default mode is Test (safe): live=false is passed to the engine.
+    await waitFor(() => expect(sendEligibleMock).toHaveBeenCalledWith('run_1', undefined, false));
+  });
+
+  it('Live mode passes live=true to sendEligible; Test mode is the default', async () => {
+    classifyMock.mockResolvedValue(classification());
+    sendEligibleMock.mockResolvedValue({
+      sent: [{ action_id: 'ok_1', mode: 'live' }],
+      failed: [], skipped: [], n_sent: 1, n_failed: 0, n_skipped: 0,
+    });
+    render(<CampaignSendControls runId="run_1" />);
+    await screen.findByText(/1 draft safe to send/i);
+
+    // Flip to Live, then send.
+    fireEvent.click(screen.getByRole('button', { name: /^Live$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /send eligible/i }));
+    fireEvent.click(screen.getByRole('button', { name: /confirm send/i }));
+
+    await waitFor(() => expect(sendEligibleMock).toHaveBeenCalledWith('run_1', undefined, true));
   });
 
   it('the override form Send is disabled until a reason is typed', async () => {
@@ -111,6 +129,7 @@ describe('CampaignSendControls', () => {
       was_eligible: false,
       eligibility_reason: 'below confidence bar',
       result: {},
+      mode: 'test_redirect',
       last_error: null,
     });
     render(<CampaignSendControls runId="run_1" />);
@@ -119,7 +138,8 @@ describe('CampaignSendControls', () => {
     fireEvent.change(screen.getByLabelText(/override reason/i), { target: { value: 'manually verified' } });
     fireEvent.click(screen.getByRole('button', { name: /override and send draft/i }));
 
-    await waitFor(() => expect(overrideMock).toHaveBeenCalledWith('act_1', 'manually verified'));
+    // Default Test mode threads live=false through the override too.
+    await waitFor(() => expect(overrideMock).toHaveBeenCalledWith('act_1', 'manually verified', undefined, false));
     await screen.findByText(/audit entry was recorded/i);
   });
 
