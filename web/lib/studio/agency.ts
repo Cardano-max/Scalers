@@ -100,6 +100,22 @@ export function personaForRunRole(role: string): StudioPersona {
   return AGENT_PERSONAS.system;
 }
 
+/**
+ * True when a landed step is an HONEST failure rather than a success. The provided-leads
+ * path records a failed cell as a real step (so the lane keeps its lineage and the run
+ * continues) marked in its output: the strategist writes `status='failed'` and the critic
+ * writes `verdict='error'`. A landed-but-failed stage must read 'failed', NOT 'done' — a
+ * 429/rate-limited critic showing "done" would misreport a fake success. Real success
+ * outputs (strategy fields, a real approve/revise/reject verdict, researcher/draft/jury
+ * payloads) carry neither marker, so they stay 'done'.
+ */
+function stepFailed(step: RunStep): boolean {
+  const o = step.output;
+  if (!o || typeof o !== 'object') return false;
+  const r = o as Record<string, unknown>;
+  return r['status'] === 'failed' || r['verdict'] === 'error';
+}
+
 export function deriveAgencyStages(runState: RunState | null, running = false): AgencyStage[] {
   const steps = runState?.steps ?? [];
   // The honest derivation reads the REAL terminal state of the run. A stage with no
@@ -113,6 +129,9 @@ export function deriveAgencyStages(runState: RunState | null, running = false): 
       .filter((s) => def.roles.includes((s.role || '').toLowerCase()))
       .sort((a, b) => a.seq - b.seq);
     const firstCreatedAt = mine.find((s) => s.createdAt)?.createdAt ?? null;
+    // A stage is "done" only when it landed at least one step AND none of them failed.
+    // A landed stage with a failed step is honestly 'failed' (handled in the loop below).
+    const hasFailed = mine.some(stepFailed);
     return {
       key: def.key,
       label: def.label,
@@ -121,7 +140,7 @@ export function deriveAgencyStages(runState: RunState | null, running = false): 
       accent: def.persona.accent,
       count: mine.length,
       countable: def.countable,
-      done: mine.length > 0,
+      done: mine.length > 0 && !hasFailed,
       active: false,
       skipped: false,
       status: 'waiting-for-prev' as AgentRunStatus,
@@ -130,17 +149,21 @@ export function deriveAgencyStages(runState: RunState | null, running = false): 
     };
   });
 
-  // Index of the last stage that has actually landed a step (how far the run got).
+  // Index of the last stage that actually LANDED a step (how far the run got). A failed
+  // step still counts as landed (the stage ran), so we key off real step presence, not
+  // `done` — otherwise a failed stage would look un-reached and strand the ones after it.
   let lastLanded = -1;
   stages.forEach((s, i) => {
-    if (s.done) lastLanded = i;
+    if (s.count > 0) lastLanded = i;
   });
-  // The earliest not-done stage at/after the last landed one is the in-flight stage.
-  const activeIdx = stages.findIndex((s, i) => !s.done && i >= lastLanded);
+  // The earliest stage with NO landed step at/after the last landed one is in-flight.
+  const activeIdx = stages.findIndex((s, i) => s.count === 0 && i >= lastLanded);
 
   stages.forEach((s, i) => {
-    if (s.done) {
-      s.status = 'done';
+    if (s.count > 0) {
+      // Landed: 'done' on success, 'failed' when any of its steps recorded a failure
+      // (e.g. a rate-limited critic) — never a fake 'done'.
+      s.status = s.steps.some(stepFailed) ? 'failed' : 'done';
       return;
     }
     // No landed step for this stage — derive the honest reason from real run state.

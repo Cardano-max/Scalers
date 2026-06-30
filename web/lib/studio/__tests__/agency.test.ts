@@ -105,6 +105,30 @@ describe('deriveAgencyStages — honest per-agent status (never silent "queued")
     expect(byKey.critics.status).toBe('blocked-missing-input');
     expect(byKey.jury.status).toBe('blocked-missing-input');
   });
+
+  it('a landed-but-FAILED strategist/critic reads failed, not done (completed run)', () => {
+    // The provided-leads path records a failed cell as a real step and CONTINUES; the
+    // lane must surface the failure, never a fake "done". Other lanes stay honest.
+    const rs = runState(
+      [
+        step(1, 'strategist', { status: 'failed', error: 'model timeout' }, '2026-06-30T10:00:00Z'),
+        step(2, 'draft', { hook: 'h' }, '2026-06-30T10:00:01Z'),
+        step(3, 'critic', { verdict: 'approve' }, '2026-06-30T10:00:02Z'),
+        step(4, 'critic', { verdict: 'error', rationale: 'critic cell failed: 429' }, '2026-06-30T10:00:03Z'),
+        step(5, 'jury', { decision: 'review' }, '2026-06-30T10:00:04Z'),
+      ],
+      'completed',
+    );
+    const byKey = Object.fromEntries(deriveAgencyStages(rs, false).map((s) => [s.key, s]));
+    // Failed cells surface 'failed' (one bad critic among several still fails the lane).
+    expect(byKey.strategy.status).toBe('failed');
+    expect(byKey.strategy.done).toBe(false);
+    expect(byKey.critics.status).toBe('failed');
+    // The genuinely-successful lanes stay done; nothing reads a silent "queued".
+    expect(byKey.drafts.status).toBe('done');
+    expect(byKey.jury.status).toBe('done');
+    expect(deriveAgencyStages(rs, false).every((s) => (s.status as string) !== 'queued')).toBe(true);
+  });
 });
 
 describe('extractResearchSources — real citations only', () => {

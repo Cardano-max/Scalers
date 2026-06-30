@@ -128,6 +128,22 @@ def required_agent_roles(archetype_id: str | None, *, force_research: bool = Fal
     return roles
 
 
+def _agent_run_failed(ar: dict[str, Any]) -> bool:
+    """True when a recorded agent_run is an HONEST failure rather than a success.
+
+    The provided-leads path records a failed cell as a real agent_run (so the lane
+    keeps its lineage and the run continues) marked in its output: the strategist
+    writes ``status='failed'`` and the critic writes ``verdict='error'``. A landed-but-
+    failed run must read ``failed``, NOT ``done`` — a 429/rate-limited critic showing
+    'done' would misreport a fake success. Success outputs (CampaignStrategy fields, a
+    real critic verdict of approve/revise/reject, researcher/draft/jury payloads) carry
+    neither marker, so they stay ``done``."""
+    out = ar.get("output")
+    if not isinstance(out, dict):
+        return False
+    return out.get("status") == "failed" or out.get("verdict") == "error"
+
+
 def derive_agent_statuses(
     archetype_id: str | None,
     agent_runs: list[dict[str, Any]],
@@ -137,8 +153,10 @@ def derive_agent_statuses(
 ) -> dict[str, str]:
     """Map every canonical spine agent to an HONEST status from REAL run state.
 
-    A role with a recorded agent_run is ``done``. A role with no run is reported by
-    its real reason and the run's terminal state — NEVER a silent ``queued``:
+    A role with a recorded SUCCESSFUL agent_run is ``done``; a role whose recorded run
+    failed (honest failure marker in its output) is ``failed`` — never a fake ``done``.
+    A role with no run is reported by its real reason and the run's terminal state —
+    NEVER a silent ``queued``:
 
       * not in this archetype's executed path          -> skipped-not-required
       * run finished cleanly but this role never ran    -> skipped-not-required
@@ -150,6 +168,12 @@ def derive_agent_statuses(
       * run cancelled                                    -> cancelled
     """
     present = {str(ar.get("role") or "").lower() for ar in agent_runs}
+    # Roles with at least one HONEST-failed recorded run. A failed run still counts as
+    # "landed" for the sequencing below (the stage ran), but its terminal status reads
+    # ``failed`` rather than ``done`` so a failed strategist/critic is never green.
+    failed_present = {
+        str(ar.get("role") or "").lower() for ar in agent_runs if _agent_run_failed(ar)
+    }
     required = required_agent_roles(archetype_id, force_research=force_research)
     status = (run_status or "").lower()
     terminal_ok = status in ("completed", "success")
@@ -167,7 +191,8 @@ def derive_agent_statuses(
     out: dict[str, str] = {}
     for i, role in enumerate(seq):
         if role in present:
-            out[role] = AGENT_STATUS_DONE
+            # Landed: done on success, failed when the recorded run is an honest failure.
+            out[role] = AGENT_STATUS_FAILED if role in failed_present else AGENT_STATUS_DONE
         elif required and role not in required:
             out[role] = AGENT_STATUS_SKIPPED
         elif terminal_ok:
