@@ -659,6 +659,7 @@ def _build_run(conn: Any, row: dict[str, Any]) -> Run:
         note=None,
         trace_url=trace_url,
         events=events,
+        campaign_id=_campaign_id_for(conn, row["run_id"]),
     )
 
 
@@ -694,6 +695,82 @@ def run(run_id: str, tenant_id: str | None = None) -> Run | None:
         if not row:
             return None
         return _build_run(conn, row)
+
+
+def campaign_spec(run_id: str):
+    """Return the per-campaign spec doc for ``run_id`` (honest-null if none).
+
+    Delegates to ``studio.campaign_spec_store``: a stored spec if the run was
+    assembled at run time, else a READ-ONLY reconstruction from the run's
+    already-persisted agent_runs/runs rows, else None. Nothing is fabricated —
+    absent fields render honest-null inside the markdown."""
+    from .types import CampaignSpec
+
+    try:
+        from studio import campaign_spec_store as spec_store
+
+        row = spec_store.get_or_reconstruct(run_id)
+    except Exception:
+        return None
+    if not row:
+        return None
+
+    content = row.get("content")
+    content_json: str | None
+    if content is None:
+        content_json = None
+    elif isinstance(content, str):
+        content_json = content
+    else:
+        import json as _json
+
+        try:
+            content_json = _json.dumps(content)
+        except Exception:
+            content_json = None
+
+    return CampaignSpec(
+        run_id=row["run_id"],
+        campaign_id=row.get("campaign_id"),
+        tenant_id=row.get("tenant_id"),
+        archetype_id=row.get("archetype_id"),
+        markdown=row.get("markdown") or "",
+        content_json=content_json,
+        created_at=mappers.iso(row.get("created_at")) if row.get("created_at") else None,
+        updated_at=mappers.iso(row.get("updated_at")) if row.get("updated_at") else None,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Campaign-id resolution (real-or-honest-null). The authoritative source is
+# ``agent_runs.campaign_id`` — the campaign id the agents actually ran under
+# (verified to occasionally differ from the token embedded in the run_id). The
+# run_id naming convention ``team-{campaign_id}-{uuid12}`` is only a last-resort
+# fallback for runs that have no agent_runs rows; None when neither is available.
+# --------------------------------------------------------------------------- #
+def _parse_campaign_from_run_id(run_id: str | None) -> str | None:
+    if not run_id or not run_id.startswith("team-"):
+        return None
+    rest = run_id[len("team-"):]
+    if "-" not in rest:
+        return None
+    return rest.rsplit("-", 1)[0] or None
+
+
+def _campaign_id_for(conn: Any, run_id: str | None) -> str | None:
+    if not run_id:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT campaign_id FROM agent_runs WHERE run_id=%s "
+            "AND campaign_id IS NOT NULL ORDER BY created_at LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        if row and row.get("campaign_id"):
+            return row["campaign_id"]
+    except Exception:
+        pass
+    return _parse_campaign_from_run_id(run_id)
 
 
 # --------------------------------------------------------------------------- #
@@ -783,6 +860,24 @@ def _feed_rows(tenant_id: str) -> list[dict[str, Any]]:
             (tenant_id,),
         ).fetchall():
             events.append(_run_feed(r))
+
+        # Attach REAL campaign_id to every event in one batched lookup against
+        # agent_runs (authoritative), falling back to the run_id convention.
+        run_ids = sorted({e.get("run_id") for e in events if e.get("run_id")})
+        cmap: dict[str, str] = {}
+        if run_ids:
+            try:
+                for rr in conn.execute(
+                    "SELECT DISTINCT run_id, campaign_id FROM agent_runs "
+                    "WHERE run_id = ANY(%s) AND campaign_id IS NOT NULL",
+                    (run_ids,),
+                ).fetchall():
+                    cmap.setdefault(rr["run_id"], rr["campaign_id"])
+            except Exception:
+                cmap = {}
+        for e in events:
+            rid = e.get("run_id")
+            e["campaign_id"] = cmap.get(rid) or _parse_campaign_from_run_id(rid)
     events.sort(key=lambda e: (e["ts"] is not None, e["ts"]), reverse=True)
     return events
 
@@ -811,6 +906,7 @@ def feed(
                 action_id=e.get("action_id"),
                 run_id=e.get("run_id"),
                 decision_id=e.get("decision_id"),
+                campaign_id=e.get("campaign_id"),
             )
         )
     return out

@@ -19,6 +19,7 @@ import type {
   AutonomyMode,
   Channel,
   ActionFilter,
+  CampaignSpec,
   ChatMessage,
   EngineState,
   FeedEvent,
@@ -738,6 +739,11 @@ export class MockAdapter implements DataAdapter {
   }
   async getRun(id: string) {
     return RUNS.find((r) => r.id === id) ?? null;
+  }
+  async getCampaignSpec(runId: string): Promise<CampaignSpec | null> {
+    // The mock backend assembles no real spec docs — honest-null, never a stub.
+    void runId;
+    return null;
   }
   async getFeed(_tenantId: string, filter?: FeedFilter, _after?: string, limit?: number) {
     let items = FEED;

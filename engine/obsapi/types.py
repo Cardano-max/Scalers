@@ -220,6 +220,9 @@ class Run:
     note: Optional[str]
     trace_url: Optional[str] = None
     events: list[RunEvent]
+    # Real campaign id derived from the run (run_id convention team-{campaign_id}-{uuid}),
+    # authoritative fallback agent_runs.campaign_id. None when no campaign is associated.
+    campaign_id: Optional[strawberry.ID] = None
 
 
 @strawberry.type
@@ -234,6 +237,25 @@ class FeedEvent:
     action_id: Optional[strawberry.ID] = None
     run_id: Optional[strawberry.ID] = None
     decision_id: Optional[strawberry.ID] = None
+    # Real campaign id for this event's run (honest-None when absent).
+    campaign_id: Optional[strawberry.ID] = None
+
+
+@strawberry.type
+class CampaignSpec:
+    """The per-campaign SPEC DOC for one run — assembled from already-persisted
+    REAL rows (plan + agent_runs + archetype). ``markdown`` is rendered read-now;
+    ``content_json`` is the structured JSON for later editing. ``run_id`` IS the
+    spec PK (== Run.id), so no Run-type change is needed to fetch it."""
+
+    run_id: strawberry.ID
+    campaign_id: Optional[str] = None
+    tenant_id: Optional[str] = None
+    archetype_id: Optional[str] = None
+    markdown: str = ""
+    content_json: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 @strawberry.type

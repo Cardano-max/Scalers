@@ -212,6 +212,26 @@ export interface Run {
   note?: string | null;
   traceUrl?: string | null;
   events?: RunEvent[];
+  /** Real campaign id derived from the run (run_id convention team-{campaignId}-{uuid}),
+   * authoritative fallback agent_runs.campaign_id. null when no campaign is associated. */
+  campaignId?: string | null;
+}
+
+/**
+ * The per-campaign SPEC DOC for one run — assembled from already-persisted REAL
+ * rows (plan + agent_runs + archetype). `markdown` is rendered read-now;
+ * `contentJson` is the structured JSON (string) for later editing. `runId` IS
+ * the spec key (== Run.id). Every field is real or honest-null.
+ */
+export interface CampaignSpec {
+  runId: string;
+  campaignId?: string | null;
+  tenantId?: string | null;
+  archetypeId?: string | null;
+  markdown: string;
+  contentJson?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
 }
 
 export interface FeedEvent {
@@ -225,6 +245,8 @@ export interface FeedEvent {
   actionId?: string | null;
   runId?: string | null;
   decisionId?: string | null;
+  /** Real campaign id associated with this feed event's run (honest-null when absent). */
+  campaignId?: string | null;
 }
 
 export interface Kpis {

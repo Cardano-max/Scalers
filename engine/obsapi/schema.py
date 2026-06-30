@@ -27,6 +27,7 @@ from .types import (
     AutonomyConfig,
     AutonomyMode,
     CampaignBrief,
+    CampaignSpec,
     Channel,
     ChatMessage,
     FeedEvent,
@@ -96,6 +97,11 @@ class Query:
     ) -> Optional[Run]:
         tid = str(tenant_id) if tenant_id else None
         return await asyncio.to_thread(repo.run, str(id), tid)
+
+    @strawberry.field
+    async def campaign_spec(self, run_id: strawberry.ID) -> Optional[CampaignSpec]:
+        """The per-campaign spec doc for a run (honest-null when absent)."""
+        return await asyncio.to_thread(repo.campaign_spec, str(run_id))
 
     @strawberry.field
     async def feed(

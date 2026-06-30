@@ -44,11 +44,11 @@ const ACTIVITY_FIELDS = `
 
 const RUN_FIELDS = `
   id tenantId type trigger status startedAt duration autoCount reviewCount
-  retries idempotencyKey channels trajectory { at text state } note traceUrl
+  retries idempotencyKey channels trajectory { at text state } note traceUrl campaignId
   events { worker text severity ms actionId runId decisionId spans { kind title ms detail } }
 `;
 
-const FEED_FIELDS = `id tenantId worker text at chip severity actionId runId decisionId`;
+const FEED_FIELDS = `id tenantId worker text at chip severity actionId runId decisionId campaignId`;
 const KPIS_FIELDS = `autonomyPct reviewQueueCount outreachToday complaintsPct commentsAuto commentsReview postsPublished postsScheduled`;
 const HEALTH_FIELDS = `emailComplaintRate emailBounceRate gmailWarmupUsed gmailWarmupCap igPublishUsed igPublishCap checkpointStatus`;
 
@@ -101,6 +101,14 @@ export const RUNS_QUERY = `
 
 export const RUN_QUERY = `
   query Run($id: ID!) { run(id: $id) { ${RUN_FIELDS} } }
+`;
+
+export const CAMPAIGN_SPEC_QUERY = `
+  query CampaignSpec($runId: ID!) {
+    campaignSpec(runId: $runId) {
+      runId campaignId tenantId archetypeId markdown contentJson createdAt updatedAt
+    }
+  }
 `;
 
 export const FEED_QUERY = `

@@ -7,8 +7,9 @@ import { useConsole } from '@/state/console-store';
 import { Dot } from './icons';
 import { Chip, clockTime } from './console-bits';
 import { WORKER_COLOR } from '@/lib/tokens';
-import type { Run } from '@/lib/data/models';
+import type { Run, CampaignSpec } from '@/lib/data/models';
 import { SpanTree } from './trace/SpanTree';
+import { SpecMarkdown } from './SpecMarkdown';
 
 export function RunsScreen() {
   const { adapter, tenantId } = useData();
@@ -18,7 +19,49 @@ export function RunsScreen() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [openEventIndex, setOpenEventIndex] = useState<number | null>(null);
 
+  // Per-campaign spec doc — lazy-loaded for the selected run on demand.
+  const [specOpen, setSpecOpen] = useState(false);
+  const [specLoading, setSpecLoading] = useState(false);
+  const [specError, setSpecError] = useState<string | null>(null);
+  const [spec, setSpec] = useState<CampaignSpec | null>(null);
+
+  // Reset the spec panel whenever the selected run changes.
+  useEffect(() => {
+    setSpecOpen(false);
+    setSpec(null);
+    setSpecError(null);
+    setSpecLoading(false);
+  }, [selectedRunId]);
+
+  const loadSpec = (runId: string) => {
+    if (specOpen) {
+      setSpecOpen(false);
+      return;
+    }
+    setSpecOpen(true);
+    if (spec || specLoading) return;
+    setSpecLoading(true);
+    setSpecError(null);
+    adapter
+      .getCampaignSpec(runId)
+      .then((s) => setSpec(s))
+      .catch((e) => setSpecError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setSpecLoading(false));
+  };
+
   const items = useMemo(() => runs.data ?? [], [runs.data]);
+
+  // Deep-link: when navigated here with a contextId (run_id) — e.g. from the
+  // live feed "Open run →" / a feed pill / an Overview RunRow — select that run.
+  // Mirrors ActivityScreen's contextId consumer so the navigation actually lands
+  // on the target run instead of defaulting to items[0].
+  useEffect(() => {
+    if (console.contextId && items.some((r) => r.id === console.contextId)) {
+      setSelectedRunId(console.contextId);
+      setOpenEventIndex(null);
+      console.setContext(null);
+    }
+  }, [console.contextId, items, console]);
 
   useEffect(() => {
     if (items.length > 0 && !selectedRunId) {
@@ -142,9 +185,25 @@ export function RunsScreen() {
             </div>
           </div>
 
-          {/* Langfuse trace link */}
-          {selected.traceUrl ? (
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
+          {/* Spec doc + Langfuse trace link */}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
+            <button
+              type="button"
+              onClick={() => loadSpec(selected.id)}
+              style={{
+                fontSize: 12.5,
+                fontWeight: 600,
+                color: specOpen ? '#fff' : '#0B6F68',
+                background: specOpen ? '#0B6F68' : '#fff',
+                border: '1px solid #0B6F68',
+                padding: '8px 13px',
+                borderRadius: 8,
+                cursor: 'pointer',
+              }}
+            >
+              {specOpen ? 'Hide spec ▲' : 'View spec ▾'}
+            </button>
+            {selected.traceUrl ? (
               <button
                 type="button"
                 onClick={() => {
@@ -172,8 +231,39 @@ export function RunsScreen() {
               >
                 View Langfuse trace ↗
               </button>
+            ) : null}
+          </div>
+
+          {/* Spec doc panel — real assembled markdown, or honest-null/empty. */}
+          {specOpen && (
+            <div
+              style={{
+                marginBottom: 18,
+                border: '1px solid var(--hairline, #E0DCD3)',
+                borderRadius: 10,
+                background: '#FBFAF7',
+                padding: '14px 15px',
+                maxHeight: 360,
+                overflowY: 'auto',
+              }}
+            >
+              {specLoading ? (
+                <div style={{ fontSize: 12.5, color: '#8C877D' }}>Assembling spec…</div>
+              ) : specError ? (
+                <div style={{ fontSize: 12.5, color: '#B42318' }}>
+                  Could not load the spec: {specError}
+                </div>
+              ) : spec && spec.markdown ? (
+                <SpecMarkdown markdown={spec.markdown} />
+              ) : (
+                <div style={{ fontSize: 12.5, color: '#8C877D', lineHeight: 1.5 }}>
+                  No spec doc has been assembled for this run yet — it had no
+                  persisted plan/agent traces to build one from. Nothing was
+                  fabricated to fill this in.
+                </div>
+              )}
             </div>
-          ) : null}
+          )}
 
           {/* Run History */}
           <div style={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: '#A8A299', letterSpacing: '0.7px', marginBottom: 11 }}>RUN HISTORY · tap a step for its trace</div>
