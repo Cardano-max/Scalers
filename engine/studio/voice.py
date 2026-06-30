@@ -151,6 +151,46 @@ VOICE_INSTRUCTIONS = (
 # --------------------------------------------------------------------------- #
 
 
+def voice_instructions_with_docs(
+    tenant_id: str, *, dsn: str | None = None, base: str = VOICE_INSTRUCTIONS
+) -> str:
+    """The voice supervisor's instructions, with the ACTIVE persistent documents
+    injected so it truthfully knows it HAS the operator's docs and can reference/reason
+    over them by voice ("yes, I have your brand playbook"). Read-only: the voice agent
+    gains NO tool from this — it stays structurally send-incapable (exactly two tools).
+
+    HONESTY: with no active docs it is told plainly to say none are uploaded; the store
+    being unreachable degrades to the base instructions, never a false claim."""
+    try:
+        from studio.documents import active_docs_index
+
+        docs = active_docs_index(tenant_id, dsn=dsn)
+    except Exception:
+        return base
+    if not docs:
+        return base + (
+            "\n\nKNOWLEDGE: you currently have NO uploaded documents for this studio. "
+            "If the operator asks whether you have their documents / brand playbook, say "
+            "honestly that none are uploaded yet — never claim to have one you do not."
+        )
+    lines = [
+        base,
+        "",
+        "KNOWLEDGE — the operator has uploaded these persistent documents and the whole "
+        "team (including you) reads them. When the operator asks 'do you have my "
+        "documents / brand playbook?', answer YES and name them; you may reference and "
+        "reason over them by voice (the drafting team grounds the actual copy in them):",
+    ]
+    for doc in docs:
+        summ = (doc.get("summary") or "").strip()
+        lines.append(f"- {doc.get('name')}" + (f": {summ}" if summ else ""))
+    lines.append(
+        "You still cannot send or publish anything — but you DO have and use these "
+        "documents."
+    )
+    return "\n".join(lines)
+
+
 def build_session_config(
     *, instructions: str = VOICE_INSTRUCTIONS, voice: str = REALTIME_VOICE
 ) -> dict[str, Any]:
@@ -326,7 +366,23 @@ def mount_studio_voice(app) -> None:
                 {"ok": False, "error": "OPENAI_API_KEY not configured (server-side)."},
                 status_code=503,
             )
-        cfg = build_session_config()
+        # Inject the active persistent documents into the voice supervisor's
+        # instructions so it truthfully knows it has the operator's docs. Best-effort
+        # seed first so a fresh demo already has the brand playbook. Read-only — the
+        # tool surface stays exactly two (send-incapable).
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        dsn = get_dsn()
+        try:
+            from studio.agui import _ensure_docs_seeded
+            from studio.documents import seed_tenant_documents  # noqa: F401
+
+            await _to_thread(_ensure_docs_seeded, app, dsn, tenant_id)
+        except Exception:
+            pass
+        instructions = await _to_thread(
+            voice_instructions_with_docs, tenant_id, dsn=dsn
+        )
+        cfg = build_session_config(instructions=instructions)
         try:
             minted = await _to_thread(mint_realtime_secret, api_key, session_config=cfg)
         except urllib.error.HTTPError as exc:  # honest upstream error
