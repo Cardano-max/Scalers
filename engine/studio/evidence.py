@@ -87,6 +87,15 @@ class EvidenceResearchSource(_Camel):
     query: str | None = None
 
 
+class EvidenceDocument(_Camel):
+    """One passage from the persistent tenant document store that THIS draft actually
+    retrieved + used (recorded on the draft step's ``documents_used`` input)."""
+
+    document: str
+    heading: str | None = None
+    document_id: str | None = None
+
+
 class EvidenceToolCall(_Camel):
     name: str
     detail: str | None = None
@@ -117,6 +126,7 @@ class ActionEvidence(_Camel):
     customer: EvidenceCustomer | None = None
     lead_memories: list[EvidenceMemory] = []
     internal_notes: str | None = None
+    brand_documents: list[EvidenceDocument] = []
     research_sources: list[EvidenceResearchSource] = []
     tool_calls: list[EvidenceToolCall] = []
     critic_review: EvidenceCritic | None = None
@@ -355,6 +365,21 @@ def assemble_action_evidence(
     # --- Internal notes (operator brand/strategy notes attached to the plan) - #
     if internal_notes and internal_notes.strip():
         ev.internal_notes = internal_notes.strip()
+
+    # --- Brand documents: passages from the persistent doc store THIS draft used -#
+    # Recorded on the draft step's ``documents_used`` input by the copywriter node —
+    # real-only: only genuinely retrieved passages were stored, so an absent / empty
+    # list shows no document chip (never a fabricated citation).
+    for du in draft_in.get("documents_used") or []:
+        dud = _as_dict(du)
+        doc_name = str(dud.get("document") or "").strip()
+        if not doc_name:
+            continue
+        ev.brand_documents.append(EvidenceDocument(
+            document=doc_name,
+            heading=(dud.get("heading") or None),
+            document_id=(dud.get("document_id") or None),
+        ))
 
     # --- Research sources: ONLY the URLs THIS draft cited (real-only) -------- #
     # Enrich title/snippet/query from the run's real researcher.sources and the

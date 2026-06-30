@@ -139,6 +139,30 @@ def test_draft_with_no_research_shows_none():
     assert any(t.name == "deterministic_template" for t in ev.tool_calls)
 
 
+def test_brand_documents_surface_only_passages_the_draft_used():
+    """The copywriter node records the playbook passages it retrieved on the draft
+    step's ``documents_used`` input; evidence surfaces them as Brand documents chips —
+    real-only, so a draft that used none shows none."""
+    action = _action(id="act_post", channel="instagram",
+                     idempotency_key="team-camp_abc-deadbeef0001:as_xyz")
+    used = [
+        {"document": "Ladies First Brand & Campaign Playbook",
+         "heading": "Brand identity & voice", "document_id": "doc_seed"},
+    ]
+    runs = [{
+        "id": "ar_draft", "role": "draft", "model": "anthropic:claude-sonnet-4-6",
+        "input": {"channel": "instagram", "tenant_id": "ladies8391",
+                  "brand_voice_applied": True, "documents_used": used},
+        "output": {"caption": "warm florals", "headline": "Reclaim your story"},
+    }]
+    ev = assemble_action_evidence(action=action, agent_runs=runs)
+    assert [d.document for d in ev.brand_documents] == ["Ladies First Brand & Campaign Playbook"]
+    assert ev.brand_documents[0].heading == "Brand identity & voice"
+    # a draft with no documents_used shows no document chip
+    runs[0]["input"]["documents_used"] = []
+    assert assemble_action_evidence(action=action, agent_runs=runs).brand_documents == []
+
+
 def test_brand_voice_hidden_when_not_used_even_if_doc_available():
     runs = _agent_runs_full()
     runs[1]["output"]["grounding"] = ["name=Rae"]  # no brand_voice marker

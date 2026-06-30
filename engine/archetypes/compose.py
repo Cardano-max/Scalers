@@ -70,6 +70,40 @@ def _brand_voice_block(tenant_id: str) -> str:
     return "\n".join(lines)
 
 
+def _documents_block(
+    tenant_id: str, query: str, *, k: int = 4, dsn: str | None = None
+) -> tuple[str, list[dict[str, Any]]]:
+    """Retrieve the top-k passages from the tenant's PERSISTENT document store relevant
+    to ``query`` (ts_rank), formatted as a cell-prompt block, plus the list of passages
+    actually used (``[{document, heading, document_id}]``) for evidence.
+
+    Each node pulls the passages relevant to ITS task (the copywriter pulls voice/CTA,
+    the critic pulls the guardrails) so the large playbook never blows the context
+    window. Degrades to ``("", [])`` honestly when there is no active doc / no lexical
+    match — only genuinely retrieved passages are ever recorded. Lazy import keeps the
+    archetypes package free of a studio import at module load."""
+    try:
+        from studio.documents import retrieve
+
+        hits = retrieve(tenant_id, query, k=k, dsn=dsn)
+    except Exception:
+        return "", []
+    if not hits:
+        return "", []
+    lines = [
+        "# TENANT KNOWLEDGE — relevant passages from the operator's uploaded documents "
+        "(ground claims in these; cite by document + section, never invent beyond them):"
+    ]
+    used: list[dict[str, Any]] = []
+    for h in hits:
+        head = (h.get("heading") or "").strip()
+        doc = h.get("doc_name") or "document"
+        cite = f"{doc} › {head}" if head else doc
+        lines.append(f"- [{cite}] {(h.get('content') or '')[:600]}")
+        used.append({"document": doc, "heading": head or None, "document_id": h.get("document_id")})
+    return "\n".join(lines), used
+
+
 # --------------------------------------------------------------------------- #
 # State (fan-in safe: assets carry an additive reducer for the Send workers).
 # --------------------------------------------------------------------------- #
@@ -183,7 +217,7 @@ def _make_research_node(team_store, dsn):
     return _research_node
 
 
-def _make_strategy_node(team_store):
+def _make_strategy_node(team_store, dsn=None):
     def _strategy_node(state: CampaignState) -> dict[str, Any]:
         """REAL strategy cell (Sonnet, temp 0) -> CampaignStrategy."""
         from cells.strategy import build_strategy_cell, build_strategy_prompt, render_strategy
@@ -193,6 +227,15 @@ def _make_strategy_node(team_store):
             state.tenant_id, state.brief or f"{state.archetype_id} campaign",
             research=state.research_text or None,
         )
+        # Ground the strategy in the operator's own documents — pull the passages
+        # relevant to positioning/angle/audience so the angle reflects the playbook.
+        docs_block, _docs_used = _documents_block(
+            state.tenant_id,
+            f"{state.brief} strategy positioning angle audience offer",
+            k=4, dsn=dsn,
+        )
+        if docs_block:
+            prompt = docs_block + "\n\n" + prompt
         strategy = cell.run_sync(prompt)
         text = render_strategy(strategy)
         _record_run(team_store, campaign_id=state.campaign_id, run_id=state.run_id,
@@ -247,7 +290,7 @@ def _draft_fanout(state: CampaignState):
     ]
 
 
-def _make_draft_one_node(team_store):
+def _make_draft_one_node(team_store, dsn=None):
     def _draft_one_node(state: Any) -> dict[str, Any]:
         """REAL per-channel draft (content-brief cell, Sonnet). One Send worker.
 
@@ -264,9 +307,18 @@ def _make_draft_one_node(team_store):
         # bans / approved claims) instead of merely telling the cell "in the brand
         # voice" with no voice attached. Honest-empty when the pack can't resolve.
         voice_block = _brand_voice_block(state.tenant_id)
+        # Retrieve the playbook passages relevant to THIS draft (voice/angle/CTA for the
+        # channel) so the copy is grounded in the operator's own documents. The used
+        # passages are recorded on the draft run for the evidence chips.
+        docs_block, docs_used = _documents_block(
+            state.tenant_id,
+            f"{state.brief} {state.strategy_text} {channel} voice tone hook call to action",
+            k=3, dsn=dsn,
+        )
         prompt = "\n".join(
             p for p in [
                 voice_block,
+                docs_block,
                 f"Campaign brief: {state.brief or state.archetype_id}",
                 f"Strategy:\n{state.strategy_text}",
                 f"Produce one organic post for channel '{channel}'. Write the caption "
@@ -294,14 +346,15 @@ def _make_draft_one_node(team_store):
         _record_run(team_store, campaign_id=state.campaign_id, run_id=state.run_id,
                     role="draft", model=cell.model if isinstance(cell.model, str) else str(cell.model),
                     inp={"channel": channel, "tenant_id": state.tenant_id,
-                         "brand_voice_applied": bool(voice_block)},
+                         "brand_voice_applied": bool(voice_block),
+                         "documents_used": docs_used},
                     out=brief_out.model_dump())
         return {"assets": [asset], "step_log": [f"draft[{channel}]: real caption produced"]}
 
     return _draft_one_node
 
 
-def _make_critique_node(team_store):
+def _make_critique_node(team_store, dsn=None):
     def _critique_node(state: CampaignState) -> dict[str, Any]:
         """B8: independent critic pass per asset (REAL critic cell). Never a debate."""
         from cells.critic import build_critic_cell
@@ -311,6 +364,13 @@ def _make_critique_node(team_store):
         # written in, so "brand-voice mismatch" / "unapproved claim" are judged against
         # the loaded voice, not the critic's generic prior. Resolved once per run.
         voice_block = _brand_voice_block(state.tenant_id)
+        # Pull the playbook's GUARDRAILS passages so the critic judges against the
+        # operator's own do-not-say / compliance rules, not just a generic prior.
+        docs_block, _ = _documents_block(
+            state.tenant_id,
+            "guardrails do-not-say banned words unapproved claims compliance brand voice",
+            k=3, dsn=dsn,
+        )
         crits: list[dict[str, Any]] = []
         for asset in state.assets:
             content = asset.get("content", {})
@@ -318,6 +378,7 @@ def _make_critique_node(team_store):
             prompt = "\n".join(
                 p for p in [
                     voice_block,
+                    docs_block,
                     f"Campaign objective: {state.strategy_text or state.archetype_id}",
                     f"Channel: {asset.get('channel')}",
                     f"ASSET TO JUDGE (caption):\n{caption}",
@@ -441,10 +502,10 @@ def build_campaign_graph(*, team_store=None, dsn: str | None = None, checkpointe
     b = StateGraph(CampaignState)
     b.add_node("plan", _plan_node)
     b.add_node("research", _make_research_node(team_store, dsn))
-    b.add_node("strategy", _make_strategy_node(team_store))
+    b.add_node("strategy", _make_strategy_node(team_store, dsn))
     b.add_node("draft_dispatch", _draft_dispatch_node)
-    b.add_node("draft_one", _make_draft_one_node(team_store))
-    b.add_node("critique", _make_critique_node(team_store))
+    b.add_node("draft_one", _make_draft_one_node(team_store, dsn))
+    b.add_node("critique", _make_critique_node(team_store, dsn))
     b.add_node("route", _make_route_node(team_store, dsn))
     b.add_node("queue", _make_queue_node(team_store))
 

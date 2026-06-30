@@ -42,6 +42,37 @@ def test_voice_tool_surface_has_no_send_or_publish_tool() -> None:
         assert forbidden not in blob
 
 
+def test_voice_instructions_inject_active_docs_but_keep_two_tools(monkeypatch) -> None:
+    """The voice supervisor is told it HAS the active docs (so it can say 'yes, I have
+    your brand playbook'), and the injection adds NO tool — the surface stays exactly
+    two (send-incapable)."""
+    from studio import documents as docstore
+    from studio.voice import voice_instructions_with_docs
+
+    monkeypatch.setattr(
+        docstore, "active_docs_index",
+        lambda tid, dsn=None: [
+            {"name": "Ladies First Brand & Campaign Playbook",
+             "summary": "Woman-owned Austin color studio."}
+        ],
+    )
+    instr = voice_instructions_with_docs("ladies8391", dsn=None)
+    assert "Ladies First Brand & Campaign Playbook" in instr
+    assert "cannot send or publish" in instr
+    cfg = build_session_config(instructions=instr)
+    assert [t["name"] for t in cfg["tools"]] == ["update_plan", "request_orchestration"]
+
+
+def test_voice_instructions_honest_when_no_docs(monkeypatch) -> None:
+    from studio import documents as docstore
+    from studio.voice import voice_instructions_with_docs
+
+    monkeypatch.setattr(docstore, "active_docs_index", lambda tid, dsn=None: [])
+    instr = voice_instructions_with_docs("ladies8391", dsn=None)
+    assert "NO uploaded documents" in instr
+    assert "Ladies First" not in instr  # nothing fabricated
+
+
 def test_minted_session_declares_only_the_two_tools() -> None:
     cfg = build_session_config()
     assert [t["name"] for t in cfg["tools"]] == ["update_plan", "request_orchestration"]

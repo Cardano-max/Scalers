@@ -189,6 +189,7 @@ export function EvidenceProvenance({ evidence }: { evidence: ActionEvidence | nu
   const customer = evidence?.customer ?? null;
   const memories = evidence?.leadMemories ?? [];
   const notes = hasText(evidence?.internalNotes) ? evidence!.internalNotes! : null;
+  const brandDocs = evidence?.brandDocuments ?? [];
   const sources = evidence?.researchSources ?? [];
   const tools = evidence?.toolCalls ?? [];
   const critic = evidence?.criticReview ?? null;
@@ -205,6 +206,7 @@ export function EvidenceProvenance({ evidence }: { evidence: ActionEvidence | nu
     !!customer ||
     memories.length > 0 ||
     !!notes ||
+    brandDocs.length > 0 ||
     sources.length > 0 ||
     tools.length > 0 ||
     !!critic ||
@@ -290,6 +292,24 @@ export function EvidenceProvenance({ evidence }: { evidence: ActionEvidence | nu
         <Category label="Internal notes">
           <div style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
             {notes}
+          </div>
+        </Category>
+      ) : null}
+
+      {brandDocs.length > 0 ? (
+        <Category label="Brand documents">
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {brandDocs.map((doc, i) => (
+              <span key={`doc-${i}`} style={CHIP} title={doc.documentId ?? undefined}>
+                {doc.document}
+                {hasText(doc.heading) ? (
+                  <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>
+                    {' '}
+                    › {doc.heading}
+                  </span>
+                ) : null}
+              </span>
+            ))}
           </div>
         </Category>
       ) : null}

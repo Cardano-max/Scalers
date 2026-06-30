@@ -20,6 +20,7 @@ import { studioPersona } from '@/lib/studio/persona';
 import { MicButton } from './MicButton';
 import { CustomerUpload } from './CustomerUpload';
 import { BrandNotesUpload } from './BrandNotesUpload';
+import { KnowledgePanel } from './KnowledgePanel';
 import type { SttFactoryOptions } from '@/lib/studio/stt';
 
 export interface VoiceTweakApproval {
@@ -40,6 +41,8 @@ interface VoiceTweakPanelProps {
   uploadEndpoint?: string;
   /** POST /studio/notes — brand / strategy notes (omit in preview). */
   notesEndpoint?: string;
+  /** /studio/documents — persistent knowledge store (omit in preview). */
+  documentsEndpoint?: string;
   sessionId: string;
   micOptions?: SttFactoryOptions;
 }
@@ -54,6 +57,7 @@ export function VoiceTweakPanel({
   onReject,
   uploadEndpoint,
   notesEndpoint,
+  documentsEndpoint,
   sessionId,
   micOptions,
 }: VoiceTweakPanelProps) {
@@ -196,6 +200,10 @@ export function VoiceTweakPanel({
         <CustomerUpload endpoint={uploadEndpoint} sessionId={sessionId} />
         <BrandNotesUpload endpoint={notesEndpoint} sessionId={sessionId} />
       </div>
+
+      {/* Persistent knowledge store — the docs every agent reads (host, run, voice). */}
+      <KnowledgePanel endpoint={documentsEndpoint} />
+
 
       {/* The small "tweak" composer. */}
       <div
