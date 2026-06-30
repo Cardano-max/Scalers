@@ -409,6 +409,193 @@ def _documents_context(ctx: RunContext[StudioDeps]) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Live PROGRESS summary — the active run's REAL state injected into the host
+# context, mirroring the document-store injection above. This is what lets the
+# supervisor answer "what's the progress?" from the actual runs / agent_runs /
+# actions of the active run instead of guessing. Honest-empty in both directions:
+# no active run -> say so (all zero); no data -> report real zeros, never invent.
+# --------------------------------------------------------------------------- #
+
+# Map a node span's execution status onto the agent-progress bucket the host
+# reports. Unknown statuses fall through to their own raw name (honest — a status
+# the data shows is never silently dropped or relabelled).
+_SPAN_STATUS_BUCKET: dict[str, str] = {
+    "ok": "completed", "completed": "completed", "success": "completed",
+    "done": "completed",
+    "failed": "failed", "error": "failed",
+    "running": "running", "in_progress": "running",
+    "queued": "queued", "pending": "queued",
+    "skipped": "skipped",
+    "needs-review": "needs_review", "needs_review": "needs_review",
+}
+
+
+def _tenant_runs(tenant_id: str, dsn: str | None) -> list[Any]:
+    """REAL read: this tenant's runs, newest first (or [] on any failure). A thin,
+    monkeypatchable seam over the durable run store."""
+    try:
+        from harness.runstore import PostgresRunStore
+
+        if not dsn:
+            return []
+        store = PostgresRunStore(dsn)
+        store.setup()
+        return list(store.list_runs(tenant_id))
+    except Exception:
+        return []
+
+
+def _tenant_actions(tenant_id: str, dsn: str | None) -> list[Any]:
+    """REAL read: this tenant's actions (review-queue / activity rows), newest first
+    (or [] on failure). Monkeypatchable seam over the actions store."""
+    try:
+        from actions.store import list_actions
+
+        return list(list_actions(tenant_id, dsn=dsn))
+    except Exception:
+        return []
+
+
+def _agent_runs_for(run_id: str, dsn: str | None) -> list[dict[str, Any]]:
+    """REAL read: the per-role agent_runs recorded for one run, oldest first (or []
+    on failure). Monkeypatchable seam over the team store."""
+    try:
+        from team.store import TeamStore
+
+        if not dsn:
+            return []
+        ts = TeamStore(dsn)
+        ts.setup()
+        return list(ts.list_agent_runs(run_id))
+    except Exception:
+        return []
+
+
+def build_progress_context(tenant_id: str, plan: CampaignPlan, dsn: str | None) -> str:
+    """Assemble the host's per-turn view of the ACTIVE campaign run's REAL progress.
+
+    This is what lets the supervisor truthfully answer "what's the progress?": it
+    resolves the most recent campaign run for this tenant and reports the genuine
+    counts read from runs / agent_runs / actions — agents by status (completed /
+    running / queued / skipped / failed), drafts created vs expected, research
+    sources found, review-queue items, and sends completed / failed. HONESTY in both
+    directions: with NO run it says so plainly (all zero, nothing launched) so the
+    host never invents progress; a store hiccup degrades to that honest-empty note,
+    never a fabricated number. Pure-ish (reads the stores through the monkeypatchable
+    seams above) so it is unit-testable without a database."""
+    runs = _tenant_runs(tenant_id, dsn)
+    actions_all = _tenant_actions(tenant_id, dsn)
+
+    # Resolve the ACTIVE run. The latest ``runs`` row is authoritative (it carries the
+    # run status + the per-agent node spans). But a studio run materializes its runs
+    # row only at the END, so an in-flight run shows up in ``actions`` first — if the
+    # newest action points at a run that has NO runs row yet, surface that in-flight
+    # run instead of the previous (already-materialized) one.
+    record = runs[0] if runs else None
+    run_id = getattr(record, "run_id", None) if record is not None else None
+    latest_action_rid = next((a.run_id for a in actions_all if getattr(a, "run_id", None)), None)
+    if (
+        latest_action_rid
+        and latest_action_rid != run_id
+        and not any(getattr(r, "run_id", None) == latest_action_rid for r in runs)
+    ):
+        run_id = latest_action_rid
+        record = None  # in-flight: the runs row is not materialized yet
+
+    if not run_id:
+        return (
+            "CAMPAIGN PROGRESS: there is NO active campaign run for this studio yet — "
+            "nothing has been launched, so every count is zero. If the operator asks "
+            "'what's the progress?', say honestly that no run is in flight and offer to "
+            "start one. NEVER invent progress, drafts, research, or sends."
+        )
+
+    # Agents by status. The authoritative source is the run's per-node spans (each
+    # carries a real execution status). Before the runs row materializes we fall back
+    # to the recorded agent_runs (each recorded run = one completed agent) — honest,
+    # and we never invent queued/skipped agents the data does not actually show.
+    agent_runs = _agent_runs_for(run_id, dsn)
+    node_spans = [
+        s
+        for s in (getattr(record, "steps", None) or [])
+        if (getattr(s, "kind", "node") or "node") == "node"
+    ]
+    status_counts: dict[str, int] = {}
+    if node_spans:
+        for s in node_spans:
+            raw = (getattr(s, "status", "") or "").lower()
+            bucket = _SPAN_STATUS_BUCKET.get(raw, raw or "unknown")
+            status_counts[bucket] = status_counts.get(bucket, 0) + 1
+    elif agent_runs:
+        status_counts["completed"] = len(agent_runs)
+
+    # Drafts + research come from the recorded role outputs (agent_runs).
+    drafts_created = sum(1 for ar in agent_runs if ar.get("role") == "draft")
+    research_sources = 0
+    for ar in agent_runs:
+        if ar.get("role") != "researcher":
+            continue
+        out = ar.get("output")
+        if not isinstance(out, dict):
+            continue
+        cited = out.get("cited")
+        if cited is None:
+            cited = len(out.get("sources") or [])
+        try:
+            research_sources += int(cited or 0)
+        except (TypeError, ValueError):
+            pass
+
+    expected = plan.output_count or plan.lead_count or 0
+
+    # Review queue + sends come from THIS run's actions (filtered from the tenant set).
+    run_actions = [a for a in actions_all if getattr(a, "run_id", None) == run_id]
+    review_queue = sum(1 for a in run_actions if getattr(a, "status", None) == "pending")
+    sends_completed = sum(1 for a in run_actions if getattr(a, "status", None) == "sent")
+    sends_failed = sum(1 for a in run_actions if getattr(a, "status", None) == "failed")
+
+    if record is not None:
+        run_status = getattr(getattr(record, "status", None), "value", None) or str(
+            getattr(record, "status", "") or "unknown"
+        )
+    else:
+        run_status = "running"  # in-flight: the runs row is not materialized yet
+
+    # Render only the agent buckets that actually have a count (honest — no zero-fill
+    # of statuses the run never produced), in a stable, readable order.
+    order = ["completed", "running", "queued", "skipped", "failed", "needs_review"]
+    ordered = [b for b in order if status_counts.get(b)]
+    ordered += [b for b in status_counts if b not in order and status_counts[b]]
+    agents_line = (
+        ", ".join(f"{b}={status_counts[b]}" for b in ordered)
+        if ordered
+        else "none recorded yet"
+    )
+    drafts_line = f"{drafts_created} created" + (
+        f" / {expected} expected" if expected else ""
+    )
+
+    lines = [
+        "CAMPAIGN PROGRESS — the REAL, live state of the most recent campaign run for "
+        "this studio, read from runs / agent_runs / actions. When the operator asks "
+        "'what's the progress?', answer from HERE and never fabricate a count:",
+        f"- run: {run_id} (status: {run_status})",
+        f"- agents: {agents_line}",
+        f"- drafts: {drafts_line}",
+        f"- research sources found: {research_sources}",
+        f"- review queue (drafts staged HELD, approve-first): {review_queue}",
+        f"- sends: {sends_completed} completed, {sends_failed} failed",
+    ]
+    return "\n".join(lines)
+
+
+@studio_agent.instructions
+def _progress_context(ctx: RunContext[StudioDeps]) -> str:
+    """Surface the active run's REAL progress to the host on EVERY turn."""
+    return build_progress_context(ctx.deps.tenant_id, ctx.deps.state, ctx.deps.dsn)
+
+
+# --------------------------------------------------------------------------- #
 # Persistence helpers (sync psycopg, offloaded to threads from the async tools)
 # --------------------------------------------------------------------------- #
 
