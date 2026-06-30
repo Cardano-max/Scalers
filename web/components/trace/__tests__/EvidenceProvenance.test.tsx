@@ -25,6 +25,14 @@ function fullEvidence(over: Partial<ActionEvidence> = {}): ActionEvidence {
     target: 'Rae',
     status: 'pending',
     createdBy: { role: 'draft', model: 'anthropic:claude-sonnet-4-6', reasoningSummary: 'Hello' },
+    personalization: {
+      angle: 'their past fine-line work with us',
+      angleKey: 'past-work',
+      whyDifferent:
+        'Personalized on their past fine-line work with us; grounded on past fine-line piece on file.',
+      generic: false,
+      inferred: false,
+    },
     brandVoice: {
       tenantId: 'ladies8391',
       used: true,
@@ -50,8 +58,8 @@ function fullEvidence(over: Partial<ActionEvidence> = {}): ActionEvidence {
     internalNotes: null,
     brandDocuments: [],
     researchSources: [
-      { url: 'https://example.com/a', title: 'Source A', snippet: 'snip a', query: 'q a' },
-      { url: 'https://example.com/b', title: 'Source B', snippet: 'snip b', query: 'q b' },
+      { url: 'https://example.com/a', title: 'Source A', snippet: 'snip a', query: 'q a', sourceType: 'website' },
+      { url: 'https://example.com/b', title: 'Source B', snippet: 'snip b', query: 'q b', sourceType: 'social' },
     ],
     toolCalls: [{ name: 'copywriter_email_cell', detail: 'brand-voiced email copy' }],
     criticReview: null,
@@ -134,6 +142,48 @@ describe('EvidenceProvenance', () => {
     wrap(<EvidenceProvenance evidence={fullEvidence()} />);
     expect(screen.getByText('Rae')).toBeInTheDocument();
     expect(screen.getByText('Austin')).toBeInTheDocument();
+  });
+
+  it('renders the per-lead "why this draft is different" angle + rationale (clean, not JSON)', () => {
+    wrap(<EvidenceProvenance evidence={fullEvidence()} />);
+    expect(screen.getByText('Why this draft is different')).toBeInTheDocument();
+    expect(screen.getByText(/angle · their past fine-line work with us/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Personalized on their past fine-line work with us; grounded on/i),
+    ).toBeInTheDocument();
+    // grounded (not generic/inferred)
+    expect(screen.getByText('grounded')).toBeInTheDocument();
+    expect(screen.queryByText('honest-generic')).not.toBeInTheDocument();
+  });
+
+  it('honestly labels a thin-data draft as generic (no faked personalization)', () => {
+    wrap(
+      <EvidenceProvenance
+        evidence={fullEvidence({
+          personalization: {
+            angle: 'an honest general introduction',
+            angleKey: 'generic',
+            whyDifferent:
+              'Honest-generic: no distinguishing research or history on file for Sam, so this draft stays a general introduction.',
+            generic: true,
+            inferred: false,
+          },
+        })}
+      />,
+    );
+    expect(screen.getByText('honest-generic')).toBeInTheDocument();
+    expect(screen.getByText(/no distinguishing research or history on file/i)).toBeInTheDocument();
+  });
+
+  it('tags each research source with its type chip (website / social) for diversity', () => {
+    wrap(<EvidenceProvenance evidence={fullEvidence()} />);
+    expect(screen.getByText('website')).toBeInTheDocument();
+    expect(screen.getByText('social')).toBeInTheDocument();
+  });
+
+  it('does NOT render the personalization category when none was captured', () => {
+    wrap(<EvidenceProvenance evidence={fullEvidence({ personalization: null })} />);
+    expect(screen.queryByText('Why this draft is different')).not.toBeInTheDocument();
   });
 
   it('renders the honest-empty line when evidence is null (never raw JSON)', () => {

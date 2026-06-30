@@ -670,7 +670,7 @@ def _template_outreach(
             "re-engagement": f"{first}, it's been too long",
             "csv-note": f"A quick hello, {first}",
             "local": f"Fellow {city} studio saying hi" if city else f"Hello, {first}",
-            "generic": f"An intro, one studio to another — {first}",
+            "generic": f"An intro, one studio to another, {first}",
         }
         subject = (subj_by_key.get(key) or f"Hello, {first}").strip()[:60]
     return subject, body
