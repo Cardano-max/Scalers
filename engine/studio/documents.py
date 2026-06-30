@@ -24,6 +24,8 @@ the doc is invisible to every agent immediately.
 
 from __future__ import annotations
 
+import csv
+import io
 import os
 import re
 import uuid
@@ -97,16 +99,123 @@ def _split_oversize(text: str, hard_max: int) -> list[str]:
     return [p for p in out if p]
 
 
+# --------------------------------------------------------------------------- #
+# CSV-aware chunking — a CSV is structured rows, not prose. We emit ONE retrievable
+# passage per data row (carrying the header context) so an individual lead/row is
+# findable by ts_rank, instead of dumping the whole table as one opaque blob.
+# --------------------------------------------------------------------------- #
+def _parse_csv(content: str) -> tuple[list[str], list[list[str]]]:
+    """Parse CSV ``content`` into ``(header, data_rows)``.
+
+    The first non-empty record is the header; the rest are data rows. Returns
+    ``([], [])`` for empty/headerless input (honest — caller falls back). Pure."""
+    text = (content or "").replace("\r\n", "\n").replace("\r", "\n").strip("\n")
+    if not text.strip():
+        return [], []
+    rows = [
+        [c.strip() for c in row]
+        for row in csv.reader(io.StringIO(text))
+        if any(c.strip() for c in row)  # drop fully-blank records
+    ]
+    if not rows:
+        return [], []
+    header = rows[0]
+    return header, rows[1:]
+
+
+def _looks_like_csv(content: str) -> bool:
+    """Conservative CSV sniff for content uploaded without an explicit ``kind``.
+
+    Requires a delimited header (>= 2 columns), at least one data row, and the
+    header not being a markdown heading — so prose / markdown is never misrouted."""
+    text = (content or "").strip()
+    if not text or text.lstrip().startswith("#"):
+        return False
+    header, data = _parse_csv(text)
+    if len(header) < 2 or not data:
+        return False
+    # Most data rows should line up with the header width (a real table), not a
+    # paragraph that merely happens to contain a comma.
+    aligned = sum(1 for r in data if abs(len(r) - len(header)) <= 1)
+    return aligned >= max(1, (len(data) + 1) // 2)
+
+
+def _format_csv_row(header: list[str], row: list[str], rownum: int) -> str:
+    """One row as a self-describing passage: ``Row N — col: val, col2: val2``.
+
+    Header context travels with every row so the cell values are retrievable in
+    isolation. Empty cells are dropped to keep the passage focused; extra values
+    beyond the header are labelled ``colK``."""
+    parts: list[str] = []
+    for i, val in enumerate(row):
+        if not val:
+            continue
+        col = header[i] if i < len(header) and header[i] else f"col{i + 1}"
+        parts.append(f"{col}: {val}")
+    body = ", ".join(parts)
+    return f"Row {rownum} — {body}" if body else f"Row {rownum}"
+
+
+def _chunk_csv(
+    content: str, *, hard_max: int = _CHUNK_HARD_MAX
+) -> list[tuple[str | None, str]]:
+    """Chunk a CSV into one ``(heading, passage)`` per data row (header carried on
+    each). A pathologically wide row is split on boundaries to respect ``hard_max``;
+    its ``Row N`` heading is kept on every piece. Pure — no I/O."""
+    header, data = _parse_csv(content)
+    if not header or not data:
+        return []
+    chunks: list[tuple[str | None, str]] = []
+    for idx, row in enumerate(data, start=1):
+        heading = f"Row {idx}"
+        passage = _format_csv_row(header, row, idx)
+        if len(passage) <= hard_max:
+            chunks.append((heading, passage))
+        else:
+            for piece in _split_oversize(passage, hard_max):
+                chunks.append((heading, piece))
+    return chunks
+
+
+def _summarize_csv(content: str) -> str:
+    """Truthful CSV summary: ``CSV: <N> rows; columns: <a, b, c>`` with REAL counts
+    (data rows, excluding the header) and the real column names. Pure — never fabricates."""
+    header, data = _parse_csv(content)
+    if not header:
+        return ""
+    cols = ", ".join(c for c in header if c) or "(unnamed)"
+    n = len(data)
+    return f"CSV: {n} {'row' if n == 1 else 'rows'}; columns: {cols}"
+
+
+def _is_csv_kind(kind: str | None, content: str) -> bool:
+    """Whether ``content`` should be chunked/summarized as CSV: an explicit
+    ``kind=='csv'``, or (when no kind is given) a conservative content sniff."""
+    if (kind or "").strip().lower() == "csv":
+        return True
+    return kind in (None, "") and _looks_like_csv(content)
+
+
 def chunk_document(
-    content: str, *, target: int = _CHUNK_TARGET, hard_max: int = _CHUNK_HARD_MAX
+    content: str,
+    *,
+    kind: str | None = None,
+    target: int = _CHUNK_TARGET,
+    hard_max: int = _CHUNK_HARD_MAX,
 ) -> list[tuple[str | None, str]]:
     """Split a document into retrievable passages, returning ``(heading, text)`` pairs.
 
-    Markdown-aware: it tracks the nearest section heading and groups paragraphs under
-    it until the passage reaches ~``target`` chars (flushing at a paragraph boundary),
-    flushing early on a heading change. The heading is carried on each chunk for
-    citations. A single oversize paragraph is split on sentence boundaries to respect
-    ``hard_max``. Pure — no I/O."""
+    CSV-aware: when ``kind=='csv'`` (or, with no kind, the content sniffs as CSV) the
+    document is chunked one passage PER ROW via :func:`_chunk_csv`, so an individual
+    lead/row is retrievable by ts_rank rather than buried in one blob.
+
+    Otherwise markdown-aware: it tracks the nearest section heading and groups
+    paragraphs under it until the passage reaches ~``target`` chars (flushing at a
+    paragraph boundary), flushing early on a heading change. The heading is carried on
+    each chunk for citations. A single oversize paragraph is split on sentence
+    boundaries to respect ``hard_max``. Pure — no I/O."""
+    if _is_csv_kind(kind, content):
+        return _chunk_csv(content, hard_max=hard_max)
     text = (content or "").replace("\r\n", "\n").replace("\r", "\n")
     if not text.strip():
         return []
@@ -145,9 +254,16 @@ def chunk_document(
     return chunks
 
 
-def summarize(content: str, *, limit: int = 320) -> str:
-    """A compact, human-readable summary for the per-turn index: the first substantive
+def summarize(content: str, *, limit: int = 320, kind: str | None = None) -> str:
+    """A compact, human-readable summary for the per-turn index.
+
+    For a CSV (``kind=='csv'`` or sniffed) this is the truthful ``CSV: <N> rows;
+    columns: <...>`` shape with REAL counts. Otherwise the first substantive
     (non-heading) paragraph, trimmed to ``limit`` chars. Pure — no model call."""
+    if _is_csv_kind(kind, content):
+        s = _summarize_csv(content)
+        if s:
+            return s if len(s) <= limit else s[: limit - 1].rstrip() + "…"
     text = (content or "").replace("\r\n", "\n").replace("\r", "\n")
     for para in re.split(r"\n\s*\n", text):
         para = para.strip()
@@ -185,8 +301,8 @@ def add_document(
     column is generated by Postgres, so it is never written here."""
     ensure_schema(dsn)
     did = doc_id or f"doc_{uuid.uuid4().hex[:16]}"
-    summ = summary if summary is not None else summarize(content)
-    chunks = chunk_document(content)
+    summ = summary if summary is not None else summarize(content, kind=kind)
+    chunks = chunk_document(content, kind=kind)
     with _connect(dsn) as conn, conn.transaction():
         row = conn.execute(
             "INSERT INTO tenant_documents "

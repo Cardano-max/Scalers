@@ -60,6 +60,33 @@ def test_add_list_retrieve_remove_round_trip(tenant) -> None:
     assert d.deactivate_document(tenant, doc_id) is False
 
 
+_CSV = (
+    "name,email,city,notes\n"
+    "Monolith Tattoo,appointments@monolith.com,Austin,asked about cover-ups\n"
+    "Ink & Co,hello@inkco.com,Dallas,wants a consult\n"
+)
+
+
+def test_csv_chunks_per_row_and_retrieves_a_specific_row(tenant) -> None:
+    # A CSV uploaded as kind='csv' is chunked one passage per data row, gets a
+    # truthful summary, and an individual row is retrievable by a cell value.
+    doc_id = d.add_document(tenant, "Leads", _CSV, kind="csv")
+
+    idx = d.active_docs_index(tenant)
+    assert idx[0]["chunks"] == 2  # two data rows, one passage each
+    assert idx[0]["summary"] == "CSV: 2 rows; columns: name, email, city, notes"
+
+    hits = d.retrieve(tenant, "Monolith cover-ups", k=3)
+    assert hits, "expected to retrieve the specific lead row by its cell values"
+    assert hits[0]["document_id"] == doc_id
+    assert "Monolith Tattoo" in hits[0]["content"]
+    assert hits[0]["heading"] == "Row 1"
+
+    # soft-remove drops the CSV (and its rows) from every surface
+    assert d.deactivate_document(tenant, doc_id) is True
+    assert d.retrieve(tenant, "Monolith cover-ups", k=3) == []
+
+
 def test_seed_is_idempotent(tenant) -> None:
     a = d.seed_tenant_documents(tenant)
     b = d.seed_tenant_documents(tenant)
