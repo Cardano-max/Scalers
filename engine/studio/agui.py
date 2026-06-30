@@ -341,6 +341,73 @@ def _brand_voice_context(ctx: RunContext[StudioDeps]) -> str:
     )
 
 
+def build_documents_context(tenant_id: str, plan: CampaignPlan, dsn: str | None) -> str:
+    """Assemble the host's per-turn view of the PERSISTENT tenant document store.
+
+    This is what kills "I don't have access to any uploaded documents": the active
+    docs (a real index of name + summary) are listed so the host can truthfully answer
+    "do you have my documents?", AND the passages most relevant to the current plan are
+    retrieved (ts_rank) and injected so it can actually reason over their content this
+    turn. HONESTY in both directions: with NO active docs it says so plainly (so the
+    host never pretends a doc exists); the store being unreachable degrades to a neutral
+    note, never a false claim. Pure-ish (reads the store) so it is unit-testable."""
+    try:
+        from studio import documents as docstore
+
+        docs = docstore.active_docs_index(tenant_id, dsn=dsn)
+    except Exception:
+        return (
+            "TENANT DOCUMENT STORE: the persistent knowledge store is configured; "
+            "documents uploaded in the Knowledge panel survive across sessions and the "
+            "whole team reads them. (No documents loaded this turn.)"
+        )
+    if not docs:
+        return (
+            "TENANT DOCUMENT STORE: you currently have NO uploaded documents for this "
+            "studio. If the operator asks whether you have their documents / brand "
+            "playbook, say honestly that none are uploaded yet and invite them to add "
+            "one in the Knowledge panel. NEVER claim to have a document you do not."
+        )
+    lines = [
+        "TENANT DOCUMENT STORE — you HAVE these persistent uploaded documents and you "
+        "ARE using them (the whole team reads them, RAG-grounded). When the operator "
+        "asks 'do you have my documents?', answer YES and list them by name:",
+    ]
+    for doc in docs:
+        summ = (doc.get("summary") or "").strip()
+        meta = f"{doc.get('kind', 'doc')}, {doc.get('chars', 0)} chars"
+        lines.append(f"- {doc.get('name')} ({meta})" + (f": {summ}" if summ else ""))
+    # Retrieve passages relevant to the current plan so the host can reason over real
+    # content this turn (not just names). Best-effort + honest-empty.
+    query = " ".join(
+        x for x in [plan.goal, plan.audience, " ".join(plan.channels or [])] if x
+    ).strip()
+    try:
+        from studio import documents as docstore
+
+        hits = docstore.retrieve(tenant_id, query, k=4, dsn=dsn) if query else []
+    except Exception:
+        hits = []
+    if hits:
+        lines.append(
+            "\nRELEVANT PASSAGES (retrieved from your documents for the current plan — "
+            "ground brand/strategy claims in these and cite by document + section; never "
+            "invent beyond them):"
+        )
+        for h in hits:
+            head = (h.get("heading") or "").strip()
+            label = h.get("doc_name") or "document"
+            cite = f"{label} › {head}" if head else label
+            lines.append(f"  - [{cite}] {(h.get('content') or '')[:500]}")
+    return "\n".join(lines)
+
+
+@studio_agent.instructions
+def _documents_context(ctx: RunContext[StudioDeps]) -> str:
+    """Surface the persistent tenant document store to the host on EVERY turn."""
+    return build_documents_context(ctx.deps.tenant_id, ctx.deps.state, ctx.deps.dsn)
+
+
 # --------------------------------------------------------------------------- #
 # Persistence helpers (sync psycopg, offloaded to threads from the async tools)
 # --------------------------------------------------------------------------- #
@@ -1313,6 +1380,26 @@ def _load_plan(session_id: str, dsn: str | None) -> CampaignPlan:
     return CampaignPlan()
 
 
+def _ensure_docs_seeded(app, dsn: str | None, tenant_id: str) -> None:
+    """Best-effort once-per-tenant seed of the brand playbook into the persistent
+    document store, so the demo has a real active doc on first studio use. Guarded by
+    an ``app.state`` set (marked before seeding to avoid a duplicate concurrent seed);
+    the seed itself is idempotent regardless. Never raises into the request path."""
+    try:
+        seeded = getattr(app.state, "_docs_seeded", None)
+        if seeded is None:
+            seeded = set()
+            app.state._docs_seeded = seeded
+        if tenant_id in seeded:
+            return
+        seeded.add(tenant_id)
+        from studio.documents import seed_tenant_documents
+
+        seed_tenant_documents(tenant_id, dsn=dsn)
+    except Exception:
+        pass
+
+
 def mount_studio_agui(app) -> None:
     """Mount ``POST /studio/agui`` alongside the existing /graphql + SSE."""
     from pydantic_ai.ui.ag_ui import AGUIAdapter
@@ -1357,6 +1444,9 @@ def mount_studio_agui(app) -> None:
         # NEXT_PUBLIC_TENANT_ID — otherwise studio output lands in a tenant the
         # Runs/Review tabs don't query. Default "demo" matches the existing data.
         tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        # Seed the persistent brand doc on first use so the host genuinely has the
+        # operator's documents to read this turn (best-effort, idempotent).
+        await asyncio.to_thread(_ensure_docs_seeded, app, dsn, tenant_id)
         deps = StudioDeps(
             state=_load_plan(session_id, dsn),
             session_id=session_id,
@@ -1739,6 +1829,134 @@ def mount_studio_agui(app) -> None:
                 "them when planning and running. Nothing was sent.",
             }
         )
+
+    @app.post("/studio/documents")
+    async def studio_documents_upload_route(request: Request):  # noqa: ANN202
+        """Upload a PERSISTENT tenant document (brand playbook / strategy / etc.).
+
+        Tenant-scoped and durable — it SURVIVES sessions/runs (NOT tied to a chat
+        session id), so every agent reads it from now on. REAL parse only: the text is
+        stored + chunked for ts_rank retrieval; nothing is sent. Accepts JSON
+        ``{name, content, kind?}``. 400 on empty content."""
+        from fastapi.responses import JSONResponse
+
+        from studio import documents as docstore
+
+        dsn = get_dsn()
+        try:
+            payload = json.loads(await request.body() or b"{}")
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        name = (payload.get("name") or payload.get("filename") or "").strip() or "Document"
+        kind = (payload.get("kind") or "doc").strip() or "doc"
+        content = (payload.get("content") or "").strip()
+        if not content:
+            return JSONResponse(
+                {"ok": False, "error": "empty document — no text content"},
+                status_code=400,
+            )
+        try:
+            doc_id = await asyncio.to_thread(
+                lambda: docstore.add_document(
+                    tenant_id, name, content, kind=kind, source="upload", dsn=dsn
+                )
+            )
+            info = await asyncio.to_thread(lambda: docstore.get_document(doc_id, dsn=dsn))
+        except Exception as exc:
+            return JSONResponse(
+                {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500
+            )
+        return JSONResponse(
+            {
+                "ok": True,
+                "id": doc_id,
+                "name": name,
+                "kind": kind,
+                "chars": (info or {}).get("chars", len(content)),
+                "chunks": (info or {}).get("chunks", 0),
+                "note": "Document stored persistently — the whole team (host, run "
+                "agents, voice) reads it from now on. Nothing was sent.",
+            }
+        )
+
+    @app.get("/studio/documents")
+    async def studio_documents_list_route():  # noqa: ANN202
+        """List this tenant's ACTIVE persistent documents (the compact index the
+        agents read). Best-effort seeds the brand playbook on first use so the demo
+        has a real doc immediately. Honest-empty when none."""
+        from fastapi.responses import JSONResponse
+
+        from studio import documents as docstore
+
+        dsn = get_dsn()
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        await asyncio.to_thread(_ensure_docs_seeded, app, dsn, tenant_id)
+        try:
+            docs = await asyncio.to_thread(
+                lambda: docstore.active_docs_index(tenant_id, dsn=dsn)
+            )
+        except Exception as exc:
+            return JSONResponse(
+                {"ok": False, "error": f"{type(exc).__name__}: {exc}", "documents": []},
+                status_code=500,
+            )
+        return JSONResponse(
+            {
+                "ok": True,
+                "documents": [
+                    {
+                        "id": d.get("id"),
+                        "name": d.get("name"),
+                        "kind": d.get("kind"),
+                        "summary": d.get("summary"),
+                        "chars": d.get("chars"),
+                        "chunks": d.get("chunks"),
+                        "source": d.get("source"),
+                        "createdAt": (
+                            d["created_at"].isoformat()
+                            if hasattr(d.get("created_at"), "isoformat")
+                            else str(d.get("created_at"))
+                        ),
+                    }
+                    for d in docs
+                ],
+            }
+        )
+
+    @app.post("/studio/documents/remove")
+    async def studio_documents_remove_route(request: Request):  # noqa: ANN202
+        """Soft-remove a document (``active=false``) so it drops from EVERY agent
+        surface at once. Body ``{id}``. Returns whether an active doc was removed
+        (real-only — never a fake success)."""
+        from fastapi.responses import JSONResponse
+
+        from studio import documents as docstore
+
+        dsn = get_dsn()
+        try:
+            payload = json.loads(await request.body() or b"{}")
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        doc_id = (payload.get("id") or payload.get("documentId") or "").strip()
+        if not doc_id:
+            return JSONResponse(
+                {"ok": False, "error": "missing document id"}, status_code=400
+            )
+        try:
+            removed = await asyncio.to_thread(
+                lambda: docstore.deactivate_document(tenant_id, doc_id, dsn=dsn)
+            )
+        except Exception as exc:
+            return JSONResponse(
+                {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500
+            )
+        return JSONResponse({"ok": True, "id": doc_id, "removed": removed})
 
     @app.get("/studio/action/{action_id}/evidence")
     async def studio_action_evidence_route(action_id: str):  # noqa: ANN202
