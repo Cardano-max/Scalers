@@ -374,7 +374,6 @@ def mount_studio_voice(app) -> None:
         dsn = get_dsn()
         try:
             from studio.agui import _ensure_docs_seeded
-            from studio.documents import seed_tenant_documents  # noqa: F401
 
             await _to_thread(_ensure_docs_seeded, app, dsn, tenant_id)
         except Exception:
