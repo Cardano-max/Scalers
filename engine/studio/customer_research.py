@@ -310,21 +310,47 @@ def resolve_brand_voice(tenant_id: str | None = None) -> tuple[str, tuple[str, .
         return "", ()
 
 
-def research_studio(facts: dict[str, Any], *, enabled: bool) -> list[dict[str, Any]]:
-    """Verified web research for the RECIPIENT studio via the wired Firecrawl
-    provider (``research.pipeline.live_registry`` — enabled only when a key is
-    present). Returns verbatim ``{title, snippet, url}`` hits (cite-only context for
-    the copywriter), or ``[]`` honestly when disabled / keyless / no hits.
+_SOCIAL_HOSTS = ("instagram.", "facebook.", "tiktok.", "twitter.", "x.com", "linkedin.")
+_LISTING_HOSTS = (
+    "yelp.", "google.", "maps.", "foursquare.", "tripadvisor.", "bing.com/maps",
+    "booksy.", "fresha.", "thumbtack.", "nextdoor.",
+)
 
-    HONESTY GATE: every field is copied verbatim from a real provider response; this
-    NEVER fabricates a source. A failure degrades to ``[]`` (no citation), never an
-    invented fact."""
+
+def _classify_source(url: str) -> str:
+    """Tag a real research URL by source TYPE from its host so the per-lead sources are
+    DISTINCT (official website / social profile / public listing), not a blind repeat.
+    Pure host inspection — never fabricates the type."""
+    host = url.split("//", 1)[-1].split("/", 1)[0].lower()
+    if any(h in host for h in _SOCIAL_HOSTS):
+        return "social"
+    if any(h in host for h in _LISTING_HOSTS):
+        return "listing"
+    return "website"
+
+
+def research_studio(facts: dict[str, Any], *, enabled: bool) -> list[dict[str, Any]]:
+    """Verified web research for the RECIPIENT studio via the wired Firecrawl provider
+    (``research.pipeline.live_registry`` — enabled only when a key is present). Returns
+    verbatim ``{title, snippet, url, source_type, customer_id}`` hits (cite-only context
+    for the copywriter), or ``[]`` honestly when disabled / keyless / no hits.
+
+    DIVERSITY: hits are classified by source TYPE (official website / social profile /
+    public listing) and selected to favour DISTINCT types — so a lead surfaces its
+    website AND its socials AND its listing rather than three of the same. Each source
+    is BOUND to this specific lead via ``customer_id``. If only one source exists, only
+    one is returned (no padding).
+
+    HONESTY GATE: every field is copied verbatim from a real provider response; the type
+    is derived from the real URL; the binding is the lead's real id. This NEVER fabricates
+    a source. A failure degrades to ``[]`` (no citation), never an invented fact."""
     if not enabled:
         return []
     name = (facts.get("name") or "").strip()
     if not name:
         return []
     city = (facts.get("city") or "").strip()
+    cust_id = facts.get("customer_id")
     try:
         from research.pipeline import live_registry
 
@@ -332,36 +358,184 @@ def research_studio(facts: dict[str, Any], *, enabled: bool) -> list[dict[str, A
         if provider is None or not getattr(provider, "enabled", False):
             return []
         query = " ".join(x for x in [name, city, "tattoo studio"] if x)
-        out: list[dict[str, Any]] = []
-        for hit in provider.search(query, limit=3):
+        # Collect more than we keep so we can diversify across source types.
+        raw: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for hit in provider.search(query, limit=6):
             url = getattr(hit, "url", None)
-            if not url:
+            if not url or url in seen:
                 continue
-            out.append({
+            seen.add(url)
+            raw.append({
                 "title": getattr(hit, "title", None),
                 "snippet": getattr(hit, "snippet", None),
                 "url": url,
+                "source_type": _classify_source(url),
+                "customer_id": cust_id,
             })
-        return out
+        # Diversify: one pass takes the FIRST hit of each distinct type (website first so
+        # the lead's own positioning leads), then fills remaining slots in rank order.
+        ordered: list[dict[str, Any]] = []
+        used_idx: set[int] = set()
+        for want in ("website", "social", "listing"):
+            for i, r in enumerate(raw):
+                if i not in used_idx and r["source_type"] == want:
+                    ordered.append(r)
+                    used_idx.add(i)
+                    break
+        for i, r in enumerate(raw):
+            if i not in used_idx:
+                ordered.append(r)
+                used_idx.add(i)
+        return ordered[:3]
     except Exception:
         return []
 
 
+def _first_research_signal(
+    research: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    """The first verified research hit carrying usable verbatim text (snippet or title)
+    AND a url about THIS studio — the strongest, most lead-specific differentiator.
+    Honest: returns ``None`` when research is empty/disabled (never fabricates one)."""
+    for r in research or []:
+        text = (r.get("snippet") or r.get("title") or "").strip()
+        if text and (r.get("url") or "").strip():
+            return r
+    return None
+
+
+def _choose_angle(
+    facts: dict[str, Any], research: list[dict[str, Any]] | None
+) -> dict[str, Any]:
+    """Pick ONE distinct outreach angle for this lead from REAL differentiators only.
+
+    Ranked most-lead-specific first: verified research positioning -> real past-work
+    from our own history -> shared craft (CSV interest, else inferred persona lean) ->
+    re-engagement (lifecycle / win-back persona signal) -> the CSV note -> light local
+    (city) -> honest-generic. Returns ``{key, label, basis, inferred, generic}`` where
+    ``basis`` is the verbatim real fact the angle stands on, ``inferred`` flags a
+    persona-derived (not hard) signal, and ``generic`` is True ONLY when the lead has
+    NO distinguishing data — in which case we say so honestly rather than fake
+    personalization. NEVER invents a differentiator."""
+    name = (facts.get("name") or "this studio").strip()
+    traits = facts.get("persona_traits", {}) or {}
+    interests = facts.get("interests", []) or []
+    city = (facts.get("city") or "").strip()
+    notes = (facts.get("notes") or "").strip()
+    lifecycle = traits.get("lifecycle_stage")
+    win_back = bool(traits.get("win_back_candidate"))
+    tattoos = facts.get("tattoo_history", []) or []
+    last_style = tattoos[0]["style"] if tattoos and tattoos[0].get("style") else None
+    aesthetic = traits.get("aesthetic_lean")
+    csv_interest = interests[0] if interests else None
+
+    sig = _first_research_signal(research)
+    if sig is not None:
+        snippet = (sig.get("snippet") or sig.get("title") or "").strip()
+        short = snippet if len(snippet) <= 140 else snippet[:137] + "..."
+        return {
+            "key": "their-positioning", "label": "their own public positioning",
+            "basis": f'"{short}" ({sig["url"]})', "inferred": False, "generic": False,
+        }
+    if last_style:
+        return {
+            "key": "past-work", "label": f"their past {last_style} work with us",
+            "basis": f"past {last_style} piece on file", "inferred": False, "generic": False,
+        }
+    if csv_interest:
+        return {
+            "key": "shared-craft", "label": f"a shared interest in {csv_interest}",
+            "basis": f"interest on file: {csv_interest}", "inferred": False, "generic": False,
+        }
+    if aesthetic:
+        return {
+            "key": "shared-craft", "label": f"a {aesthetic} aesthetic lean",
+            "basis": f"persona aesthetic_lean={aesthetic}", "inferred": True, "generic": False,
+        }
+    if win_back or lifecycle in ("lapsing", "lead-no-visit", "churn-risk"):
+        return {
+            "key": "re-engagement", "label": "a re-engagement / win-back note",
+            "basis": f"persona lifecycle={lifecycle or 'win-back candidate'}",
+            "inferred": True, "generic": False,
+        }
+    if notes:
+        return {
+            "key": "csv-note", "label": "the note on our list",
+            "basis": f"note: {notes}", "inferred": False, "generic": False,
+        }
+    if city:
+        return {
+            "key": "local", "label": f"a light local connection ({city})",
+            "basis": f"city={city}", "inferred": False, "generic": False,
+        }
+    return {
+        "key": "generic", "label": "an honest general introduction",
+        "basis": "no distinguishing research or history on file",
+        "inferred": False, "generic": True,
+    }
+
+
+def _angle_rationale(angle: dict[str, Any], name: str) -> str:
+    """One honest sentence: why THIS draft differs from the others — the distinct angle
+    chosen for this lead and the real basis it stands on. A generic lead is labeled
+    honestly (not dressed up as personalized)."""
+    who = (name or "this lead").strip()
+    if angle["generic"]:
+        return (
+            f"Honest-generic: no distinguishing research or history on file for {who}, "
+            "so this draft stays a general introduction rather than faking personalization."
+        )
+    qualifier = " (inferred from persona, not a hard fact)" if angle["inferred"] else ""
+    return f"Personalized on {angle['label']}{qualifier}; grounded on {angle['basis']}."
+
+
 def _build_email_prompt(
-    facts: dict[str, Any], *, goal: str, research: list[dict[str, Any]]
+    facts: dict[str, Any], *, goal: str, research: list[dict[str, Any]],
+    angle: dict[str, Any],
 ) -> str:
-    """Assemble the copywriter run prompt. It exposes ONLY grounded recipient facts
-    (name / city / CSV note / cite-only research) and hard-forbids asserting anything
-    the system cannot substantiate about a REAL business."""
+    """Assemble the copywriter run prompt. It exposes the lead's REAL grounded facts
+    (name / city / CSV note / first-party interests + past work from our records /
+    cite-only research), threads in the DISTINCT per-lead angle to lead with, and
+    hard-forbids asserting anything the system cannot substantiate about a REAL
+    business. Persona-inferred signals are passed as clearly-marked soft impressions,
+    never as hard facts."""
     name = (facts.get("name") or "the studio").strip()
     city = (facts.get("city") or "").strip()
     notes = (facts.get("notes") or "").strip()
+    traits = facts.get("persona_traits", {}) or {}
+    interests = facts.get("interests", []) or []
+    tattoos = facts.get("tattoo_history", []) or []
+    last_style = tattoos[0]["style"] if tattoos and tattoos[0].get("style") else None
+    aesthetic = traits.get("aesthetic_lean")
+    lifecycle = traits.get("lifecycle_stage")
+    win_back = bool(traits.get("win_back_candidate"))
 
-    known: list[str] = [f"- Studio name: {name}"]
+    known: list[str] = [f"- Name: {name}"]
     if city:
         known.append(f"- City / location: {city}")
     if notes:
         known.append(f"- Note on file (from our list): {notes}")
+    if interests:
+        known.append(
+            "- Interests on file (our own records): "
+            + ", ".join(str(i) for i in interests[:4])
+        )
+    if last_style:
+        known.append(f"- Past work with us (our own records): a {last_style} piece")
+
+    inferred: list[str] = []
+    if aesthetic:
+        inferred.append(f"- Aesthetic lean: {aesthetic}")
+    if lifecycle:
+        inferred.append(f"- Lifecycle stage: {lifecycle}")
+    if win_back:
+        inferred.append("- Flagged a win-back candidate")
+    inferred_block = (
+        ["", "# SOFT PERSONA SIGNALS (INFERRED — reference gently as an impression, "
+         "NEVER assert as an established fact about them):", *inferred]
+        if inferred else []
+    )
 
     if research:
         research_lines = "\n".join(
@@ -374,28 +548,47 @@ def _build_email_prompt(
 
     goal_line = (goal or "open a genuine conversation").strip()
 
+    if angle["generic"]:
+        angle_block = [
+            "# YOUR ANGLE FOR THIS RECIPIENT:",
+            "- We have NO distinguishing research or history for this lead. Do NOT "
+            "manufacture specifics. Write an honest, warm GENERAL introduction that "
+            "leans only on the true reason for reaching out — one studio to another — "
+            "plus their name and city. Honest-general beats fake-personal.",
+        ]
+    else:
+        angle_block = [
+            "# YOUR DISTINCT ANGLE FOR THIS RECIPIENT "
+            "(lead with THIS — do not write an interchangeable template):",
+            f"- Angle: {angle['label']}.",
+            f"- Grounded on: {angle['basis']}.",
+            "- Open on this specific angle so this email could only have been written "
+            "to THIS recipient. Stay strictly within the facts/signals above.",
+        ]
+
     return "\n".join([
         "You are writing ONE short, warm cold-outreach EMAIL, in the BRAND VOICE "
-        "above, to a DIFFERENT, REAL tattoo studio (the recipient). Treat this as a "
-        "genuine first introduction from one studio to another (purpose = intro).",
+        "above, to a REAL tattoo studio (the recipient). Treat this as a genuine first "
+        "introduction (purpose = intro), and make it UNMISTAKABLY for this specific "
+        "recipient — not a template with the name swapped.",
         "",
         "# WHAT YOU ACTUALLY KNOW ABOUT THE RECIPIENT",
-        "# (the ONLY facts you may state about them):",
+        "# (hard facts you may state about them):",
         *known,
+        *inferred_block,
         "",
         "# RESEARCH (verbatim web snippets about the recipient — cite-only context):",
         research_lines,
         "",
+        *angle_block,
+        "",
         "# HARD GROUNDING RULES — no fabrication about a REAL business:",
-        "- You may reference ONLY the facts under 'WHAT YOU ACTUALLY KNOW' above, "
-        "plus a research snippet ONLY when it is unmistakably about THIS studio and "
-        "you state nothing beyond what the snippet literally says.",
-        "- Do NOT invent or imply ANYTHING about the recipient's style, artists, past "
-        "work, awards, reputation, clientele, specialties, or history. If you lack a "
-        "specific fact, stay general and honest — use only their name and city.",
-        "- When you have nothing specific, connect on the genuine true reason: you are "
-        "a fellow tattoo studio reaching out. Reference their name and city, not "
-        "invented detail.",
+        "- You may reference ONLY the hard facts above, the SOFT signals (marked as "
+        "impressions, never as fact), and a research snippet ONLY when it is "
+        "unmistakably about THIS studio and you state nothing beyond what it literally says.",
+        "- Do NOT invent or imply anything NOT listed above about the recipient's "
+        "style, artists, awards, reputation, clientele, or history. If a specific is "
+        "missing, stay general and honest rather than guessing.",
         "- Everything you say about YOURSELF (the sender) must come from the brand "
         "voice's approved claims above — nothing else.",
         f"- Reason for reaching out / goal: {goal_line}.",
@@ -413,40 +606,52 @@ def _build_email_prompt(
 
 
 def _template_outreach(
-    facts: dict[str, Any], *, goal: str, ch: str
+    facts: dict[str, Any], *, goal: str, ch: str, angle: dict[str, Any],
 ) -> tuple[str | None, str]:
-    """Deterministic fallback copy (no model): honest, grounded only in real facts.
+    """Deterministic fallback copy (no model): honest, grounded only in real facts,
+    and SHAPED BY THE PER-LEAD ANGLE so two leads do not collapse to one template.
 
     Used when LLM copy is disabled (no Anthropic key) or the cell fails. Still never
-    invents a recipient detail — it leans on name, city, CSV note and the goal."""
+    invents a recipient detail — opener, detail, and subject are keyed off the angle
+    chosen from this lead's real differentiators (and honestly generic when thin)."""
     name = (facts.get("name") or "there").strip()
     first = name.split()[0] if name else "there"
     traits = facts.get("persona_traits", {}) or {}
     interests = facts.get("interests", []) or []
     aesthetic = traits.get("aesthetic_lean")
-    top_interest = aesthetic or (interests[0] if interests else None)
+    top_interest = interests[0] if interests else aesthetic
     city = facts.get("city")
     notes = (facts.get("notes") or "").strip()
-    lifecycle = traits.get("lifecycle_stage")
-    win_back = bool(traits.get("win_back_candidate"))
     tattoos = facts.get("tattoo_history", []) or []
-    last_style = tattoos[0]["style"] if tattoos else None
+    last_style = tattoos[0]["style"] if tattoos and tattoos[0].get("style") else None
 
     city_phrase = f" over in {city}" if city else ""
     goal_line = (goal or "open a genuine conversation").strip()
+    key = angle["key"]
 
-    if win_back or (lifecycle in ("lapsing", "lead-no-visit", "churn-risk")):
+    # Opener + detail are keyed off the distinct angle so the deterministic path also
+    # differentiates per lead (never a single swapped-name template).
+    if key == "past-work" and last_style:
+        opener = f"Hi {first}, your last {last_style} piece stuck with me."
+        detail = " It's the kind of work we love to see."
+    elif key == "shared-craft" and top_interest:
+        opener = f"Hi {first}, looks like we share a soft spot for {top_interest}."
+        detail = " We spend a lot of our time there too."
+    elif key == "re-engagement":
         opener = f"Hi {first}, it's been a while and we've been thinking about you."
-    else:
+        detail = ""
+    elif key == "csv-note" and notes:
+        opener = f"Hi {first}, reaching out from one studio to another."
+        detail = f" Saw on our end you're {notes.lower()}."
+    elif key == "their-positioning":
+        opener = f"Hi {first}, came across {name} and wanted to say hello."
+        detail = ""
+    elif key == "local" and city:
+        opener = f"Hi {first}, fellow {city} studio here, saying hello."
+        detail = ""
+    else:  # generic — honest general intro, no manufactured specifics
         opener = f"Hi {first}, I'm reaching out from one studio to another."
-
-    detail = ""
-    if last_style:
-        detail = f" Loved your last {last_style} piece."
-    elif top_interest:
-        detail = f" We work a lot in {top_interest} too."
-    elif notes:
-        detail = f" Saw you're {notes.lower()}."
+        detail = ""
 
     # The CTA + opt-out line are added by _finalize_outreach_body so there is ONE
     # place that guarantees a clear next step and a resolved (never raw-token) opt-out.
@@ -458,7 +663,16 @@ def _template_outreach(
 
     subject = None
     if ch in ("gmail", "email"):
-        subject = f"Hello from one studio to another, {first}".strip()[:60]
+        subj_by_key = {
+            "their-positioning": f"Reaching out to {name}",
+            "past-work": f"{first}, about your last piece",
+            "shared-craft": f"{first}, kindred {top_interest or 'studio'} folks",
+            "re-engagement": f"{first}, it's been too long",
+            "csv-note": f"A quick hello, {first}",
+            "local": f"Fellow {city} studio saying hi" if city else f"Hello, {first}",
+            "generic": f"An intro, one studio to another, {first}",
+        }
+        subject = (subj_by_key.get(key) or f"Hello, {first}").strip()[:60]
     return subject, body
 
 
@@ -627,6 +841,21 @@ def build_outreach_draft(
     if win_back:
         grounding.append("win_back_candidate=true")
 
+    # --- per-lead angle: the DISTINCT basis this draft leads with (real-only) ----- #
+    # Resolve research up front so the angle can prefer this lead's verified public
+    # positioning (its strongest differentiator) when one exists.
+    if research is None and ch in ("gmail", "email") and _llm_copy_enabled():
+        research = research_studio(facts, enabled=_research_enabled(deep_research))
+    angle = _choose_angle(facts, research)
+    why_different = _angle_rationale(angle, name)
+    grounding.append(f"angle={angle['key']}")
+    if angle["generic"]:
+        grounding.append("personalization=generic-honest")
+    elif angle["inferred"]:
+        grounding.append("personalization=inferred")
+    else:
+        grounding.append("personalization=grounded")
+
     subject: str | None = None
     body: str | None = None
 
@@ -634,9 +863,7 @@ def build_outreach_draft(
     if ch in ("gmail", "email") and _llm_copy_enabled():
         try:
             brand_voice_context, approved_claims = resolve_brand_voice(tenant_id)
-            # Use pre-fetched research when the caller already ran it for THIS lead (the
-            # provided-leads traced run records it on the researcher step) so we make ONE
-            # Firecrawl call per lead, not two; otherwise fetch it here as before.
+            # Research already resolved above for the angle; only fetch if still unset.
             if research is None:
                 research = research_studio(facts, enabled=_research_enabled(deep_research))
             from cells.copywriter import build_copywriter_email_cell
@@ -645,7 +872,9 @@ def build_outreach_draft(
                 brand_voice_context=brand_voice_context,
                 approved_claims=approved_claims,
             )
-            copy = cell.run_sync(_build_email_prompt(facts, goal=goal, research=research))
+            copy = cell.run_sync(
+                _build_email_prompt(facts, goal=goal, research=research, angle=angle)
+            )
             subject, body = copy.subject, copy.body
             if brand_voice_context:
                 grounding.append(f"brand_voice={tenant_id or _DEFAULT_TENANT}")
@@ -658,7 +887,7 @@ def build_outreach_draft(
 
     # --- deterministic fallback (no key / non-email channel / cell failed) ------- #
     if body is None:
-        subject, body = _template_outreach(facts, goal=goal, ch=ch)
+        subject, body = _template_outreach(facts, goal=goal, ch=ch, angle=angle)
         if not any(g.startswith("copy=") for g in grounding):
             grounding.append("copy=deterministic_template")
 
@@ -686,6 +915,14 @@ def build_outreach_draft(
         "draft": body,
         "grounding": grounding,
         "customer_id": facts.get("customer_id"),
+        # Per-lead personalization proof: the distinct angle this draft leads with, the
+        # honest "why it differs from the others" rationale, and whether it is honestly
+        # generic (thin data) vs grounded. Surfaced so the operator can SEE it is real.
+        "angle": angle["label"],
+        "angle_key": angle["key"],
+        "why_different": why_different,
+        "generic": angle["generic"],
+        "inferred": angle["inferred"],
     }
 
 

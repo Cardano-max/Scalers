@@ -520,6 +520,14 @@ const EVIDENCE: Record<string, ActionEvidence> = {
       model: 'anthropic:claude-sonnet-4-6',
       reasoningSummary: 'Hello from one studio to another',
     },
+    personalization: {
+      angle: 'their own public positioning',
+      angleKey: 'their-positioning',
+      whyDifferent:
+        'Personalized on their own public positioning; grounded on "appointment-only studios reshaping Austin ink culture" (austin.culturemap.com).',
+      generic: false,
+      inferred: false,
+    },
     brandVoice: {
       tenantId: 'ladies8391',
       used: true,
@@ -550,12 +558,14 @@ const EVIDENCE: Record<string, ActionEvidence> = {
         title: "Austin's woman-owned, appointment-only tattoo studios",
         snippet: 'A guide to the appointment-only studios reshaping Austin ink culture.',
         query: 'woman-owned tattoo studio Austin',
+        sourceType: 'website',
       },
       {
-        url: 'https://www.austinchronicle.com/arts/fine-line-tattoo-revival/',
-        title: 'The fine-line revival in Central Texas',
-        snippet: 'Why fine-line and single-needle work is booming across Austin studios.',
-        query: 'fine-line tattoo trend Austin',
+        url: 'https://www.instagram.com/rae.fineline.atx/',
+        title: 'Rae · fine-line · Austin (Instagram)',
+        snippet: 'Single-needle and fine-line work, appointment-only, Austin TX.',
+        query: 'fine-line tattoo Austin instagram',
+        sourceType: 'social',
       },
     ],
     toolCalls: [
@@ -579,6 +589,14 @@ const EVIDENCE: Record<string, ActionEvidence> = {
     target: 'Sam',
     status: 'pending',
     createdBy: { role: 'draft', model: 'grounded_template', reasoningSummary: null },
+    personalization: {
+      angle: 'an honest general introduction',
+      angleKey: 'generic',
+      whyDifferent:
+        'Honest-generic: no distinguishing research or history on file for Sam, so this draft stays a general introduction rather than faking personalization.',
+      generic: true,
+      inferred: false,
+    },
     brandVoice: null,
     customer: {
       customerId: null,

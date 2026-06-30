@@ -186,6 +186,11 @@ export function EvidenceProvenance({ evidence }: { evidence: ActionEvidence | nu
 
   // Resolve each category to a real-or-absent value (real-only honesty).
   const voice = evidence?.brandVoice && evidence.brandVoice.used ? evidence.brandVoice : null;
+  const personalization =
+    evidence?.personalization &&
+    (hasText(evidence.personalization.whyDifferent) || hasText(evidence.personalization.angle))
+      ? evidence.personalization
+      : null;
   const customer = evidence?.customer ?? null;
   const memories = evidence?.leadMemories ?? [];
   const notes = hasText(evidence?.internalNotes) ? evidence!.internalNotes! : null;
@@ -202,6 +207,7 @@ export function EvidenceProvenance({ evidence }: { evidence: ActionEvidence | nu
   const reasoningUrl = hasText(evidence?.reasoningUrl) ? evidence!.reasoningUrl! : null;
 
   const hasAny =
+    !!personalization ||
     !!voice ||
     !!customer ||
     memories.length > 0 ||
@@ -258,6 +264,39 @@ export function EvidenceProvenance({ evidence }: { evidence: ActionEvidence | nu
           </span>
         ) : null}
       </div>
+
+      {personalization ? (
+        <Category label="Why this draft is different">
+          <div style={CARD}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              {hasText(personalization.angle) ? (
+                <span style={CHIP}>angle · {personalization.angle}</span>
+              ) : null}
+              {personalization.generic ? (
+                <span
+                  style={{
+                    ...CHIP,
+                    color: '#8A6D1E',
+                    background: '#FBF3DC',
+                    border: '1px solid #ECDCA8',
+                  }}
+                >
+                  honest-generic
+                </span>
+              ) : personalization.inferred ? (
+                <span style={SMALL_CHIP}>inferred from persona</span>
+              ) : (
+                <span style={SMALL_CHIP}>grounded</span>
+              )}
+            </div>
+            {hasText(personalization.whyDifferent) ? (
+              <span style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--text-secondary)' }}>
+                {personalization.whyDifferent}
+              </span>
+            ) : null}
+          </div>
+        </Category>
+      ) : null}
 
       {voice ? <BrandVoice voice={voice} /> : null}
 
@@ -326,6 +365,22 @@ export function EvidenceProvenance({ evidence }: { evidence: ActionEvidence | nu
                   title={s.url}
                   style={{ ...CHIP, justifySelf: 'start', textDecoration: 'none', maxWidth: '100%' }}
                 >
+                  {hasText(s.sourceType) ? (
+                    <span
+                      style={{
+                        fontSize: 9.5,
+                        fontWeight: 700,
+                        textTransform: 'uppercase',
+                        letterSpacing: 0.4,
+                        color: '#0B6F68',
+                        background: '#D8ECE8',
+                        borderRadius: 4,
+                        padding: '1px 5px',
+                      }}
+                    >
+                      {s.sourceType}
+                    </span>
+                  ) : null}
                   <span
                     style={{
                       overflow: 'hidden',

@@ -218,6 +218,52 @@ def test_camel_case_on_the_wire():
     assert dumped["brandVoice"]["approvedClaims"]
 
 
+def test_personalization_angle_and_source_type_surface():
+    """The per-lead distinct angle + honest rationale (recorded on the draft step) and
+    the per-source TYPE (recorded on the researcher step) surface on the evidence so the
+    operator can SEE why this draft differs from the others and that sources are diverse."""
+    runs = _agent_runs_full()
+    # The draft step carries the structured personalization fields.
+    runs[1]["output"].update({
+        "angle": "their past florals work with us",
+        "angle_key": "past-work",
+        "why_different": "Personalized on their past florals work with us; grounded on past florals piece on file.",
+        "generic": False,
+        "inferred": False,
+    })
+    # The researcher step tags each source with its derived type.
+    runs[0]["output"]["sources"][0]["source_type"] = "website"
+    runs[0]["output"]["sources"][1]["source_type"] = "social"
+    ev = assemble_action_evidence(action=_action(), agent_runs=runs, brand_voice=_brand_doc())
+    assert ev.personalization is not None
+    assert ev.personalization.angle == "their past florals work with us"
+    assert ev.personalization.generic is False
+    assert "Personalized on" in (ev.personalization.why_different or "")
+    # The single cited source (about) is tagged website (real-only: only the cited url).
+    assert ev.research_sources and ev.research_sources[0].source_type == "website"
+    # camelCase on the wire for the new fields.
+    dumped = ev.model_dump(by_alias=True)
+    assert "personalization" in dumped and dumped["personalization"]["whyDifferent"]
+    assert dumped["researchSources"][0]["sourceType"] == "website"
+
+
+def test_generic_draft_is_honestly_flagged_not_faked():
+    """A thin-data draft records ``generic=True``; evidence surfaces the honest-generic
+    label (never dressed up as personalized)."""
+    runs = _agent_runs_full()
+    runs[1]["output"].update({
+        "angle": "an honest general introduction",
+        "angle_key": "generic",
+        "why_different": "Honest-generic: no distinguishing research or history on file.",
+        "generic": True,
+        "inferred": False,
+    })
+    ev = assemble_action_evidence(action=_action(), agent_runs=runs, brand_voice=_brand_doc())
+    assert ev.personalization is not None
+    assert ev.personalization.generic is True
+    assert "Honest-generic" in (ev.personalization.why_different or "")
+
+
 def test_resolve_brand_voice_doc_loads_real_ladies8391():
     """The real ladies8391 pack resolves to structured dimensions (not faked)."""
     doc = resolve_brand_voice_doc("ladies8391")

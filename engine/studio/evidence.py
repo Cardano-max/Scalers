@@ -85,6 +85,21 @@ class EvidenceResearchSource(_Camel):
     title: str | None = None
     snippet: str | None = None
     query: str | None = None
+    # The source TYPE (official website / social profile / public listing) derived from
+    # the real URL, so the console can show the per-lead source DIVERSITY honestly.
+    source_type: str | None = None
+
+
+class EvidencePersonalization(_Camel):
+    """The distinct per-lead angle this draft leads with + the honest "why it differs
+    from the others" rationale — so the operator can SEE the personalization is real.
+    An honest-generic draft (thin data) is labeled as such here, never faked."""
+
+    angle: str | None = None
+    angle_key: str | None = None
+    why_different: str | None = None
+    generic: bool = False
+    inferred: bool = False
 
 
 class EvidenceDocument(_Camel):
@@ -122,6 +137,7 @@ class ActionEvidence(_Camel):
     target: str | None = None
     status: str | None = None
     created_by: EvidenceAgent | None = None
+    personalization: EvidencePersonalization | None = None
     brand_voice: EvidenceBrandVoice | None = None
     customer: EvidenceCustomer | None = None
     lead_memories: list[EvidenceMemory] = []
@@ -317,6 +333,21 @@ def assemble_action_evidence(
             reasoning_summary=_summarize_draft(draft_out),
         )
 
+    # --- Per-lead personalization: the distinct angle + honest rationale ----- #
+    # Recorded on the draft step output by the per-lead run. Surfaced so the operator
+    # can SEE why this draft differs from the others (or that it is honestly generic).
+    pers_angle = (draft_out.get("angle") or "").strip() or None
+    pers_why = (draft_out.get("why_different") or "").strip() or None
+    pers_key = (draft_out.get("angle_key") or "").strip() or None
+    if pers_angle or pers_why or pers_key:
+        ev.personalization = EvidencePersonalization(
+            angle=pers_angle,
+            angle_key=pers_key,
+            why_different=pers_why,
+            generic=bool(draft_out.get("generic")),
+            inferred=bool(draft_out.get("inferred")),
+        )
+
     # --- Brand voice: shown ONLY when the draft genuinely wrote in it -------- #
     # Proof = a ``brand_voice=`` grounding marker (outreach path) OR the content
     # path's persisted ``brand_voice_applied`` input flag. Never shown otherwise.
@@ -389,7 +420,10 @@ def assemble_action_evidence(
         sd = _as_dict(s) if not isinstance(s, dict) else s
         u = (sd.get("url") or "").strip()
         if u:
-            enrich[u] = {"title": sd.get("title"), "snippet": sd.get("snippet"), "query": sd.get("query")}
+            enrich[u] = {
+                "title": sd.get("title"), "snippet": sd.get("snippet"),
+                "query": sd.get("query"), "source_type": sd.get("source_type"),
+            }
     for r in research_sources:
         u = (r.get("url") or "").strip()
         if u:
@@ -398,6 +432,7 @@ def assemble_action_evidence(
                 "title": r.get("title") or enrich[u].get("title"),
                 "snippet": r.get("snippet") or enrich[u].get("snippet"),
                 "query": r.get("query") or enrich[u].get("query"),
+                "source_type": r.get("source_type") or enrich[u].get("source_type"),
             }
 
     # A per-lead draft carries a ``grounding`` audit list — its ``research:<url>``
@@ -417,7 +452,8 @@ def assemble_action_evidence(
         seen.add(u)
         meta = enrich.get(u, {})
         ev.research_sources.append(EvidenceResearchSource(
-            url=u, title=meta.get("title"), snippet=meta.get("snippet"), query=meta.get("query"),
+            url=u, title=meta.get("title"), snippet=meta.get("snippet"),
+            query=meta.get("query"), source_type=meta.get("source_type"),
         ))
 
     # --- Tool calls actually invoked ---------------------------------------- #

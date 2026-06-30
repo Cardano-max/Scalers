@@ -1043,7 +1043,10 @@ def _execute_provided_leads_sync(
         th = facts.get("tattoo_history", []) or []
         traits = facts.get("persona_traits", {}) or {}
         sources = [
-            {"url": r.get("url"), "title": r.get("title"), "snippet": r.get("snippet")}
+            {
+                "url": r.get("url"), "title": r.get("title"), "snippet": r.get("snippet"),
+                "source_type": r.get("source_type"), "customer_id": r.get("customer_id") or cust_id,
+            }
             for r in research if r.get("url")
         ][:5]
         _rec(
@@ -1079,6 +1082,11 @@ def _execute_provided_leads_sync(
                 "hook": draft.get("subject") or "", "headline": draft.get("subject") or "",
                 "caption": draft.get("draft") or "", "channel": draft["channel"],
                 "grounding": draft.get("grounding", []),
+                # Per-lead personalization proof (the distinct angle + honest rationale),
+                # so the evidence panel can show WHY this draft differs from the others.
+                "angle": draft.get("angle"), "angle_key": draft.get("angle_key"),
+                "why_different": draft.get("why_different"),
+                "generic": draft.get("generic"), "inferred": draft.get("inferred"),
             },
         )
 
@@ -1512,6 +1520,9 @@ def _research_and_stage_sync(
                 "channel": draft["channel"],
                 "action_id": action_id,
                 "target": draft["target"],
+                "angle": draft.get("angle"),
+                "why_different": draft.get("why_different"),
+                "generic": draft.get("generic"),
             }
         )
 

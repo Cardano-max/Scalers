@@ -387,6 +387,16 @@ export interface EvidenceResearchSource {
   title: string | null;
   snippet: string | null;
   query: string | null;
+  // The source TYPE (website / social / listing) derived from the real URL, so the
+  // console can show per-lead source diversity. null when the engine did not tag it.
+  sourceType: string | null;
+}
+export interface EvidencePersonalization {
+  angle: string | null;
+  angleKey: string | null;
+  whyDifferent: string | null;
+  generic: boolean;
+  inferred: boolean;
 }
 export interface EvidenceDocument {
   document: string;
@@ -416,6 +426,7 @@ export interface ActionEvidence {
   target: string | null;
   status: string | null;
   createdBy: EvidenceAgent | null;
+  personalization: EvidencePersonalization | null; // the distinct per-lead angle + honest rationale
   brandVoice: EvidenceBrandVoice | null; // null when not genuinely used (real-only)
   customer: EvidenceCustomer | null;
   leadMemories: EvidenceMemory[];
