@@ -81,6 +81,7 @@ export function VoiceScreen() {
   // controls show the honest not-connected note in preview instead of failing.
   const uploadEndpoint = connected ? studioRoute(studio.aguiUrl, '/upload') : undefined;
   const notesEndpoint = connected ? studioRoute(studio.aguiUrl, '/notes') : undefined;
+  const documentsEndpoint = connected ? studioRoute(studio.aguiUrl, '/documents') : undefined;
 
   const plan = studio.plan;
   const planChips: { label: string; value: string }[] = [
@@ -228,6 +229,7 @@ export function VoiceScreen() {
             onReject={studio.reject}
             uploadEndpoint={uploadEndpoint}
             notesEndpoint={notesEndpoint}
+            documentsEndpoint={documentsEndpoint}
             sessionId={studio.sessionId}
           />
         </div>
