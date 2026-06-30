@@ -8,6 +8,7 @@
  */
 import type {
   Action,
+  ActionEvidence,
   ActivityItem,
   AutonomyConfig,
   AutonomyMode,
@@ -35,6 +36,14 @@ export interface DataAdapter {
   getOverview(tenantId: string): Promise<Overview>;
   getReviewQueue(tenantId: string, filter?: ActionFilter): Promise<Action[]>;
   getAction(id: string): Promise<Action | null>;
+  /**
+   * The EVIDENCE / PROVENANCE for one staged draft — what it ACTUALLY used: the
+   * brand-voice doc, customer/CSV facts, lead memories, internal notes, cited
+   * research, tool calls, critic/jury verdicts, and the producing agent. REAL-ONLY:
+   * categories the draft did not genuinely use arrive null / []. Resolves null
+   * (honest) when no evidence was captured for the id.
+   */
+  getActionEvidence(actionId: string): Promise<ActionEvidence | null>;
   /**
    * Executed (completed) actions for the Activity screen — the reasoning trace,
    * engagement, outcome, and thread/comments deep-links resolved alongside the

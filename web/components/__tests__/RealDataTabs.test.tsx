@@ -92,6 +92,7 @@ function liveFake(): DataAdapter {
     getActivity: async () => [] as ActivityItem[], // nothing sent yet — honest empty
     getRuns: async () => [REAL_RUN],
     getRun: async () => REAL_RUN,
+    getActionEvidence: async () => null, // no provenance captured for these rows — honest null
     rejectAction: async (id: string) => REAL_ACTIONS.find((a) => a.id === id)!,
   } as unknown as DataAdapter;
 }

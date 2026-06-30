@@ -11,6 +11,7 @@ import * as Q from './queries';
 import type { DataAdapter } from './adapter';
 import type {
   Action,
+  ActionEvidence,
   ActivityItem,
   AutonomyConfig,
   AutonomyMode,
@@ -75,6 +76,24 @@ export class LiveAdapter implements DataAdapter {
     return this.query<{ action: Action | null }>(Q.ACTION_QUERY, { id }).then(
       (d) => d.action,
     );
+  }
+  /**
+   * Evidence/provenance reads NOT through GraphQL: the engine serves it directly at
+   * GET /studio/action/{id}/evidence, proxied same-origin by the Next rewrite of
+   * /studio/* (the same path family the run-trace client uses). Honest on failure:
+   * any non-2xx or transport error resolves null rather than throwing into the UI.
+   */
+  async getActionEvidence(actionId: string): Promise<ActionEvidence | null> {
+    try {
+      const res = await fetch(`/studio/action/${encodeURIComponent(actionId)}/evidence`, {
+        method: 'GET',
+        headers: { accept: 'application/json' },
+      });
+      if (!res.ok) return null;
+      return (await res.json()) as ActionEvidence;
+    } catch {
+      return null;
+    }
   }
   getActivity(tenantId: string, filter?: ActionFilter) {
     return this.query<{ activity: ActivityItem[] }>(Q.ACTIVITY_QUERY, {

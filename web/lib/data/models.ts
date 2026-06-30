@@ -340,3 +340,84 @@ export interface ActivityItem extends Action {
 export type ActionFilter = { type?: ActionType | null } | null;
 export type RunFilter = { status?: RunStatus | null } | null;
 export type FeedFilter = { worker?: Worker | null } | null;
+
+// --- evidence / provenance (GET /studio/action/{actionId}/evidence) ---
+// What a staged draft ACTUALLY used: the brand-voice doc, the CSV/customer facts,
+// lead memories, internal notes, cited research, tool calls, critic/jury verdicts,
+// and the producing agent. REAL-ONLY: any category the draft did not genuinely use
+// arrives null (objects) or [] (lists) — never a fabricated stand-in. The console
+// renders these as clean chips/cards and OMITS empty categories entirely.
+export interface EvidenceAgent {
+  role: string | null;
+  model: string | null;
+  reasoningSummary: string | null;
+}
+export interface EvidenceBrandVoice {
+  tenantId: string;
+  used: boolean;
+  tone: string[];
+  structure: string[];
+  prefer: string[];
+  ban: string[];
+  approvedClaims: string[];
+  source: string;
+}
+export interface EvidenceCustomer {
+  customerId: string | null;
+  name: string | null;
+  city: string | null;
+  note: string | null;
+  interest: string | null;
+  lifecycle: string | null;
+  lastTattooStyle: string | null;
+  winBackCandidate: boolean;
+  factsUsed: string[];
+}
+export interface EvidenceMemory {
+  text: string;
+  kind: string | null;
+  createdAt: string | null;
+}
+export interface EvidenceResearchSource {
+  url: string;
+  title: string | null;
+  snippet: string | null;
+  query: string | null;
+}
+export interface EvidenceToolCall {
+  name: string;
+  detail: string | null;
+}
+export interface EvidenceCritic {
+  verdict: string | null;
+  rationale: string | null;
+  model: string | null;
+}
+export interface EvidenceJury {
+  aggregate: number | null;
+  decision: string | null;
+  note: string | null;
+}
+export interface ActionEvidence {
+  actionId: string;
+  runId: string | null;
+  campaignId: string | null;
+  tenantId: string;
+  channel: string | null;
+  target: string | null;
+  status: string | null;
+  createdBy: EvidenceAgent | null;
+  brandVoice: EvidenceBrandVoice | null; // null when not genuinely used (real-only)
+  customer: EvidenceCustomer | null;
+  leadMemories: EvidenceMemory[];
+  internalNotes: string | null;
+  researchSources: EvidenceResearchSource[]; // [] when the draft cited none (real-only)
+  toolCalls: EvidenceToolCall[];
+  criticReview: EvidenceCritic | null;
+  jury: EvidenceJury | null;
+  confidence: number | null;
+  threshold: number | null;
+  confidenceReason: string | null;
+  reasoningUrl: string | null;
+  isRealOnly: boolean;
+}

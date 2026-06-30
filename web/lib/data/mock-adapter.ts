@@ -14,6 +14,7 @@ import type { DataAdapter } from './adapter';
 import type { SSEClient, SSEHandlers, SSEStatus } from './sse';
 import type {
   Action,
+  ActionEvidence,
   ActivityItem,
   AutonomyConfig,
   AutonomyMode,
@@ -498,6 +499,111 @@ const ACTIVITY: ActivityItem[] = [
   }),
 ];
 
+/**
+ * Evidence/provenance fixtures keyed by action id — what a staged draft ACTUALLY
+ * used, in the exact GET /studio/action/{id}/evidence shape. `act_evidence_full`
+ * exercises every category (brand voice used, customer facts, lead memory, two
+ * cited sources, tool calls, jury). `act_evidence_bare` proves REAL-ONLY honesty:
+ * no brand voice, no sources ([], not a stub), no jury. Any other id → null.
+ */
+const EVIDENCE: Record<string, ActionEvidence> = {
+  act_evidence_full: {
+    actionId: 'act_evidence_full',
+    runId: 'team-ladies8391-9f2',
+    campaignId: 'ladies8391-winter-winback',
+    tenantId: 'ladies8391',
+    channel: 'gmail',
+    target: 'Rae',
+    status: 'pending',
+    createdBy: {
+      role: 'draft',
+      model: 'anthropic:claude-sonnet-4-6',
+      reasoningSummary: 'Hello from one studio to another',
+    },
+    brandVoice: {
+      tenantId: 'ladies8391',
+      used: true,
+      tone: ['warm, direct'],
+      structure: ['one idea per line'],
+      prefer: ['made for you', 'reclaim'],
+      ban: ['slay', 'boss babe'],
+      approvedClaims: ['Woman-owned, appointment-only studio in Austin, TX.'],
+      source: 'skills/brand-voice/tenants/ladies8391/brand-dna.md',
+    },
+    customer: {
+      customerId: null,
+      name: 'Rae',
+      city: 'Austin',
+      note: null,
+      interest: null,
+      lifecycle: null,
+      lastTattooStyle: null,
+      winBackCandidate: true,
+      factsUsed: ['name=Rae', 'city=Austin'],
+    },
+    leadMemories: [{ text: 'Staged gmail outreach to Rae', kind: 'outreach', createdAt: null }],
+    internalNotes: null,
+    researchSources: [
+      {
+        url: 'https://austin.culturemap.com/news/city-life/woman-owned-tattoo-studios/',
+        title: "Austin's woman-owned, appointment-only tattoo studios",
+        snippet: 'A guide to the appointment-only studios reshaping Austin ink culture.',
+        query: 'woman-owned tattoo studio Austin',
+      },
+      {
+        url: 'https://www.austinchronicle.com/arts/fine-line-tattoo-revival/',
+        title: 'The fine-line revival in Central Texas',
+        snippet: 'Why fine-line and single-needle work is booming across Austin studios.',
+        query: 'fine-line tattoo trend Austin',
+      },
+    ],
+    toolCalls: [
+      { name: 'copywriter_email_cell', detail: 'brand-voiced email copy' },
+      { name: 'firecrawl_search', detail: '2 source(s) cited' },
+    ],
+    criticReview: null,
+    jury: { aggregate: 1, decision: 'review', note: 'staged HELD' },
+    confidence: null,
+    threshold: null,
+    confidenceReason: 'Provided-lead outreach',
+    reasoningUrl: 'https://langfuse.example/trace/x',
+    isRealOnly: true,
+  },
+  act_evidence_bare: {
+    actionId: 'act_evidence_bare',
+    runId: 'team-ladies8391-7a1',
+    campaignId: null,
+    tenantId: 'ladies8391',
+    channel: 'sms',
+    target: 'Sam',
+    status: 'pending',
+    createdBy: { role: 'draft', model: 'grounded_template', reasoningSummary: null },
+    brandVoice: null,
+    customer: {
+      customerId: null,
+      name: 'Sam',
+      city: null,
+      note: null,
+      interest: null,
+      lifecycle: null,
+      lastTattooStyle: null,
+      winBackCandidate: false,
+      factsUsed: ['name=Sam'],
+    },
+    leadMemories: [],
+    internalNotes: null,
+    researchSources: [],
+    toolCalls: [{ name: 'deterministic_template', detail: null }],
+    criticReview: null,
+    jury: null,
+    confidence: null,
+    threshold: null,
+    confidenceReason: null,
+    reasoningUrl: null,
+    isRealOnly: true,
+  },
+};
+
 const RUNS: Run[] = [
   {
     id: 'run_4821',
@@ -726,6 +832,10 @@ export class MockAdapter implements DataAdapter {
   }
   async getAction(id: string) {
     return REVIEW_QUEUE.find((a) => a.id === id) ?? null;
+  }
+  async getActionEvidence(actionId: string): Promise<ActionEvidence | null> {
+    // Keyed fixtures only; an unknown id resolves null (honest), never a stub.
+    return EVIDENCE[actionId] ?? null;
   }
   async getActivity(_tenantId: string, filter?: ActionFilter) {
     return filterByType(ACTIVITY, filter);

@@ -20,6 +20,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useData } from '@/lib/data/DataProvider';
 import type { PendingAction } from '@/lib/studio/run-trace';
 import { personaForRunRole } from '@/lib/studio/agency';
+import { EvidenceProvenance } from '@/components/trace/EvidenceProvenance';
+import type { ActionEvidence } from '@/lib/data/models';
 
 const TEAL = '#0F8A82';
 
@@ -159,6 +161,31 @@ function DraftCard({
   const resolved = state.kind === 'sent' || state.kind === 'rejected';
   const channel = (action.channel || 'draft').toUpperCase();
 
+  // Evidence / provenance — what this draft actually used. Lazily fetched on first
+  // open through the same adapter this surface uses; the panel is real-only and
+  // honest-empty, so an action with nothing captured shows a single muted line.
+  const { adapter } = useData();
+  const [showEvidence, setShowEvidence] = useState(false);
+  const [evidence, setEvidence] = useState<ActionEvidence | null>(null);
+  const [evidenceLoaded, setEvidenceLoaded] = useState(false);
+
+  const toggleEvidence = () => {
+    const next = !showEvidence;
+    setShowEvidence(next);
+    if (next && !evidenceLoaded) {
+      adapter
+        .getActionEvidence(action.id)
+        .then((e) => {
+          setEvidence(e);
+          setEvidenceLoaded(true);
+        })
+        .catch(() => {
+          setEvidence(null);
+          setEvidenceLoaded(true);
+        });
+    }
+  };
+
   return (
     <article
       data-action-id={action.id}
@@ -275,6 +302,24 @@ function DraftCard({
           >
             ✕ Reject
           </button>
+          <button
+            type="button"
+            onClick={toggleEvidence}
+            aria-label="View evidence and sources"
+            aria-expanded={showEvidence}
+            style={{
+              fontSize: 12.5,
+              fontWeight: 600,
+              color: 'var(--teal-dark)',
+              background: '#fff',
+              border: '1px solid var(--hairline-strong)',
+              borderRadius: 'var(--radius-button)',
+              padding: '7px 14px',
+              cursor: 'pointer',
+            }}
+          >
+            {showEvidence ? 'Hide evidence' : 'View evidence / sources'}
+          </button>
           {onDeepReview && (
             <button
               type="button"
@@ -297,6 +342,16 @@ function DraftCard({
           )}
         </div>
       )}
+
+      {showEvidence ? (
+        <div style={{ borderTop: '1px solid var(--hairline)', paddingTop: 10, marginTop: 2 }}>
+          {evidenceLoaded ? (
+            <EvidenceProvenance evidence={evidence} />
+          ) : (
+            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Loading evidence…</span>
+          )}
+        </div>
+      ) : null}
     </article>
   );
 }

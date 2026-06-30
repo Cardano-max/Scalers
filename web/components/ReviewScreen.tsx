@@ -19,11 +19,12 @@ import { AsyncBoundary } from './states';
 import { Dot } from './icons';
 import { Chip, ProviderErrorPanel, Tag, actionIntent, channelLabel, clockTime, matchesFilter, typeLabel, type QueueFilter } from './console-bits';
 import { CHANNEL_COLOR, WORKER_COLOR } from '@/lib/tokens';
-import type { Action, ActionType } from '@/lib/data/models';
+import type { Action, ActionEvidence, ActionType } from '@/lib/data/models';
 // --- traceability spine (additive) ---
 import { useTraceArrival } from '@/lib/useTraceArrival';
 import { LineageChips } from './trace/LineageChips';
 import { ConfidenceEvidence } from './trace/ConfidenceEvidence';
+import { EvidenceProvenance } from './trace/EvidenceProvenance';
 
 type ToastTone = 'success' | 'neutral' | 'amber';
 interface ToastState {
@@ -427,6 +428,36 @@ function DetailPane({
   onCancelEdit: () => void;
   onSaveEdit: () => void;
 }) {
+  // Evidence/provenance for THIS draft — what it actually used. Fetched through the
+  // same adapter the screen reads from, keyed on the selected action id. Real-only:
+  // the panel itself omits empty categories and shows an honest line when there is
+  // nothing. We render it only after the read resolves so there is no loading flash.
+  const { adapter } = useData();
+  const [evidence, setEvidence] = useState<ActionEvidence | null>(null);
+  const [evidenceLoaded, setEvidenceLoaded] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setEvidence(null);
+    setEvidenceLoaded(false);
+    adapter
+      .getActionEvidence(action.id)
+      .then((e) => {
+        if (!cancelled) {
+          setEvidence(e);
+          setEvidenceLoaded(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setEvidence(null);
+          setEvidenceLoaded(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [adapter, action.id]);
+
   return (
     <div style={{ padding: 'var(--pad-section)', maxWidth: 1100, marginInline: 'auto', display: 'grid', gap: 18 }}>
       {/* header */}
@@ -496,6 +527,10 @@ function DetailPane({
       {/* Human-readable "why this confidence" — built from the real jury/judge
           fields above, with a link to the exact reasoning trace. Not raw JSON. */}
       <ConfidenceEvidence action={action} />
+
+      {/* Evidence / provenance — what this draft actually used (brand voice, CSV
+          facts, cited research, tool calls, ...). Real-only + honest-empty. */}
+      {evidenceLoaded ? <EvidenceProvenance evidence={evidence} /> : null}
 
       {action.context ? (
         <Section label="Replying to">
