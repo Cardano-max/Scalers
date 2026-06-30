@@ -18,6 +18,10 @@ from .sse import sse_stream
 CONSOLE_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    # P2 interactive Slice 1: the studio dev FE runs on a non-3000 port so it
+    # never collides with the frozen demo on :3000. Allow it to reach /graphql.
+    "http://localhost:3030",
+    "http://127.0.0.1:3030",
 ]
 
 

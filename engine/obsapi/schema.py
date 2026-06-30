@@ -18,6 +18,8 @@ import strawberry
 
 from . import repo
 from studio import orchestrator
+from studio import chat as studio_chat
+from studio.chat_store import ChatTurnRecord
 from .types import (
     Action,
     ActionFilter,
@@ -34,9 +36,23 @@ from .types import (
     Run,
     RunFilter,
     StartCampaignResult,
+    StudioChatExchange,
+    StudioChatTurn,
     SystemHealth,
     Tenant,
 )
+
+
+def _to_chat_turn(rec: ChatTurnRecord) -> StudioChatTurn:
+    return StudioChatTurn(
+        id=strawberry.ID(rec.id),
+        session_id=rec.session_id,
+        seq=rec.seq,
+        role=rec.role,
+        text=rec.text,
+        model=rec.model,
+        created_at=rec.created_at,
+    )
 
 
 @strawberry.type
@@ -113,6 +129,12 @@ class Query:
     async def activity_item(self, id: strawberry.ID) -> Optional[ActivityItem]:
         return await asyncio.to_thread(repo.activity_item, str(id))
 
+    @strawberry.field
+    async def studio_chat_history(self, session_id: str) -> list[StudioChatTurn]:
+        """The ordered Campaign Studio conversation for a session (P2 Slice 1)."""
+        rows = await studio_chat.chat_history(str(session_id))
+        return [_to_chat_turn(r) for r in rows]
+
 
 @strawberry.type
 class Mutation:
@@ -170,6 +192,18 @@ class Mutation:
             text=f"Acknowledged: {text}",
             label=None,
             at=now,
+        )
+
+    @strawberry.mutation
+    async def send_chat_message(
+        self, session_id: str, text: str
+    ) -> StudioChatExchange:
+        """P2 interactive Slice 1: persist the operator turn, call the REAL
+        studio-host agent with the conversation so far, persist the host turn,
+        and return both. The host reply is a real LLM call — never canned."""
+        operator, host = await studio_chat.send_chat_message(str(session_id), text)
+        return StudioChatExchange(
+            operator=_to_chat_turn(operator), host=_to_chat_turn(host)
         )
 
     @strawberry.mutation

@@ -295,6 +295,32 @@ class ChatMessage:
     at: str
 
 
+@strawberry.type
+class StudioChatTurn:
+    """One persisted Campaign Studio chat turn (P2 interactive Slice 1).
+
+    ``role`` is ``operator`` | ``host``; ``model`` is the real model pin the host
+    reply was produced with (``None`` for operator turns). Auto-camel-cases to
+    ``sessionId`` / ``createdAt`` to match the FE LiveStudioAdapter document."""
+
+    id: strawberry.ID
+    session_id: str
+    seq: int
+    role: str
+    text: str
+    model: Optional[str]
+    created_at: str
+
+
+@strawberry.type
+class StudioChatExchange:
+    """The pair returned by ``sendChatMessage``: the persisted operator turn and
+    the persisted REAL host reply (never a canned/echoed message)."""
+
+    operator: StudioChatTurn
+    host: StudioChatTurn
+
+
 @strawberry.input
 class ActionFilter:
     type: Optional[str] = None
