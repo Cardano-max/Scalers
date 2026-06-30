@@ -190,3 +190,42 @@ def test_critic_cell_hiccup_records_honest_error_verdict_never_praise(monkeypatc
         # Honest failure, never an invented "approve" praise.
         assert c["output"]["verdict"] == "error"
         assert "critic 500" in c["output"]["rationale"]
+
+
+def _capture_conf(monkeypatch) -> list:
+    """Re-point ``record_pending_action`` (after ``_wire``) to capture the ``conf`` each
+    staged draft is recorded with — the value the operator sees in the Review Queue."""
+    captured: list = []
+    monkeypatch.setattr(
+        store_mod, "record_pending_action",
+        lambda **kw: (captured.append(kw.get("conf")) or f"act_{kw['idempotency_key']}"),
+    )
+    return captured
+
+
+def test_critic_confidence_lands_on_staged_draft_conf(monkeypatch):
+    """The conf=None complaint: the per-draft critic's verdict + confidence must LAND on
+    the staged action's conf. With the critic returning approve@0.9 every staged draft
+    carries the mapped ship-quality score (not None)."""
+    from studio.agui import _draft_quality_conf
+
+    _wire(monkeypatch)
+    captured = _capture_conf(monkeypatch)
+    _execute_provided_leads_sync(_plan(), "sess1", "ladies8391", None, None)
+
+    expected = _draft_quality_conf("approve", 0.9)
+    assert expected is not None
+    assert captured and len(captured) == 2  # one per staged draft
+    assert all(c is not None for c in captured)
+    assert all(c == expected for c in captured)
+
+
+def test_failed_critic_leaves_conf_honest_none(monkeypatch):
+    """A critic that could not judge -> the staged draft's conf stays honest-unknown
+    (None), never a fabricated score."""
+    _wire(monkeypatch, crit_exc=RuntimeError("critic 500"))
+    captured = _capture_conf(monkeypatch)
+    _execute_provided_leads_sync(_plan(), "sess1", "ladies8391", None, None)
+
+    assert captured and len(captured) == 2
+    assert all(c is None for c in captured)
