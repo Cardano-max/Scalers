@@ -417,6 +417,53 @@ async def stage_publish(
 
 
 # --------------------------------------------------------------------------- #
+# Customer CSV upload — REAL parse, honest preview (NO ingestion)
+# --------------------------------------------------------------------------- #
+
+
+def parse_customers_csv(content: str, filename: str = "upload.csv") -> dict[str, Any]:
+    """Parse an uploaded customers CSV and return an honest preview.
+
+    This is a REAL parse (``csv`` over the actual bytes the operator uploaded) — it
+    does NOT ingest anything into the customers table; full ingestion is a separate,
+    later step. Returns the data-row count, the header columns, and a small sample
+    of the first rows so the UI can acknowledge exactly what was parsed.
+
+    Raises ``ValueError`` on empty/unparseable input so the caller returns a 400.
+    """
+    import csv as _csv
+    import io as _io
+
+    text = (content or "").lstrip("﻿")  # drop a leading UTF-8 BOM if present
+    if not text.strip():
+        raise ValueError("empty file — no CSV content")
+
+    reader = _csv.reader(_io.StringIO(text))
+    rows = [r for r in reader if any((c or "").strip() for c in r)]
+    if not rows:
+        raise ValueError("no rows parsed")
+
+    header = [c.strip() for c in rows[0]]
+    data = rows[1:]
+
+    def _row_to_obj(r: list[str]) -> dict[str, str]:
+        obj: dict[str, str] = {}
+        for i, cell in enumerate(r):
+            key = header[i] if i < len(header) else f"col{i + 1}"
+            obj[key] = cell if cell is not None else ""
+        return obj
+
+    return {
+        "ok": True,
+        "filename": filename,
+        "rows": len(data),
+        "columns": header,
+        "sample": [_row_to_obj(r) for r in data[:5]],
+        "ingested": False,  # honesty: parsed only, not written to the customers table
+    }
+
+
+# --------------------------------------------------------------------------- #
 # FastAPI mount
 # --------------------------------------------------------------------------- #
 
@@ -576,3 +623,32 @@ def mount_studio_agui(app) -> None:
                 "hostText": host_text,
             }
         )
+
+    @app.post("/studio/upload")
+    async def studio_upload_route(request: Request):  # noqa: ANN202
+        """Parse an uploaded customers CSV and return an HONEST preview.
+
+        REAL parse only — this reads the bytes the operator picked and reports the
+        row count + columns + a small sample. It deliberately does NOT ingest into the
+        customers table (``ingested: false``); full ingestion is a separate later step.
+        Accepts either JSON ``{filename, content}`` or a raw ``text/csv`` body."""
+        from fastapi.responses import JSONResponse
+
+        raw = await request.body()
+        filename = request.query_params.get("filename") or "upload.csv"
+        content = ""
+        try:
+            payload = json.loads(raw or b"{}")
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            content = payload.get("content") or ""
+            filename = payload.get("filename") or filename
+        else:
+            content = raw.decode("utf-8", "replace")
+
+        try:
+            result = parse_customers_csv(content, filename)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        return JSONResponse(result)

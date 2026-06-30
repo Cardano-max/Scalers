@@ -30,6 +30,8 @@ export function LiveCampaignStudio({ aguiUrl, graphqlUrl, sessionId }: LiveCampa
   const connected = studio.connected === true;
   // While probing (connected === null) treat as connecting; failed probe => preview.
   const isPreview = studio.connected === false;
+  // The customers-CSV upload endpoint lives next to /studio/agui on the same backend.
+  const uploadEndpoint = aguiUrl.replace(/\/agui(\?.*)?$/, '/upload');
 
   const planDoc: PlanDoc = {
     id: `plan_live_${sessionId}`,
@@ -134,6 +136,7 @@ export function LiveCampaignStudio({ aguiUrl, graphqlUrl, sessionId }: LiveCampa
             approval={approval}
             onApprove={studio.approve}
             onReject={studio.reject}
+            uploadEndpoint={connected ? uploadEndpoint : undefined}
           />
           <LiveProgressPanel steps={studio.steps} streamStatus={studio.streamStatus} />
         </div>

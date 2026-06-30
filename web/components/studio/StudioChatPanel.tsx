@@ -20,6 +20,7 @@ import {
 } from '@/lib/data/studio-adapter';
 import { studioPersona, type StudioPersona } from '@/lib/studio/persona';
 import { OrchestrationFlow } from './OrchestrationFlow';
+import { CustomerUpload } from './CustomerUpload';
 import { MicButton } from './MicButton';
 import { appendTranscript, type SttFactoryOptions } from '@/lib/studio/stt';
 
@@ -45,6 +46,11 @@ interface StudioChatPanelProps {
    * use the auto-selected browser engine). See lib/studio/stt.
    */
   micOptions?: SttFactoryOptions;
+  /**
+   * Backend POST endpoint for the "Upload customers" CSV control (real parse, no
+   * ingestion). Omit in preview — the control then shows an honest not-connected note.
+   */
+  uploadEndpoint?: string;
 }
 
 function formatTime(at: string): string {
@@ -273,6 +279,7 @@ export function StudioChatPanel({
   onApprove,
   onReject,
   micOptions,
+  uploadEndpoint,
 }: StudioChatPanelProps) {
   const [draft, setDraft] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -325,7 +332,10 @@ export function StudioChatPanel({
         <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: '#1A1A17' }}>
           Conversation
         </h2>
-        <span style={{ fontSize: 11, color: '#A8A299' }}>operator + agent team</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ fontSize: 11, color: '#A8A299' }}>operator + agent team</span>
+          <CustomerUpload endpoint={uploadEndpoint} />
+        </div>
       </header>
 
       {/* Orchestration flow — appears once the agent team has started; lights up
