@@ -166,3 +166,21 @@ def test_research_honest_single_source_no_padding(monkeypatch):
 def test_research_disabled_returns_empty(monkeypatch):
     _patch_provider(monkeypatch, [_Hit("https://x.example/", "X", "y")])
     assert research_studio(_lead(), enabled=False) == []
+
+
+# ── critic confidence lands on the draft (conf=None fix) ────────────────────── #
+
+
+def test_draft_quality_conf_varies_by_verdict_and_is_honest_on_error():
+    from studio.agui import _draft_quality_conf
+
+    # A confidently-approved (well-grounded) draft lands HIGH; a draft the critic is
+    # confident needs revision / rejects lands LOW — real, varying confidence.
+    approve = _draft_quality_conf("approve", 0.9)
+    revise = _draft_quality_conf("revise", 0.9)
+    reject = _draft_quality_conf("reject", 0.9)
+    assert approve > revise > reject
+    assert approve >= 0.9 and reject <= 0.1
+    # A critic that could not judge -> honest unknown (None), never a fabricated score.
+    assert _draft_quality_conf("error", 0.0) is None
+    assert _draft_quality_conf(None, None) is None
