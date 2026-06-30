@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { StudioChatPanel } from '../StudioChatPanel';
 import { studioPersona, AGENT_PERSONAS, OPERATOR_PERSONA } from '@/lib/studio/persona';
 import type { ChatTurn } from '@/lib/data/studio-adapter';
@@ -77,5 +77,44 @@ describe('StudioChatPanel — distinct cards render', () => {
     const hostCard = container.querySelector('[data-persona="host"]') as HTMLElement;
     expect(operatorCard.style.alignSelf).toBe('flex-end');
     expect(hostCard.style.alignSelf).toBe('flex-start');
+  });
+});
+
+describe('StudioChatPanel — expandable agent traces (PART 2)', () => {
+  const longText = 'Reasoning trace. '.repeat(40); // ~680 chars -> collapsible
+  const turns: ChatTurn[] = [
+    { id: 'short', role: 'SYSTEM', label: 'Studio Host', text: 'Hi.', at: '2026-06-30T10:00:00Z' },
+    { id: 'long', role: 'JURY', label: 'Jury', text: longText, at: '2026-06-30T10:00:10Z' },
+  ];
+
+  it('clamps a long agent trace and reveals the full content on expand', () => {
+    const { container } = render(
+      <StudioChatPanel turns={turns} onSend={() => {}} streamStatus="open" />,
+    );
+    const longCard = container.querySelector('[data-persona="jury"]') as HTMLElement;
+    const body = longCard.querySelector('[data-clamped]') as HTMLElement;
+
+    // collapsed by default + an expand affordance is offered.
+    expect(body.getAttribute('data-clamped')).toBe('true');
+    const toggle = within(longCard).getByRole('button', { name: /expand trace/i });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(toggle);
+    expect(body.getAttribute('data-clamped')).toBe('false');
+    expect(within(longCard).getByRole('button', { name: /collapse trace/i })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    expect(within(longCard).getByText('Show less')).toBeInTheDocument();
+  });
+
+  it('does not offer expand for a short turn', () => {
+    const { container } = render(
+      <StudioChatPanel turns={turns} onSend={() => {}} streamStatus="open" />,
+    );
+    const shortCard = container.querySelector('[data-persona="host"]') as HTMLElement;
+    expect(within(shortCard).queryByRole('button', { name: /expand trace/i })).toBeNull();
+    const body = shortCard.querySelector('[data-clamped]') as HTMLElement;
+    expect(body.getAttribute('data-clamped')).toBe('false');
   });
 });

@@ -18,7 +18,7 @@ import {
   type ChatTurn,
   type StudioStreamStatus,
 } from '@/lib/data/studio-adapter';
-import { studioPersona } from '@/lib/studio/persona';
+import { studioPersona, type StudioPersona } from '@/lib/studio/persona';
 import { MicButton } from './MicButton';
 import { appendTranscript, type SttFactoryOptions } from '@/lib/studio/stt';
 
@@ -67,6 +67,199 @@ function StreamingCaret({ color }: { color: string }) {
         animation: 'studioCaret 1s steps(2) infinite',
       }}
     />
+  );
+}
+
+/** A turn is worth collapsing (and showing an expand chevron) when its full
+ *  content is long enough to clutter the thread. */
+function isCollapsible(text: string): boolean {
+  if (text.length > 220) return true;
+  const newlines = text.match(/\n/g)?.length ?? 0;
+  return newlines >= 3;
+}
+
+/** The operator's own message — a right-aligned filled bubble, clearly NOT an
+ *  agent. Short by nature, so it is never collapsed. */
+function OperatorBubble({ turn, persona }: { turn: ChatTurn; persona: StudioPersona }) {
+  return (
+    <article
+      data-role={turn.role}
+      data-persona={persona.key}
+      style={{
+        alignSelf: 'flex-end',
+        maxWidth: '82%',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'flex-end', gap: 8 }}>
+        <time
+          dateTime={turn.at}
+          style={{ fontSize: 11, color: '#A8A299', fontVariantNumeric: 'tabular-nums' }}
+        >
+          {formatTime(turn.at)}
+        </time>
+        <span style={{ fontSize: 12, fontWeight: 700, color: persona.accent }}>{persona.name}</span>
+      </div>
+      <div
+        style={{
+          fontSize: 14,
+          lineHeight: 1.5,
+          color: '#0B3F3B',
+          background: persona.bg,
+          border: `1px solid ${persona.border}`,
+          borderRadius: 12,
+          borderTopRightRadius: 4,
+          padding: '9px 12px',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+        }}
+      >
+        {turn.text}
+        {turn.streaming && <StreamingCaret color={persona.accent} />}
+      </div>
+    </article>
+  );
+}
+
+/**
+ * One agent turn — a left-aligned card with a coloured avatar + accent rail.
+ * Long turns are CLAMPED to a 3-line preview with an expand chevron; clicking
+ * the header reveals the FULL trace. A live (streaming) turn is never clamped so
+ * the operator watches it grow in full.
+ */
+function AgentTurnCard({ turn, persona }: { turn: ChatTurn; persona: StudioPersona }) {
+  const [expanded, setExpanded] = useState(false);
+  const collapsible = !turn.streaming && isCollapsible(turn.text);
+  const clamp = collapsible && !expanded;
+  const toggle = () => collapsible && setExpanded((e) => !e);
+
+  return (
+    <article
+      data-role={turn.role}
+      data-persona={persona.key}
+      style={{
+        alignSelf: 'flex-start',
+        maxWidth: '92%',
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 10,
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          flex: '0 0 auto',
+          width: 30,
+          height: 30,
+          borderRadius: 9,
+          background: persona.bg,
+          border: `1px solid ${persona.border}`,
+          color: persona.accent,
+          fontSize: 11,
+          fontWeight: 700,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        {persona.initials}
+      </span>
+      <div
+        style={{
+          minWidth: 0,
+          flex: 1,
+          background: persona.bg,
+          border: `1px solid ${persona.border}`,
+          borderLeft: `3px solid ${persona.accent}`,
+          borderRadius: 10,
+          padding: '8px 12px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 3,
+        }}
+      >
+        {/* Header — clickable to expand/collapse when there's more to show. */}
+        <button
+          type="button"
+          onClick={toggle}
+          aria-expanded={collapsible ? expanded : undefined}
+          aria-label={collapsible ? (expanded ? 'Collapse trace' : 'Expand trace') : undefined}
+          disabled={!collapsible}
+          style={{
+            all: 'unset',
+            display: 'flex',
+            alignItems: 'baseline',
+            gap: 8,
+            cursor: collapsible ? 'pointer' : 'default',
+          }}
+        >
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: persona.accent }}>
+            {turn.label || persona.name}
+          </span>
+          <time
+            dateTime={turn.at}
+            style={{ fontSize: 11, color: '#A8A299', fontVariantNumeric: 'tabular-nums' }}
+          >
+            {formatTime(turn.at)}
+          </time>
+          {collapsible && (
+            <span
+              aria-hidden
+              style={{
+                marginLeft: 'auto',
+                fontSize: 10,
+                color: persona.accent,
+                transform: expanded ? 'rotate(0deg)' : 'rotate(-90deg)',
+                transition: 'transform 120ms ease',
+              }}
+            >
+              ▾
+            </span>
+          )}
+        </button>
+        <div
+          data-clamped={clamp ? 'true' : 'false'}
+          style={{
+            fontSize: 14,
+            lineHeight: 1.5,
+            color: '#2A2722',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            ...(clamp
+              ? {
+                  display: '-webkit-box',
+                  WebkitLineClamp: 3,
+                  WebkitBoxOrient: 'vertical' as const,
+                  overflow: 'hidden',
+                }
+              : null),
+          }}
+        >
+          {turn.text}
+          {turn.streaming && <StreamingCaret color={persona.accent} />}
+        </div>
+        {collapsible && (
+          <button
+            type="button"
+            onClick={toggle}
+            style={{
+              all: 'unset',
+              alignSelf: 'flex-start',
+              marginTop: 2,
+              fontSize: 11.5,
+              fontWeight: 600,
+              color: persona.accent,
+              cursor: 'pointer',
+            }}
+          >
+            {expanded ? 'Show less' : 'Show full trace'}
+          </button>
+        )}
+      </div>
+    </article>
   );
 }
 
@@ -170,135 +363,10 @@ export function StudioChatPanel({
         ) : (
           turns.map((turn) => {
             const persona = studioPersona(turn);
-            const isOperator = persona.side === 'right';
-
-            // Operator: a right-aligned filled bubble, clearly NOT an agent.
-            if (isOperator) {
-              return (
-                <article
-                  key={turn.id}
-                  data-role={turn.role}
-                  data-persona={persona.key}
-                  style={{
-                    alignSelf: 'flex-end',
-                    maxWidth: '82%',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 4,
-                  }}
-                >
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'baseline',
-                      justifyContent: 'flex-end',
-                      gap: 8,
-                    }}
-                  >
-                    <time
-                      dateTime={turn.at}
-                      style={{ fontSize: 11, color: '#A8A299', fontVariantNumeric: 'tabular-nums' }}
-                    >
-                      {formatTime(turn.at)}
-                    </time>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: persona.accent }}>
-                      {persona.name}
-                    </span>
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 14,
-                      lineHeight: 1.5,
-                      color: '#0B3F3B',
-                      background: persona.bg,
-                      border: `1px solid ${persona.border}`,
-                      borderRadius: 12,
-                      borderTopRightRadius: 4,
-                      padding: '9px 12px',
-                      whiteSpace: 'pre-wrap',
-                      wordBreak: 'break-word',
-                    }}
-                  >
-                    {turn.text}
-                    {turn.streaming && <StreamingCaret color={persona.accent} />}
-                  </div>
-                </article>
-              );
-            }
-
-            // Agent: a left-aligned card with a coloured avatar + accent rail.
-            return (
-              <article
-                key={turn.id}
-                data-role={turn.role}
-                data-persona={persona.key}
-                style={{
-                  alignSelf: 'flex-start',
-                  maxWidth: '92%',
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: 10,
-                }}
-              >
-                <span
-                  aria-hidden
-                  style={{
-                    flex: '0 0 auto',
-                    width: 30,
-                    height: 30,
-                    borderRadius: 9,
-                    background: persona.bg,
-                    border: `1px solid ${persona.border}`,
-                    color: persona.accent,
-                    fontSize: 11,
-                    fontWeight: 700,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontVariantNumeric: 'tabular-nums',
-                  }}
-                >
-                  {persona.initials}
-                </span>
-                <div
-                  style={{
-                    minWidth: 0,
-                    flex: 1,
-                    background: persona.bg,
-                    border: `1px solid ${persona.border}`,
-                    borderLeft: `3px solid ${persona.accent}`,
-                    borderRadius: 10,
-                    padding: '8px 12px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 3,
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                    <span style={{ fontSize: 12.5, fontWeight: 700, color: persona.accent }}>
-                      {turn.label || persona.name}
-                    </span>
-                    <time
-                      dateTime={turn.at}
-                      style={{ fontSize: 11, color: '#A8A299', fontVariantNumeric: 'tabular-nums' }}
-                    >
-                      {formatTime(turn.at)}
-                    </time>
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 14,
-                      lineHeight: 1.5,
-                      color: '#2A2722',
-                      whiteSpace: 'pre-wrap',
-                      wordBreak: 'break-word',
-                    }}
-                  >
-                    {turn.text}
-                    {turn.streaming && <StreamingCaret color={persona.accent} />}
-                  </div>
-                </div>
-              </article>
+            return persona.side === 'right' ? (
+              <OperatorBubble key={turn.id} turn={turn} persona={persona} />
+            ) : (
+              <AgentTurnCard key={turn.id} turn={turn} persona={persona} />
             );
           })
         )}
