@@ -138,7 +138,11 @@ def approve_and_publish(
 
     channel = (action.channel or "").lower()
     atype = (action.type or "").lower()
-    if channel == "gmail":
+    # Email is delivered via the Gmail connector. Studio drafts may carry the channel
+    # as "email" (and the studio-research path normalises it to "gmail"), but a draft
+    # approved straight from the queue can still arrive as "email" — both route to the
+    # same real Gmail send. The .lower() above already folds Email/EMAIL/Gmail.
+    if channel in ("gmail", "email"):
         return _publish_gmail(action, connectors.get("gmail"), dsn)
     if channel == "facebook":
         if atype == "comment":
