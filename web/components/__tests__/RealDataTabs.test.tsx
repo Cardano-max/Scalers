@@ -9,7 +9,7 @@
  * Review queue AND Activity, and that NOTHING claims to have sent.
  */
 import { describe, it, expect } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { ReviewScreen } from '../ReviewScreen';
 import { RunsScreen } from '../RunsScreen';
 import { ActivityScreen } from '../ActivityScreen';
