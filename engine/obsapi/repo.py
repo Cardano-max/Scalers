@@ -762,21 +762,16 @@ def campaign_spec(run_id: str):
 
 
 # --------------------------------------------------------------------------- #
-# Campaign-id resolution (real-or-honest-null). The authoritative source is
-# ``agent_runs.campaign_id`` — the campaign id the agents actually ran under
-# (verified to occasionally differ from the token embedded in the run_id). The
-# run_id naming convention ``team-{campaign_id}-{uuid12}`` is only a last-resort
-# fallback for runs that have no agent_runs rows; None when neither is available.
+# Campaign-id resolution (real-or-honest-null). The ONLY authoritative source is
+# ``agent_runs.campaign_id`` — the campaign id the agents actually ran under,
+# which the team spine writes NOT NULL on every per-role row. We deliberately do
+# NOT parse a campaign id out of the run_id naming convention
+# ``team-{campaign_id}-{uuid12}``: that token is unverified (it can be stale, or
+# belong to a run that never produced a real campaign), so emitting it surfaces a
+# chip whose label matches no real campaign and links nowhere. When no agent_runs
+# row carries a campaign id we return None, and the UI shows an honest
+# "no campaign" state rather than a fabricated label.
 # --------------------------------------------------------------------------- #
-def _parse_campaign_from_run_id(run_id: str | None) -> str | None:
-    if not run_id or not run_id.startswith("team-"):
-        return None
-    rest = run_id[len("team-"):]
-    if "-" not in rest:
-        return None
-    return rest.rsplit("-", 1)[0] or None
-
-
 def _campaign_id_for(conn: Any, run_id: str | None) -> str | None:
     if not run_id:
         return None
@@ -790,7 +785,7 @@ def _campaign_id_for(conn: Any, run_id: str | None) -> str | None:
             return row["campaign_id"]
     except Exception:
         pass
-    return _parse_campaign_from_run_id(run_id)
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -916,8 +911,10 @@ def _feed_rows(tenant_id: str) -> list[dict[str, Any]]:
         ).fetchall():
             events.append(_run_feed(r))
 
-        # Attach REAL campaign_id to every event in one batched lookup against
-        # agent_runs (authoritative), falling back to the run_id convention.
+        # Attach the REAL campaign_id to every event in one batched lookup against
+        # agent_runs (the only authoritative source). No run_id-convention parse:
+        # an event whose run never wrote a campaign-bearing agent_run honestly has
+        # no campaign (None), never a fabricated token.
         run_ids = sorted({e.get("run_id") for e in events if e.get("run_id")})
         cmap: dict[str, str] = {}
         if run_ids:
@@ -931,8 +928,7 @@ def _feed_rows(tenant_id: str) -> list[dict[str, Any]]:
             except Exception:
                 cmap = {}
         for e in events:
-            rid = e.get("run_id")
-            e["campaign_id"] = cmap.get(rid) or _parse_campaign_from_run_id(rid)
+            e["campaign_id"] = cmap.get(e.get("run_id"))
     events.sort(key=lambda e: (e["ts"] is not None, e["ts"]), reverse=True)
     return events
 

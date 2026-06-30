@@ -43,33 +43,21 @@ class _FakeConn:
 
 
 # --------------------------------------------------------------------------- #
-# _parse_campaign_from_run_id — run_id convention fallback
+# _campaign_id_for — agent_runs is the ONLY authoritative source. We never parse a
+# campaign id out of the run_id naming convention: an unverified token would label
+# a chip with a campaign that does not really exist. No campaign-bearing agent_run
+# → honest None (the UI then shows a "no campaign" state, not a fabricated label).
 # --------------------------------------------------------------------------- #
-def test_parse_campaign_strips_uuid_suffix():
-    assert repo._parse_campaign_from_run_id("team-camp_6521bc-abcdef123456") == "camp_6521bc"
-
-
-def test_parse_campaign_non_team_is_none():
-    assert repo._parse_campaign_from_run_id("run_4821") is None
-    assert repo._parse_campaign_from_run_id(None) is None
-
-
-def test_parse_campaign_no_uuid_suffix_is_none():
-    # "team-foo" has no trailing -uuid segment to strip → honest None
-    assert repo._parse_campaign_from_run_id("team-foo") is None
-
-
-# --------------------------------------------------------------------------- #
-# _campaign_id_for — agent_runs authoritative, run_id convention fallback
-# --------------------------------------------------------------------------- #
-def test_campaign_id_prefers_agent_runs_row():
+def test_campaign_id_uses_authoritative_agent_runs_row():
     conn = _FakeConn(row={"campaign_id": "c_authoritative"})
     assert repo._campaign_id_for(conn, "team-other-uuid") == "c_authoritative"
 
 
-def test_campaign_id_falls_back_to_run_id_convention():
-    conn = _FakeConn(row=None)  # agent_runs has no campaign_id
-    assert repo._campaign_id_for(conn, "team-camp9-zz1122334455") == "camp9"
+def test_campaign_id_honest_none_when_no_agent_runs_campaign():
+    # agent_runs carries no campaign_id for this run → honest None, NOT a token
+    # fabricated from the "team-camp9-..." run_id convention.
+    conn = _FakeConn(row=None)
+    assert repo._campaign_id_for(conn, "team-camp9-zz1122334455") is None
 
 
 def test_campaign_id_none_run_id_short_circuits():
@@ -80,8 +68,8 @@ def test_campaign_id_none_run_id_short_circuits():
 
 def test_campaign_id_raise_never():
     conn = _FakeConn(raises=True)
-    # DB hiccup → degrade to the run_id convention parse, not an exception
-    assert repo._campaign_id_for(conn, "team-camp9-zz1122334455") == "camp9"
+    # DB hiccup → honest None, never an exception and never a fabricated token.
+    assert repo._campaign_id_for(conn, "team-camp9-zz1122334455") is None
 
 
 # --------------------------------------------------------------------------- #

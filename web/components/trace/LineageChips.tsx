@@ -9,10 +9,14 @@
  *   Agent (role) → the producing step's reasoning      Action → the queue draft
  *   Created (time) and Channel are plain context labels.
  *
- * HONESTY: a chip renders ONLY when its id genuinely exists. A missing field is
- * omitted, never faked. The agent chip links to the producing step's reasoning
- * when we know the step; if we only know the run, it links to the run and says
- * so in its tooltip — we never point it at a guessed wrong step.
+ * HONESTY: a chip is a LINK only when its id genuinely resolves to a real target.
+ * A blank/sentinel id ('', '  ', 'null', 'undefined') is treated as absent — we
+ * never render a chip that labels a campaign/run that does not exist or links
+ * nowhere. The campaign chip is clickable only when we also have the real run it
+ * opens; when a real run carries NO campaign we show an explicit, honest
+ * "no campaign" state instead of omitting it or faking a label. The agent chip
+ * links to the producing step's reasoning when we know the step; if we only know
+ * the run, it links to the run and says so — never a guessed wrong step.
  */
 import { type CSSProperties, type ReactNode } from 'react';
 import { useConsole } from '@/state/console-store';
@@ -73,6 +77,20 @@ const AGENT: CSSProperties = {
   cursor: 'pointer',
 };
 
+/**
+ * A real id resolves only when it is a non-blank string that is not a stringified
+ * null/undefined sentinel. Anything else is treated as absent so we never render a
+ * chip labelling a campaign/run that does not exist (e.g. `campaign:null`) or that
+ * would link nowhere.
+ */
+function hasId(value: string | null | undefined): value is string {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return false;
+  const lowered = trimmed.toLowerCase();
+  return lowered !== 'null' && lowered !== 'undefined';
+}
+
 function Pill({
   label,
   title,
@@ -126,19 +144,33 @@ export function LineageChips({
 
   const chips: ReactNode[] = [];
 
-  if (campaignId) {
+  // Campaign chip. It is a LINK only when we have BOTH a real campaign id AND the
+  // real run it opens (the only campaign navigation in this console). A real run
+  // that carries no campaign shows an explicit honest "no campaign" pill rather
+  // than silently dropping the chip or faking a label that resolves nowhere.
+  if (hasId(campaignId) && hasId(runId)) {
     chips.push(
       <Pill
         key="campaign"
         label={`campaign:${campaignId}`}
-        title={runId ? `Open the run for campaign ${campaignId}` : `Campaign ${campaignId}`}
-        style={runId ? CLICKABLE : PLAIN}
-        onClick={runId ? () => console.navigate('runs', runId) : undefined}
+        title={`Open the run for campaign ${campaignId}`}
+        style={CLICKABLE}
+        onClick={() => console.navigate('runs', runId)}
       />,
+    );
+  } else if (hasId(campaignId)) {
+    // Real campaign id but no run to open: a plain, non-clickable context label
+    // (it states the id honestly; it is deliberately not a dead link).
+    chips.push(
+      <Pill key="campaign" label={`campaign:${campaignId}`} title={`Campaign ${campaignId}`} style={PLAIN} />,
+    );
+  } else if (hasId(runId)) {
+    chips.push(
+      <Pill key="campaign" label="no campaign" title="This run is not tied to a campaign" style={PLAIN} />,
     );
   }
 
-  if (runId) {
+  if (hasId(runId)) {
     chips.push(
       <Pill
         key="run"
@@ -154,9 +186,9 @@ export function LineageChips({
     // The agent chip opens the producing step's reasoning when we can resolve a
     // step (we key off the action id, which Step detail resolves); otherwise it
     // falls back to the run — never a guessed wrong step.
-    const target = actionId
+    const target = hasId(actionId)
       ? () => console.navigate('step_detail', actionId)
-      : runId
+      : hasId(runId)
         ? () => console.navigate('runs', runId)
         : undefined;
     chips.push(
@@ -164,9 +196,9 @@ export function LineageChips({
         key="agent"
         label={agentRole}
         title={
-          actionId
+          hasId(actionId)
             ? `Open ${agentRole}'s reasoning for this item`
-            : runId
+            : hasId(runId)
               ? `Open the run (exact ${agentRole} step not linked)`
               : `Produced by ${agentRole}`
         }
@@ -176,7 +208,7 @@ export function LineageChips({
     );
   }
 
-  if (actionId) {
+  if (hasId(actionId)) {
     chips.push(
       <Pill
         key="action"
