@@ -37,6 +37,12 @@ interface VoiceTweakPanelProps {
   approval?: VoiceTweakApproval | null;
   onApprove?: () => void;
   onReject?: () => void;
+  /** A live voice session is connected (drives the in-transcript listening row). */
+  live?: boolean;
+  /** The host is currently speaking (its partial line streams into the transcript). */
+  hostSpeaking?: boolean;
+  /** The host's in-flight spoken line (partial transcription, before it finalizes). */
+  liveHostLine?: string;
   /** POST /studio/upload — customer CSV (omit in preview to show the honest note). */
   uploadEndpoint?: string;
   /** POST /studio/notes — brand / strategy notes (omit in preview). */
@@ -55,6 +61,9 @@ export function VoiceTweakPanel({
   approval = null,
   onApprove,
   onReject,
+  live = false,
+  hostSpeaking = false,
+  liveHostLine = '',
   uploadEndpoint,
   notesEndpoint,
   documentsEndpoint,
@@ -66,7 +75,12 @@ export function VoiceTweakPanel({
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [turns]);
+  }, [turns, liveHostLine, hostSpeaking, live]);
+
+  // The transcript is "alive" whenever a voice session is connected OR there is at
+  // least one turn — so the listening/partial row can show even before the first
+  // finalized turn lands.
+  const showLiveRow = live;
 
   const isPreview = streamStatus === 'preview';
 
@@ -102,13 +116,47 @@ export function VoiceTweakPanel({
           padding: '8px 4px',
         }}
       >
-        {turns.length === 0 ? (
+        {turns.length === 0 && !showLiveRow ? (
           <p style={{ margin: 'auto 0', textAlign: 'center', fontSize: 12.5, lineHeight: 1.55, color: 'var(--text-muted)', maxWidth: 380, alignSelf: 'center' }}>
             Talk, or type a brief below. The strategist replies here, remembers the
             conversation, and orchestrates the team once the plan is set.
           </p>
         ) : (
           turns.map((turn) => <TranscriptLine key={turn.id} turn={turn} />)
+        )}
+
+        {/* Live row — the host's in-flight spoken line (partial transcription) while it
+            talks, or a calm Listening indicator while the session is open and quiet. It
+            keeps the transcript visibly alive between finalized turns. */}
+        {showLiveRow && (
+          hostSpeaking && liveHostLine.trim() ? (
+            <div data-role="LIVE_HOST" style={{ alignSelf: 'flex-start', maxWidth: '88%', display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <span style={{ fontSize: 10.5, fontWeight: 700, color: '#6D4AE6' }}>Studio Host</span>
+              <div style={{ fontSize: 13.5, lineHeight: 1.55, color: 'var(--ink)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                {liveHostLine}
+                <span
+                  aria-label="speaking"
+                  style={{
+                    display: 'inline-block',
+                    width: 7,
+                    height: 14,
+                    marginLeft: 2,
+                    verticalAlign: 'text-bottom',
+                    background: '#6D4AE6',
+                    animation: 'studioCaret 1s steps(2) infinite',
+                  }}
+                />
+              </div>
+            </div>
+          ) : (
+            <div role="status" style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: 'var(--text-muted)' }}>
+              <span
+                aria-hidden="true"
+                style={{ width: 8, height: 8, borderRadius: '50%', background: '#0F8A82', animation: 'micPulse 1.2s ease-in-out infinite' }}
+              />
+              Listening…
+            </div>
+          )
         )}
       </div>
 
@@ -274,7 +322,10 @@ export function VoiceTweakPanel({
           Collapsed to a summary on the Voice surface; expand to upload / manage. */}
       <KnowledgePanel endpoint={documentsEndpoint} collapsible />
 
-      <style>{`@keyframes studioCaret { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }`}</style>
+      <style>{`
+        @keyframes studioCaret { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+        @keyframes micPulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.5); opacity: 0.5; } }
+      `}</style>
     </section>
   );
 }

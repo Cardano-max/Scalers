@@ -198,15 +198,6 @@ export function VoiceScreen() {
             </div>
           )}
 
-          {/* Transient live caption — the host's current spoken line WHILE it talks.
-              Finalized turns (yours and the host's) land in the single transcript
-              below via recordVoiceTurn, so no line is shown in two places. */}
-          {voice.hostSpeaking && voice.assistantLine && (
-            <div style={{ width: '100%', maxWidth: 560, fontSize: 13, color: 'var(--ink)' }}>
-              <strong style={{ color: HOST_ACCENT }}>Host:</strong> {voice.assistantLine}
-            </div>
-          )}
-
           {voice.error && (
             <div role="alert" style={{ fontSize: 12.5, color: 'var(--danger-text)' }}>
               {voice.error}
@@ -234,6 +225,9 @@ export function VoiceScreen() {
             }
             onApprove={studio.approve}
             onReject={studio.reject}
+            live={voice.live}
+            hostSpeaking={voice.hostSpeaking}
+            liveHostLine={voice.assistantLine}
             uploadEndpoint={uploadEndpoint}
             notesEndpoint={notesEndpoint}
             documentsEndpoint={documentsEndpoint}
