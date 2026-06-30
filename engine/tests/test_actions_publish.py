@@ -35,6 +35,21 @@ class _FakeStore:
             setattr(row, k, v)
         return row
 
+    def claim_for_send(self, action_id, *, dsn=None):
+        """In-memory mirror of the atomic pending->'sending' claim.
+
+        Returns the claimed row iff it was 'pending'; otherwise None (already
+        claimed/sent/terminal) — exactly the DB ``RETURNING`` 1-row/0-row contract."""
+        import datetime as _dt
+
+        row = self.rows.get(action_id)
+        if row is None or row.status != "pending":
+            return None
+        row.status = "sending"
+        row.autonomy = "approved"
+        row.approved_at = _dt.datetime.now(_dt.timezone.utc)
+        return row
+
 
 class _FakeGmail:
     def __init__(self, *, result=None, exc=None):
@@ -88,6 +103,7 @@ def patched_store(monkeypatch):
         store = _FakeStore(*rows)
         monkeypatch.setattr(publish, "get_action", store.get_action)
         monkeypatch.setattr(publish, "update_status", store.update_status)
+        monkeypatch.setattr(publish, "claim_for_send", store.claim_for_send)
         return store
 
     return _install

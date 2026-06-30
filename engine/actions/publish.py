@@ -42,7 +42,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-from actions.store import ActionRow, get_action, update_status
+from actions.store import ActionRow, _connect, get_action, update_status
 
 
 class ActionNotFoundError(LookupError):
@@ -77,6 +77,34 @@ def _ensure_real(conn: Any) -> None:
         )
 
 
+def claim_for_send(action_id: str, *, dsn: str | None = None) -> ActionRow | None:
+    """Atomically claim a PENDING action for sending (exactly-once guard).
+
+    A single conditional UPDATE flips ``pending`` → ``sending`` and stamps
+    ``approved_at`` (operator authorization) in one round-trip::
+
+        UPDATE actions SET status='sending', autonomy='approved',
+               approved_at=now(), updated_at=now()
+        WHERE id=%s AND status='pending'
+        RETURNING *
+
+    Returns the claimed row (now ``sending``) iff THIS call won the race; returns
+    ``None`` when 0 rows matched — the action was already claimed/sent/terminal by
+    a concurrent or retried approve, so the caller must NOT send again. This is the
+    real exactly-once seam: the old code wrote ``approved`` *before* the send, so a
+    retry/second-approve after a crash re-entered and SENT AGAIN (Gmail has no
+    provider idempotency). The atomic claim makes the pending→sending transition
+    the single serialization point — only one approve can proceed to the send."""
+    with _connect(dsn) as conn:
+        row = conn.execute(
+            "UPDATE actions SET status='sending', autonomy='approved', "
+            "approved_at=now(), updated_at=now() "
+            "WHERE id=%s AND status='pending' RETURNING *",
+            (action_id,),
+        ).fetchone()
+    return ActionRow.from_row(row) if row is not None else None
+
+
 def approve_and_publish(
     action_id: str,
     *,
@@ -98,10 +126,15 @@ def approve_and_publish(
     if action.status == "sent":
         return action
 
-    # Operator authorization recorded before the external call.
-    action = update_status(
-        action_id, "approved", dsn=dsn, autonomy="approved", approved_at=_now()
-    )
+    # Exactly-once CLAIM (atomic). Replace the old pre-send 'approved' write with a
+    # single conditional UPDATE pending->'sending'. If 0 rows are claimed the action
+    # was already taken (concurrent/retried approve, or a crash-window 'sending'/
+    # terminal row) — RETURN the current row WITHOUT sending. Only the winning claim
+    # proceeds to the external call, so the non-idempotent Gmail send fires once.
+    claimed = claim_for_send(action_id, dsn=dsn)
+    if claimed is None:
+        return get_action(action_id, dsn=dsn)
+    action = claimed
 
     channel = (action.channel or "").lower()
     atype = (action.type or "").lower()
@@ -138,11 +171,23 @@ def _publish_gmail(action: ActionRow, connector: Any | None, dsn: str | None) ->
     from connectors.gmail import GmailConnector
 
     conn = connector or GmailConnector.from_env(enabled=True)
+    # SAFE TEST REDIRECT: when GMAIL_REDIRECT_TO is set, every real send is routed to
+    # that inbox instead of the lead, and the subject is prefixed with the intended
+    # recipient so the test inbox shows who it WOULD have reached. The DB row's
+    # `target` is deliberately LEFT UNCHANGED (honesty: the queue still shows the real
+    # lead). With no redirect env set, behaviour is exactly as before (live send).
+    real_to = action.target or ""
+    to_addr = real_to
+    subject = action.subject or ""
+    redirect = os.environ.get("GMAIL_REDIRECT_TO")
+    if redirect:
+        to_addr = redirect
+        subject = f"[TEST->{real_to}] {subject}"
     try:
         _ensure_real(conn)  # real-only: a mock never live-sends
         result = conn.send(
-            to=action.target or "",
-            subject=action.subject or "",
+            to=to_addr,
+            subject=subject,
             body=action.draft,
         )
     except Exception as exc:  # noqa: BLE001 — surface the REAL error, never fake success
