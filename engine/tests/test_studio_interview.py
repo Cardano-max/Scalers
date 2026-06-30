@@ -19,6 +19,8 @@ from studio.interview import (
     interview_state,
     is_armed,
     next_question,
+    plan_summary,
+    real_lead_count,
 )
 
 
@@ -30,6 +32,7 @@ def _full_plan() -> CampaignPlan:
         lead_source="provided",
         campaign_type="win-back",
         output_count=10,
+        offer="reply to book your next session",
     )
 
 
@@ -50,7 +53,7 @@ def test_arming_requires_every_gating_field() -> None:
     state = interview_state(plan)
     assert state["armed"] is True
     assert state["missing"] == []
-    assert "enough context" in state["readyMessage"].lower()
+    assert "go ahead" in state["readyMessage"].lower()
     # remove any single gating field -> not armed, and that field is asked next
     for f in GATING_FIELDS:
         p = _full_plan()
@@ -69,12 +72,14 @@ def test_output_count_zero_does_not_arm() -> None:
 def test_optional_questions_follow_gating_then_stop() -> None:
     plan = _full_plan()  # all gating answered -> next is the first OPTIONAL field
     assert is_armed(plan) is True
-    assert next_question(plan)["field"] == "action_type"
+    assert next_question(plan)["field"] == "per_lead"
     # answer every optional too -> no more questions
-    plan.action_type = "outreach"
+    plan.per_lead = True
+    plan.personalize = True
     plan.deep_research = True
-    plan.lead_count = 25
     plan.tone = "warm, plain-spoken"
+    plan.action_type = "outreach"
+    plan.lead_count = 25
     plan.drafts_only = False
     assert next_question(plan) is None
 
@@ -117,3 +122,72 @@ def test_apply_fields_skips_unrecognized_yes_no_and_non_interview_keys() -> None
 def test_bool_present_once_explicitly_false() -> None:
     plan = CampaignPlan(drafts_only=False)
     assert field_present(plan, "drafts_only") is True  # an explicit choice counts
+
+
+# --------------------------------------------------------------------------- #
+# Exec question set + plan summary + go-ahead gate (#4/#5)
+# --------------------------------------------------------------------------- #
+
+def test_offer_is_a_gating_field_that_blocks_the_run() -> None:
+    # The offer / CTA is part of the full exec question set and gates the run: a plan
+    # missing only the offer is NOT armed and the supervisor asks for it before running.
+    assert "offer" in GATING_FIELDS
+    plan = _full_plan()
+    plan.offer = ""
+    assert is_armed(plan) is False
+    assert next_question(plan)["field"] == "offer"
+    # no plan summary (and so no go-ahead) until the gate is fully answered
+    assert plan_summary(plan) is None
+    assert interview_state(plan)["planSummary"] is None
+
+
+def test_plan_summary_only_appears_once_armed_so_run_waits_for_go_ahead() -> None:
+    # A half-answered brief has no summary -> the operator is never shown a "go ahead".
+    plan = CampaignPlan(goal="fill Tuesdays")
+    assert plan_summary(plan) is None
+    # A fully-armed brief produces the senior-exec summary the operator approves first.
+    plan = _full_plan()
+    summary = plan_summary(plan)
+    assert summary is not None
+    assert "go ahead" in summary["confirm"].lower()
+    assert interview_state(plan)["planSummary"] is not None
+
+
+def test_per_lead_coercion_personalized_vs_shared() -> None:
+    for one_each in ("personalized", "per lead", "each", "one per lead", "individual"):
+        assert coerce_field("per_lead", one_each) is True, one_each
+    for shared in ("shared", "one shared", "everyone", "same", "blast"):
+        assert coerce_field("per_lead", shared) is False, shared
+    # unrecognized -> None (stays unanswered, no guess)
+    assert coerce_field("per_lead", "hmm") is None
+
+
+def test_plan_summary_reflects_real_lead_count_and_chosen_channels() -> None:
+    # Attach a REAL uploaded list of 3 rows + 2 channels. The summary must use those
+    # real numbers, never a fabricated count.
+    plan = _full_plan()
+    plan.channels = ["email", "instagram"]
+    plan.output_count = 7
+    # REAL upload shape: customers.rows is the int data-row count the upload route
+    # attaches, with the ingested customer_ids alongside.
+    plan.customers = {"rows": 3, "customer_ids": ["c1", "c2", "c3"]}
+    assert real_lead_count(plan) == 3
+    summary = plan_summary(plan)
+    flat = " | ".join(f"{ln['label']}: {ln['value']}" for ln in summary["lines"])
+    # Target line carries the REAL uploaded lead count (3), not the output count.
+    assert "3 lead" in flat
+    assert summary["leadCount"] == 3
+    # The real chosen channels appear, and the create line uses the real output count.
+    assert summary["channels"] == ["email", "instagram"]
+    assert "7" in flat
+    # Always-held reassurance is stated as fact (the studio never sends without approval).
+    assert any("Review Queue" in ln["value"] for ln in summary["lines"])
+
+
+def test_plan_summary_shared_message_does_not_claim_per_lead() -> None:
+    plan = _full_plan()
+    plan.per_lead = False
+    plan.customers = {"rows": 2, "customer_ids": ["c1", "c2"]}
+    create = next(ln["value"] for ln in plan_summary(plan)["lines"] if ln["label"] == "Create")
+    assert "shared" in create.lower()
+    assert "one per lead" not in create.lower()

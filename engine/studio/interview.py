@@ -27,27 +27,55 @@ from typing import Any
 # --------------------------------------------------------------------------- #
 
 # (field, question) in the order the supervisor asks. These define a runnable
-# campaign: what for, who, where, WHICH LEADS, what kind, and how much.
+# campaign: what for, who, where, WHICH LEADS, what kind, how much, and the ask.
+#
+# Phrasing rule: every question is worded the way a friendly senior agency exec would
+# put it to a NON-TECHNICAL client — plain language, a concrete for-instance, no
+# jargon ("lead source", "output count", "channels" never appear bare). The field
+# NAMES stay stable (downstream run logic reads them); only the wording is layman.
 GATING: tuple[tuple[str, str], ...] = (
-    ("goal", "What's the goal of this campaign? (e.g. fill quiet Tuesdays, win back lapsed clients)"),
-    ("audience", "Who's the target audience?"),
-    ("channels", "Which channels should we use? (email, instagram, facebook, sms)"),
+    ("goal", "First — what are you hoping this campaign actually does for you? "
+             "(for example: fill up your quiet Tuesdays, win back clients you haven't "
+             "seen in a while, or get the word out about a new flash sheet)"),
+    ("audience", "Who exactly are we trying to reach? "
+                 "(for example: your past clients, people who follow you on Instagram, "
+                 "folks in your neighbourhood, or fans of a particular style)"),
+    ("channels", "How should we reach them — email, Instagram, Facebook, text message, "
+                 "or a mix of those?"),
     # LEAD SOURCE — a hard branch the operator MUST choose: go FIND new prospects on
     # the web, or comply strictly and use ONLY the operator's own leads (uploaded CSV
     # / existing database). This drives the whole orchestration mode downstream.
-    ("lead_source", "Lead source: should the team SOURCE new leads from the web, or use "
-                    "ONLY your uploaded CSV / existing database leads? (new / provided)"),
-    ("campaign_type", "What type of campaign is this? (win-back, artist-spotlight, promo, event, birthday)"),
-    ("output_count", "How many drafts/outputs should the team produce?"),
+    ("lead_source", "Should I reach out to ONLY the people on the list you've uploaded "
+                    "(your own clients / CSV), or should I also go and find brand-new "
+                    "prospects for you online?"),
+    ("campaign_type", "What kind of campaign is this — winning back old clients, "
+                      "spotlighting one of your artists, a promo or sale, an event, or a "
+                      "birthday note?"),
+    ("output_count", "Roughly how many people should this go out to — how many messages "
+                     "should the team create?"),
+    # OFFER / CTA — what we actually want the reader to DO. A campaign with no ask is
+    # half a campaign, so this gates the run alongside the rest.
+    ("offer", "What's the offer or the ask? "
+              "(for example: a booking link, a discount code, or just 'reply to book')"),
 )
 
 # Asked after the gating set is complete — they refine the run but never block it.
+# Each has a sensible default so the operator can say "use your judgment" and move on.
 OPTIONAL: tuple[tuple[str, str], ...] = (
-    ("action_type", "What action should the team take — outreach, posts, replies, or comments?"),
-    ("deep_research", "Should the team run deep web research first? (yes/no)"),
-    ("lead_count", "How many leads should we target? (0 if not a leads campaign)"),
-    ("tone", "Any tone or brand-voice notes for the team to follow?"),
-    ("drafts_only", "Drafts only, or stage them for your approval? (drafts / stage)"),
+    ("per_lead", "Should each person get their own personalized message, or do you want "
+                 "one shared message that goes to everyone? (personalized / shared)"),
+    ("personalize", "Want me to use each person's history and social profiles to tailor "
+                    "their message? (yes/no)"),
+    ("deep_research", "Should I dig into each lead with deeper web research first before "
+                      "writing? (yes/no)"),
+    ("tone", "Any particular tone you'd like — warm, playful, professional? "
+             "(or leave it to your brand voice)"),
+    ("action_type", "And what should the team actually produce — outreach messages, "
+                    "social posts, replies, or comments?"),
+    ("lead_count", "How many leads should we target? (put 0 if this isn't a leads "
+                   "campaign)"),
+    ("drafts_only", "Should the team just write drafts, or stage them in your Review "
+                    "Queue for approval? (drafts / stage)"),
 )
 
 # Every field the interview is allowed to set on the plan.
@@ -56,12 +84,15 @@ INTERVIEW_FIELDS: tuple[str, ...] = tuple(f for f, _ in (*GATING, *OPTIONAL))
 GATING_FIELDS: tuple[str, ...] = tuple(f for f, _ in GATING)
 
 READY_MESSAGE = (
-    "I have enough context. Say 'go ahead' or click Run to start the team — "
-    "everything stays HELD for your approval."
+    "Great — I have everything I need. Here's the plan below. Have a quick look, and "
+    "when it's right, say 'go ahead' (or click Run) and the team gets started. "
+    "Nothing is sent — every message is held in your Review Queue for your approval."
 )
 
 # Types the supervisor renders as yes/no chips and number/text inputs on the client.
-_BOOL_FIELDS = frozenset({"deep_research", "drafts_only"})
+# ``per_lead`` is a two-way choice (personalized-per-lead vs one shared) coerced like a
+# bool: True = one personalized message per lead, False = one shared message.
+_BOOL_FIELDS = frozenset({"deep_research", "drafts_only", "personalize", "per_lead"})
 _INT_FIELDS = frozenset({"output_count", "lead_count"})
 _LIST_FIELDS = frozenset({"channels"})
 
@@ -229,6 +260,113 @@ def planned_steps(plan: Any) -> list[dict[str, Any]]:
     return steps
 
 
+def real_lead_count(plan: Any) -> int:
+    """The REAL number of leads the operator uploaded — the row count the upload route
+    attached to ``plan.customers`` (an int, the parsed CSV data-row count), falling back
+    to the count of ingested ``customer_ids``. 0 when no list is attached. This is the
+    load-bearing number the plan summary must NEVER fabricate: it is read ONLY from the
+    uploaded list, never from the operator-stated ``lead_count``."""
+    cust = getattr(plan, "customers", None) or {}
+    try:
+        rows = cust.get("rows")
+    except AttributeError:
+        return 0
+    if isinstance(rows, bool):  # guard: bool is an int subclass
+        rows = None
+    if isinstance(rows, int) and rows > 0:
+        return rows
+    if isinstance(rows, (list, tuple)) and rows:
+        return len(rows)
+    ids = cust.get("customer_ids")
+    if isinstance(ids, (list, tuple)) and ids:
+        return len(ids)
+    return 0
+
+
+def plan_summary(plan: Any) -> dict[str, Any] | None:
+    """The senior-exec PLAN SUMMARY shown before the run, the way an agency lead would
+    read the brief back to a client and wait for a go-ahead. ``None`` until the gate is
+    armed (no summary for a half-answered brief).
+
+    HONESTY: every number is REAL — the target line uses the actual uploaded lead count
+    (:func:`real_lead_count`), the create line uses the real ``output_count``, and the
+    channels come from the real ``channels`` list. Never invents a lead count or a
+    channel. The Review-Queue line is a fixed truth: the studio ALWAYS holds — nothing
+    is ever sent without the operator, so that reassurance is stated as fact."""
+    if missing_gating(plan):
+        return None
+
+    mode, _ = select_mode(plan)
+    provided = mode in ("personalized_outreach", "source_and_outreach") and \
+        (getattr(plan, "lead_source", "") or "").strip().lower() != "source_new"
+    source_new = (getattr(plan, "lead_source", "") or "").strip().lower() == "source_new"
+    n_leads = real_lead_count(plan)
+    n_out = int(getattr(plan, "output_count", 0) or 0)
+    channels = [str(c).strip() for c in (getattr(plan, "channels", None) or []) if str(c).strip()]
+    per_lead = getattr(plan, "per_lead", None)
+    personalize = getattr(plan, "personalize", None)
+    deep = getattr(plan, "deep_research", None)
+    tone = (getattr(plan, "tone", "") or "").strip()
+    offer = (getattr(plan, "offer", "") or "").strip()
+    goal = (getattr(plan, "goal", "") or "").strip()
+
+    lines: list[dict[str, str]] = []
+
+    # Target — REAL lead count when we have an uploaded list.
+    if source_new:
+        target = "brand-new prospects I'll find for you online"
+    elif n_leads:
+        target = f"only your uploaded list ({n_leads} lead{'s' if n_leads != 1 else ''})"
+    else:
+        target = "only your uploaded leads"
+    lines.append({"label": "Target", "value": target})
+
+    # Create — REAL output count + per-lead vs shared (default: one personalized per lead).
+    ch_word = channels[0] if len(channels) == 1 else "message"
+    noun = ch_word if ch_word in ("email", "sms", "post") else "message"
+    if per_lead is False:
+        create = (f"{n_out} {noun}{'s' if n_out != 1 else ''} — one shared message"
+                  if n_out else f"one shared {noun}")
+    elif provided:
+        create = (f"{n_out} personalized {noun}{'s' if n_out != 1 else ''}, one per lead"
+                  if n_out else f"personalized {noun}s, one per lead")
+    else:
+        create = (f"{n_out} on-brand {noun}{'s' if n_out != 1 else ''}"
+                  if n_out else f"on-brand {noun}s")
+    lines.append({"label": "Create", "value": create})
+
+    # Using — brand voice + (real) personalization + (real) research switches.
+    using_bits = ["your brand voice"]
+    if personalize is not False and provided:
+        using_bits.append("each lead's history + profile")
+    if deep is True:
+        using_bits.append("deep web research first")
+    lines.append({"label": "Using", "value": ", ".join(using_bits)})
+
+    if channels:
+        lines.append({"label": "Channels", "value": ", ".join(channels)})
+    if offer:
+        lines.append({"label": "The ask", "value": offer})
+    if tone:
+        lines.append({"label": "Tone", "value": tone})
+
+    # Fixed truth: the studio always holds. Nothing sends without the operator.
+    lines.append({
+        "label": "Approval",
+        "value": "everything stays in your Review Queue for your approval first — "
+                 "nothing is sent without you",
+    })
+
+    return {
+        "title": "Here's the plan:",
+        "goal": goal,
+        "lines": lines,
+        "leadCount": n_leads,
+        "channels": channels,
+        "confirm": "Say “go ahead” to run, or change any answer above.",
+    }
+
+
 def interview_state(plan: Any) -> dict[str, Any]:
     """The full gate state for one session plan — exactly what the Agency interview
     panel renders and what gates the Run button. Pure projection of the plan."""
@@ -247,6 +385,8 @@ def interview_state(plan: Any) -> dict[str, Any]:
         "mode": mode,
         "modeLabel": mode_label,
         "plannedSteps": planned_steps(plan),
+        # The senior-exec plan summary the operator approves before the go-ahead.
+        "planSummary": plan_summary(plan),
     }
 
 
@@ -299,6 +439,15 @@ def _coerce_bool(value: Any, *, field: str) -> bool | None:
         if s in ("drafts", "drafts only", "draft"):
             return True
         if s in ("stage", "staged", "approval", "approve", "stage for approval"):
+            return False
+    if field == "per_lead":
+        # "personalized"/"per lead"/"each" -> one message per lead (True);
+        # "shared"/"one"/"same"/"blast"/"everyone" -> one shared message (False)
+        if s in ("personalized", "personalised", "personalize", "per lead", "per-lead",
+                 "each", "individual", "one per lead", "one each"):
+            return True
+        if s in ("shared", "one", "same", "blast", "one shared", "everyone",
+                 "one message", "broadcast", "single"):
             return False
     if s in _YES:
         return True

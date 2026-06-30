@@ -114,6 +114,14 @@ class CampaignPlan(BaseModel):
     campaign_type: str = ""
     deep_research: bool | None = None
     drafts_only: bool | None = None
+    # The offer / call-to-action the message drives toward (a booking link, a promo, or
+    # "reply to book"). A gating field — a campaign with no ask is half a campaign.
+    offer: str = ""
+    # per_lead: one personalized message per lead (True / default) vs one shared message
+    # (False). personalize: tailor each message from the lead's history + profile (True /
+    # default). Both surface in the plan summary; None = unanswered (sensible default).
+    per_lead: bool | None = None
+    personalize: bool | None = None
     # Lead source (hard compliance branch): "provided" = use ONLY the operator's own
     # leads (uploaded CSV / existing DB), researched per-lead; "source_new" = find new
     # prospects on the web. Empty = not chosen yet. Drives the orchestration mode.
@@ -616,6 +624,94 @@ def build_progress_context(tenant_id: str, plan: CampaignPlan, dsn: str | None) 
 def _progress_context(ctx: RunContext[StudioDeps]) -> str:
     """Surface the active run's REAL progress to the host on EVERY turn."""
     return build_progress_context(ctx.deps.tenant_id, ctx.deps.state, ctx.deps.dsn)
+
+
+# --------------------------------------------------------------------------- #
+# Live TEAM NARRATION — the host's running commentary while a run executes,
+# projected PURELY from the REAL recorded agent_runs (the same per-role steps the
+# run_state route returns). One honest line per recorded step: the supervisor only
+# narrates a stage that ACTUALLY ran, names the real lead/channel from the step's
+# own input, and says so plainly when a step failed. No canned script, no fake
+# "lead 8 of 10" totals the data does not support — the timeline IS the data.
+# --------------------------------------------------------------------------- #
+
+def _step_failed(output: Any) -> bool:
+    """Whether a recorded step's output reads as a genuine failure (honest — a failed
+    strategist/critic is narrated as a snag, never as success)."""
+    if not isinstance(output, dict):
+        return False
+    if str(output.get("status", "")).lower() in ("failed", "error"):
+        return True
+    return str(output.get("verdict", "")).lower() in ("error", "failed")
+
+
+def _lead_label(step: dict[str, Any]) -> str:
+    """The real lead name (or customer id) carried on a step's input, or '' if none."""
+    inp = step.get("input") if isinstance(step.get("input"), dict) else {}
+    name = inp.get("name") or inp.get("lead") or inp.get("customer_id")
+    return str(name).strip() if name else ""
+
+
+def _narration_line(step: dict[str, Any]) -> str:
+    """The host-voice narration for ONE recorded step. Pure: reads only the step's own
+    role / input / output, so the line can never describe a stage that did not run."""
+    role = str(step.get("role") or "").strip().lower()
+    inp = step.get("input") if isinstance(step.get("input"), dict) else {}
+    out = step.get("output") if isinstance(step.get("output"), dict) else {}
+    failed = _step_failed(step.get("output"))
+    lead = _lead_label(step)
+    channel = str(inp.get("channel") or "").strip()
+
+    if role == "strategist":
+        if failed:
+            return "The strategist hit a snag setting the angle, so the team is drafting straight from your goal."
+        angle = str(out.get("target_angle") or out.get("angle") or "").strip()
+        return f"The strategist set the campaign angle: “{angle}”." if angle else \
+            "The strategist set the campaign angle for the team."
+    if role == "researcher":
+        who = lead or "this lead"
+        if failed:
+            return f"Research on {who} ran into trouble — continuing from what's already on file."
+        if out.get("degraded"):
+            return f"Researching {who} — no fresh web sources came back, so drafting from their record."
+        return f"Researching {who} — pulling their history and profile."
+    if role == "draft":
+        ch = f"{channel} " if channel else ""
+        return f"The copywriter is drafting a personalized {ch}message for {lead}." if lead else \
+            f"The copywriter is drafting a personalized {ch}message."
+    if role == "critic":
+        ch = f"{channel} " if channel else ""
+        if failed:
+            return f"The critic couldn't finish its review on the {ch}draft — flagged for you to check."
+        verdict = str(out.get("verdict") or "").strip()
+        who = f" for {lead}" if lead else ""
+        return f"The critic reviewed the {ch}draft{who} — verdict: {verdict}." if verdict else \
+            f"The critic is reviewing the {ch}draft{who}."
+    if role == "jury":
+        note = str(out.get("note") or "").strip()
+        return f"Wrapping up — {note}" if note else \
+            "Wrapping up — aggregating confidence across the drafts; everything is held for your approval."
+    # Honest fallback: a role we don't have bespoke copy for is still narrated, not dropped.
+    label = role or "the team"
+    return f"{label.capitalize()} step {'failed' if failed else 'completed'}."
+
+
+def run_narration(steps: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Project the run's REAL recorded steps into host-voice narration — one entry per
+    recorded ``agent_run``, in order. Pure + DB-free (takes the already-loaded steps),
+    so it is unit-testable and can never narrate a stage that did not actually run.
+    Each entry: ``{seq, role, line, failed}``."""
+    out: list[dict[str, Any]] = []
+    for i, step in enumerate(steps or []):
+        if not isinstance(step, dict):
+            continue
+        out.append({
+            "seq": step.get("seq", i),
+            "role": str(step.get("role") or ""),
+            "line": _narration_line(step),
+            "failed": _step_failed(step.get("output")),
+        })
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -1933,6 +2029,8 @@ def mount_studio_agui(app) -> None:
             return {
                 "status": status,
                 "steps": steps,
+                # Live host narration — one honest line per REAL recorded step.
+                "narration": run_narration(steps),
                 "nPending": n_pending,
                 "pending": pending_actions,
                 "archetype": archetype,
