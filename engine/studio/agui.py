@@ -1197,12 +1197,18 @@ async def research_and_stage_leads(
 
 
 # --------------------------------------------------------------------------- #
-# Customer CSV upload — REAL parse, honest preview (NO ingestion)
+# Customer CSV upload. This helper is the PURE PARSER only (no side effects). The
+# `POST /studio/upload` route below is what then INGESTS the rows into `customers`
+# AND attaches a real summary onto the session plan, which `_customers_context`
+# injects into the supervisor on every turn (so it genuinely reads the CSV) — see
+# that route + `_customers_context` above. Do not read "(parser)" as "upload never
+# ingests": it does.
 # --------------------------------------------------------------------------- #
 
 
 def parse_customers_csv(content: str, filename: str = "upload.csv") -> dict[str, Any]:
-    """Parse an uploaded customers CSV and return an honest preview.
+    """Parse an uploaded customers CSV and return an honest preview (PURE parse — the
+    ``/studio/upload`` route does the ingestion + plan-attach; this fn has no I/O).
 
     This is a REAL parse (``csv`` over the actual bytes the operator uploaded) — it
     does NOT ingest anything into the customers table; full ingestion is a separate,
