@@ -227,6 +227,42 @@ body {
   animation: active-pulse 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 
+/*
+ * (5) Trace ARRIVAL highlight — applied for ~1.6s to the exact row a deep-link
+ * lands on ("Open in Activity / Open reasoning / Open run"). A teal ring pulses
+ * twice then settles, with a brief tinted background, so the operator's eye is
+ * pulled to the precise related item — never to the first row. Transform/ring
+ * only; respects reduced-motion (the static ring still marks the row).
+ */
+@keyframes trace-arrive {
+  0% {
+    box-shadow: 0 0 0 0 rgba(15, 138, 130, 0.5);
+    background-color: rgba(15, 138, 130, 0.1);
+  }
+  40% {
+    box-shadow: 0 0 0 5px rgba(15, 138, 130, 0);
+    background-color: rgba(15, 138, 130, 0.06);
+  }
+  60% {
+    box-shadow: 0 0 0 0 rgba(15, 138, 130, 0.4);
+  }
+  100% {
+    box-shadow: 0 0 0 5px rgba(15, 138, 130, 0);
+    background-color: transparent;
+  }
+}
+.trace-arrive {
+  animation: trace-arrive 1.6s cubic-bezier(0.4, 0, 0.2, 1) 1;
+  border-radius: var(--radius-card, 10px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .trace-arrive {
+    animation: none;
+    box-shadow: 0 0 0 2px rgba(15, 138, 130, 0.45);
+    border-radius: var(--radius-card, 10px);
+  }
+}
+
 /* Voice-orb idle breathing (only on the idle/connecting states; live is audio-driven). */
 @keyframes orb-breathe {
   0%,

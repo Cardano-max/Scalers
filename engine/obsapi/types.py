@@ -121,6 +121,20 @@ class Action:
     last_error: Optional[str] = None
     judges: list[Judge] = field(default_factory=list)
     is_seeded: bool = False
+    # --- traceability spine (additive) — REAL lineage exposed/derived on the
+    # draft so every Review-queue item links both ways. All Optional + honest-null;
+    # a missing source stays None, never fabricated. ---
+    # The owning workflow run (actions.run_id).
+    run_id: Optional[strawberry.ID] = None
+    # Real campaign id (agent_runs.campaign_id, else the run_id-convention fallback).
+    campaign_id: Optional[strawberry.ID] = None
+    # The producing agent's role (e.g. Copywriter), resolved from agent_runs by
+    # run_id + a drafting role. None when no confident match — never a guessed step.
+    agent_role: Optional[str] = None
+    # The producing agent_runs step id (None when not confidently resolvable).
+    agent_step_id: Optional[strawberry.ID] = None
+    # Run-level Langfuse trace url (per-step span ids are not persisted).
+    trace_url: Optional[str] = None
 
 
 @strawberry.type
@@ -193,6 +207,12 @@ class ActivityItem:
     # the verbatim Meta/Graph/Gmail error so the detail can say WHY it failed.
     # None unless status='failed'. Never fabricated.
     last_error: Optional[str] = None
+    # --- traceability spine (additive) — same lineage as Action so an Activity
+    # item links back to its campaign / producing-agent step / run-level trace. ---
+    campaign_id: Optional[strawberry.ID] = None
+    agent_role: Optional[str] = None
+    agent_step_id: Optional[strawberry.ID] = None
+    trace_url: Optional[str] = None
 
 
 @strawberry.type

@@ -10,6 +10,9 @@ import { WORKER_COLOR } from '@/lib/tokens';
 import type { Run, CampaignSpec } from '@/lib/data/models';
 import { SpanTree } from './trace/SpanTree';
 import { SpecMarkdown } from './SpecMarkdown';
+import { resolveSelectedId, isDeepLinkHit } from '@/lib/trace-select';
+import { useTraceArrival } from '@/lib/useTraceArrival';
+import { LineageChips } from './trace/LineageChips';
 
 export function RunsScreen() {
   const { adapter, tenantId } = useData();
@@ -18,6 +21,7 @@ export function RunsScreen() {
 
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [openEventIndex, setOpenEventIndex] = useState<number | null>(null);
+  const { highlightId, trigger: triggerArrival, scrollRef } = useTraceArrival();
 
   // Per-campaign spec doc — lazy-loaded for the selected run on demand.
   const [specOpen, setSpecOpen] = useState(false);
@@ -51,23 +55,25 @@ export function RunsScreen() {
 
   const items = useMemo(() => runs.data ?? [], [runs.data]);
 
-  // Deep-link: when navigated here with a contextId (run_id) — e.g. from the
-  // live feed "Open run →" / a feed pill / an Overview RunRow — select that run.
-  // Mirrors ActivityScreen's contextId consumer so the navigation actually lands
-  // on the target run instead of defaulting to items[0].
+  // SINGLE selection resolver (same fix as ActivityScreen): a deep-link run id
+  // (contextId) from the live feed "Open run →" / a feed pill / an Overview
+  // RunRow ALWAYS wins over the items[0] default. The old two-effect form raced
+  // on the data-load commit and the default clobbered the target → every "Open
+  // run" landed on the first run. On a real hit we open that run cleanly and
+  // fire the scroll+pulse arrival highlight.
   useEffect(() => {
-    if (console.contextId && items.some((r) => r.id === console.contextId)) {
-      setSelectedRunId(console.contextId);
+    const target = console.contextId;
+    const hit = isDeepLinkHit(items, target);
+    const next = resolveSelectedId(items, target, selectedRunId);
+    if (next !== selectedRunId) {
+      setSelectedRunId(next);
       setOpenEventIndex(null);
+    }
+    if (hit && target) {
+      triggerArrival(target);
       console.setContext(null);
     }
-  }, [console.contextId, items, console]);
-
-  useEffect(() => {
-    if (items.length > 0 && !selectedRunId) {
-      setSelectedRunId(items[0].id);
-    }
-  }, [items, selectedRunId]);
+  }, [items, selectedRunId, console, triggerArrival]);
 
   const selected = items.find((r) => r.id === selectedRunId) ?? null;
 
@@ -97,6 +103,8 @@ export function RunsScreen() {
               <button
                 key={r.id}
                 type="button"
+                ref={r.id === highlightId ? scrollRef : undefined}
+                className={r.id === highlightId ? 'trace-arrive' : undefined}
                 onClick={() => {
                   setSelectedRunId(r.id);
                   setOpenEventIndex(null);
@@ -157,8 +165,20 @@ export function RunsScreen() {
             <Chip tone={selected.status === 'SUCCESS' ? 'success' : selected.status === 'FAILED' ? 'danger' : 'neutral'}>{selected.status}</Chip>
           </div>
           <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 3 }}>{selected.type}</div>
-          <div style={{ fontSize: 12, color: '#8C877D', marginBottom: 18 }}>
+          <div style={{ fontSize: 12, color: '#8C877D', marginBottom: 10 }}>
             {selected.trigger} · {clockTime(selected.startedAt)}
+          </div>
+          {/* Lineage chips — campaign + run + run-level trace, deep-linkable. */}
+          <div style={{ marginBottom: 16 }}>
+            <LineageChips
+              lineage={{
+                campaignId: selected.campaignId,
+                runId: selected.id,
+                createdAt: selected.startedAt,
+                channel: selected.channels[0] ?? null,
+                traceUrl: selected.traceUrl,
+              }}
+            />
           </div>
 
           {/* Meta grid */}

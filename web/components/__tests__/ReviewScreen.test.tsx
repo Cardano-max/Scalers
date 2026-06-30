@@ -2,12 +2,18 @@ import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { ReviewScreen } from '../ReviewScreen';
 import { DataProvider } from '@/lib/data/DataProvider';
+import { ConsoleProvider } from '@/state/console-store';
 import { MockAdapter } from '@/lib/data/mock-adapter';
 
 function renderReview() {
+  // ReviewScreen now consumes the console store for deep-link navigation (the
+  // traceability spine), so it must mount inside a ConsoleProvider — exactly as
+  // AppShell wraps every screen at runtime (mirrors ActivityScreen.test.tsx).
   return render(
     <DataProvider adapter={new MockAdapter()} tenantId="northwind">
-      <ReviewScreen />
+      <ConsoleProvider>
+        <ReviewScreen />
+      </ConsoleProvider>
     </DataProvider>,
   );
 }

@@ -22,6 +22,9 @@ import { AUTONOMY_LABEL, CHANNEL_COLOR, WORKER_COLOR } from '@/lib/tokens';
 import type { Action, ActivityItem, AutonomyMode } from '@/lib/data/models';
 import { ExecutionTraceCard } from './trace/ExecutionTraceCard';
 import { JuryCard } from './trace/JuryCard';
+import { LineageChips } from './trace/LineageChips';
+import { resolveSelectedId, isDeepLinkHit } from '@/lib/trace-select';
+import { useTraceArrival } from '@/lib/useTraceArrival';
 
 const FILTERS: Array<{ id: QueueFilter; label: string }> = [
   { id: 'ALL', label: 'All' },
@@ -84,6 +87,7 @@ export function ActivityScreen() {
   const [filter, setFilter] = useState<QueueFilter>('ALL');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [threadOpen, setThreadOpen] = useState(false);
+  const { highlightId, trigger: triggerArrival, scrollRef } = useTraceArrival();
 
   // Executed first, then staged drafts — preserves the executed order the mock
   // spine (and its tests) rely on; no re-sort.
@@ -101,23 +105,21 @@ export function ActivityScreen() {
   const filtered = useMemo(() => items.filter((a) => matchesFilter(a.type, filter)), [items, filter]);
   const counts = useMemo(() => countByFilter(items), [items]);
 
-  // Auto-select based on contextId from navigation
+  // SINGLE selection resolver — fixes the "Open in Activity jumps to the first
+  // item" bug. The old code had two effects (contextId-select + default-to-first)
+  // that raced on the data-load commit, and the default clobbered the deep-link
+  // target. Now one pure decision makes a matching deep-link target ALWAYS win;
+  // on a real hit we clear the consumed contextId and fire the scroll+pulse.
   useEffect(() => {
-    if (console.contextId && filtered.some((a) => a.id === console.contextId)) {
-      setSelectedId(console.contextId);
+    const target = console.contextId;
+    const hit = isDeepLinkHit(filtered, target);
+    const next = resolveSelectedId(filtered, target, selectedId);
+    if (next !== selectedId) setSelectedId(next);
+    if (hit && target) {
+      triggerArrival(target);
       console.setContext(null);
     }
-  }, [console.contextId, filtered, console]);
-
-  useEffect(() => {
-    if (filtered.length === 0) {
-      if (selectedId !== null) setSelectedId(null);
-      return;
-    }
-    if (!selectedId || !filtered.some((a) => a.id === selectedId)) {
-      setSelectedId(filtered[0].id);
-    }
-  }, [filtered, selectedId]);
+  }, [filtered, selectedId, console, triggerArrival]);
 
   // The expander has one open-state per selected item (resets on row change).
   useEffect(() => {
@@ -190,6 +192,8 @@ export function ActivityScreen() {
                     key={a.id}
                     item={a}
                     selected={a.id === selectedId}
+                    highlighted={a.id === highlightId}
+                    scrollRef={a.id === highlightId ? scrollRef : undefined}
                     onSelect={() => setSelectedId(a.id)}
                   />
                 ))}
@@ -218,16 +222,22 @@ export function ActivityScreen() {
 function ActivityRow({
   item,
   selected,
+  highlighted,
+  scrollRef,
   onSelect,
 }: {
   item: ActivityItem;
   selected: boolean;
+  highlighted?: boolean;
+  scrollRef?: (node: HTMLElement | null) => void;
   onSelect: () => void;
 }) {
   return (
     <li>
       <button
         type="button"
+        ref={scrollRef}
+        className={highlighted ? 'trace-arrive' : undefined}
         onClick={onSelect}
         style={{
           width: '100%',
@@ -320,6 +330,19 @@ function ActivityDetail({
             <Chip tone={OUTCOME_TONE[item.outcome.kind]}>{item.outcome.label}</Chip>
           )}
         </div>
+        {/* Lineage chips — deep-link to the related run / producing-agent reasoning /
+            this draft, plus honest context (created, channel, run-level trace). */}
+        <LineageChips
+          lineage={{
+            campaignId: item.campaignId,
+            runId: item.runId,
+            agentRole: item.agentRole,
+            actionId: item.id,
+            createdAt: item.createdAt,
+            channel: item.channel,
+            traceUrl: item.traceUrl,
+          }}
+        />
       </div>
 
       {/* Staged draft: plain-language intent + HELD note. Nothing is sent; the
