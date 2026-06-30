@@ -99,7 +99,7 @@ def test_search_connects_to_pinned_ip_with_host_key_and_path():
     call = fake.calls[0]
     assert call["ip"] == "93.184.216.34"          # resolved + vetted IP
     assert call["host"] == "api.firecrawl.dev"    # SNI/Host = official host
-    assert call["path"] == "/v1/search"           # the search endpoint, not scrape
+    assert call["path"] == "/v2/search"           # the official v2 search endpoint
     assert call["headers"]["Authorization"] == "Bearer fc-key"
     body = json.loads(call["body"])
     assert body["query"] == "fine line tattoo aftercare"
@@ -156,3 +156,54 @@ def test_extract_search_results_is_verbatim():
     minimal = _extract_search_results('{"data": [{"url": "https://x.test/a"}]}', limit=5)
     assert minimal[0].url == "https://x.test/a"
     assert minimal[0].title is None and minimal[0].snippet is None
+
+
+# ── v2 response shape: data is {web:[...], news:[...]} (the REAL /v2/search) ──
+
+_V2_BODY = json.dumps(
+    {
+        "success": True,
+        "data": {
+            "web": [
+                {
+                    "url": "https://www.bestwishestattoo-la.com/blog/fine-line-aftercare-healing",
+                    "title": "Fine Line Tattoo Aftercare & Healing Guide",
+                    "description": "Fine line tattoos usually take 5-6 weeks to heal.",
+                    "position": 1,
+                },
+                {
+                    "url": "https://iglatattoo.com/how-to-heal-a-fine-line-tattoo/",
+                    "title": "A Week-by-Week Healing Guide",
+                    "description": "Tap gently around the area while it heals.",
+                    "position": 2,
+                },
+            ]
+        },
+        "creditsUsed": 2,
+        "id": "abc-123",
+    }
+)
+
+
+def test_extract_search_results_parses_v2_web_shape():
+    out = _extract_search_results(_V2_BODY, limit=5)
+    assert [r.url for r in out] == [
+        "https://www.bestwishestattoo-la.com/blog/fine-line-aftercare-healing",
+        "https://iglatattoo.com/how-to-heal-a-fine-line-tattoo/",
+    ]
+    assert out[0].title == "Fine Line Tattoo Aftercare & Healing Guide"
+    assert "5-6 weeks" in out[0].snippet
+
+
+def test_search_parses_v2_response_end_to_end():
+    p = _provider(fetcher=_FakeFetcher(body=_V2_BODY))
+    results = p.search("fine line tattoo aftercare", limit=5)
+    assert results[0].url.endswith("fine-line-aftercare-healing")
+
+
+@pytest.mark.parametrize(
+    "body",
+    ['{"data": {"web": null}}', '{"data": {}}', '{"data": {"web": []}}'],
+)
+def test_v2_empty_web_never_fabricates(body):
+    assert _extract_search_results(body, limit=5) == []
