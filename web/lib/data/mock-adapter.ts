@@ -892,7 +892,7 @@ export class MockAdapter implements DataAdapter {
   }
 
   // --- mutations (mock) — signatures mirror the DataAdapter interface ---
-  async approveAction(id: string, _idempotencyKey: string): Promise<Action> {
+  async approveAction(id: string, _idempotencyKey: string, live = false): Promise<Action> {
     const a = REVIEW_QUEUE.find((x) => x.id === id);
     if (!a) throw new Error(`mock: action ${id} not found`);
     // HONEST outcome mirror: an Instagram/Facebook publish goes through the live
@@ -903,7 +903,9 @@ export class MockAdapter implements DataAdapter {
       return { ...a, status: 'FAILED', lastError: META_GRAPH_TOKEN_ERROR };
     }
     // Approve RESUMES the engine (the action leaves the queue); never bypasses a gate.
-    return { ...a, status: 'APPROVED' };
+    // Mirror the resolved send mode the engine would report: Live only on explicit
+    // operator authorization, else the safe test-redirect default.
+    return { ...a, status: 'APPROVED', mode: live ? 'live' : 'test_redirect' };
   }
   async rejectAction(id: string, _reason?: string): Promise<Action> {
     const a = REVIEW_QUEUE.find((x) => x.id === id);

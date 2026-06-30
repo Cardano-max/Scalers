@@ -22,13 +22,15 @@ import type { PendingAction } from '@/lib/studio/run-trace';
 import { personaForRunRole } from '@/lib/studio/agency';
 import { EvidenceProvenance } from '@/components/trace/EvidenceProvenance';
 import type { ActionEvidence } from '@/lib/data/models';
+import type { SendMode } from '@/lib/studio/campaign-send';
+import { ModeBadge, SendModeToggle } from './send-mode';
 
 const TEAL = '#0F8A82';
 
 type CardState =
   | { kind: 'idle' }
   | { kind: 'busy' }
-  | { kind: 'sent' }
+  | { kind: 'sent'; mode?: SendMode | null }
   | { kind: 'rejected' }
   | { kind: 'failed'; error: string };
 
@@ -44,6 +46,10 @@ export function StagedDraftsReview({
   // Per-action lifecycle state, keyed by id. Approve/reject flip a card in place so
   // the operator sees the honest outcome (sent / rejected / failed) without a refetch.
   const [states, setStates] = useState<Record<string, CardState>>({});
+  // Send mode for approve→publish: default Test (safe redirect) vs explicit Live. These
+  // are REAL lead outreach drafts, so this is the exact path where a real email must be
+  // able to go out clean — the toggle governs every Approve here.
+  const [liveMode, setLiveMode] = useState(false);
 
   // Drop lifecycle entries for actions no longer present (a fresh run replaced them).
   useEffect(() => {
@@ -67,12 +73,12 @@ export function StagedDraftsReview({
   const approve = async (a: PendingAction) => {
     setState(a.id, { kind: 'busy' });
     try {
-      const result = await adapter.approveAction(a.id, a.idempotencyKey);
+      const result = await adapter.approveAction(a.id, a.idempotencyKey, liveMode);
       if (result.status === 'FAILED') {
         setState(a.id, { kind: 'failed', error: result.lastError ?? 'provider error' });
         return;
       }
-      setState(a.id, { kind: 'sent' });
+      setState(a.id, { kind: 'sent', mode: result.mode ?? null });
     } catch (e) {
       setState(a.id, { kind: 'failed', error: e instanceof Error ? e.message : String(e) });
     }
@@ -128,6 +134,9 @@ export function StagedDraftsReview({
         Nothing is sent until you approve. Approve runs the real publish path (safety +
         allow-list checks server-side); Reject discards; Deep Review opens the full trace.
       </p>
+
+      {/* Approve→publish send mode — default Test (safe), explicit Live is confirm-gated. */}
+      <SendModeToggle live={liveMode} onChange={setLiveMode} />
 
       {pending.map((a) => (
         <DraftCard
@@ -259,7 +268,10 @@ function DraftCard({
       )}
 
       {state.kind === 'sent' ? (
-        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--success-text)' }}>✓ Approved — published</div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--success-text)', display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          ✓ Approved — published
+          {state.mode && <ModeBadge mode={state.mode} />}
+        </div>
       ) : state.kind === 'rejected' ? (
         <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)' }}>✕ Rejected</div>
       ) : (

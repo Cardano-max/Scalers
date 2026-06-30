@@ -20,6 +20,7 @@ import { Dot } from './icons';
 import { Chip, ProviderErrorPanel, Tag, actionIntent, channelLabel, clockTime, matchesFilter, typeLabel, type QueueFilter } from './console-bits';
 import { CHANNEL_COLOR, WORKER_COLOR } from '@/lib/tokens';
 import type { Action, ActionEvidence, ActionType } from '@/lib/data/models';
+import { SendModeToggle } from './studio/send-mode';
 // --- traceability spine (additive) ---
 import { useTraceArrival } from '@/lib/useTraceArrival';
 import { LineageChips } from './trace/LineageChips';
@@ -57,6 +58,10 @@ export function ReviewScreen() {
   const [draftText, setDraftText] = useState('');
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
+  // Send mode for approve→publish: default Test (safe redirect) vs explicit Live. The
+  // operator's per-draft #11 complaint ("I approved a real email and it had [TEST]")
+  // lives on THIS path, so the toggle governs every approve in the queue.
+  const [liveMode, setLiveMode] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Local working copy of the queue so approve/reject can remove items + advance
@@ -131,7 +136,7 @@ export function ReviewScreen() {
   const onApprove = async (a: Action) => {
     setBusy(true);
     try {
-      const result = await adapter.approveAction(a.id, a.idempotencyKey);
+      const result = await adapter.approveAction(a.id, a.idempotencyKey, liveMode);
       // HONEST OUTCOME: approve→publish can come back FAILED with the REAL
       // provider error (e.g. an expired Meta token → Graph HTTP 400). Do NOT
       // claim "sent" and do NOT silently drop it — keep the row, flip it to
@@ -147,7 +152,10 @@ export function ReviewScreen() {
         return;
       }
       removeAndAdvance(a.id);
-      showToast(`${approveVerb(a.type)} — ${truncate(a.target, 40)}`, 'success');
+      // Surface the REAL mode the engine routed this send through (Live vs Test), so the
+      // operator sees plainly whether a real email went out or it was test-redirected.
+      const modeTag = result.mode ? ` · ${result.mode === 'live' ? 'LIVE' : 'TEST'}` : '';
+      showToast(`${approveVerb(a.type)} — ${truncate(a.target, 40)}${modeTag}`, 'success');
     } catch (e) {
       showToast(`Approve failed: ${errMsg(e)}`, 'amber');
     } finally {
@@ -243,6 +251,10 @@ export function ReviewScreen() {
                 </button>
               );
             })}
+          </div>
+          {/* Approve→publish send mode — default Test (safe), explicit Live is confirm-gated. */}
+          <div style={{ marginTop: 10 }}>
+            <SendModeToggle live={liveMode} onChange={setLiveMode} disabled={busy} />
           </div>
         </div>
 

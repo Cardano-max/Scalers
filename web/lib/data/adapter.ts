@@ -78,7 +78,9 @@ export interface DataAdapter {
   ): SSEClient;
 
   // --- mutations (surface ready for the action/command/dial beads) ---
-  approveAction(id: string, idempotencyKey: string): Promise<Action>;
+  // `live` (default false = safe redirect) is the operator's explicit live-send
+  // authorization; the resolved `mode` rides back on the returned Action.
+  approveAction(id: string, idempotencyKey: string, live?: boolean): Promise<Action>;
   rejectAction(id: string, reason?: string): Promise<Action>;
   editActionDraft(id: string, draft: string): Promise<Action>;
   regenerateAction(id: string): Promise<Action>;

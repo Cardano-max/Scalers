@@ -201,6 +201,10 @@ export interface Action {
   agentStepId?: string | null;
   /** Run-level Langfuse trace url (per-step span ids are not persisted). */
   traceUrl?: string | null;
+  /** The resolved send mode of the LAST approve→publish on this draft ('live' |
+   *  'test_redirect'), surfaced on the approveAction response so the Review Queue can
+   *  badge how the send was routed. Undefined/null until an approve actually sends. */
+  mode?: 'live' | 'test_redirect' | null;
 }
 
 export interface RunStep {

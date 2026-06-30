@@ -143,10 +143,11 @@ export class LiveAdapter implements DataAdapter {
     return createSSEClient({ url: this.sseUrl, tenantId, handlers, onStatus });
   }
 
-  approveAction(id: string, idempotencyKey: string) {
+  approveAction(id: string, idempotencyKey: string, live = false) {
     return this.mutate<{ approveAction: Action }>(Q.APPROVE_ACTION, {
       id,
       idempotencyKey,
+      live,
     }).then((d) => d.approveAction);
   }
   rejectAction(id: string, reason?: string) {

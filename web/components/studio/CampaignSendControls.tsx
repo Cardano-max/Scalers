@@ -27,8 +27,8 @@ import {
   type CampaignDraft,
   type OverrideResult,
   type SendEligibleResult,
-  type SendMode,
 } from '@/lib/studio/campaign-send';
+import { ModeBadge, SendModeToggle } from './send-mode';
 
 const TEAL = '#0F8A82';
 
@@ -158,62 +158,8 @@ export function CampaignSendControls({ runId }: { runId: string }) {
         held and needs an explicit, audited override. Nothing below the bar is ever swept along.
       </p>
 
-      {/* ── Send mode: default Test (safe redirect) vs explicit Live ───────────── */}
-      <div
-        role="group"
-        aria-label="Send mode"
-        style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
-      >
-        <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>Mode</span>
-        <div
-          style={{
-            display: 'inline-flex',
-            border: '1px solid var(--hairline-strong)',
-            borderRadius: 'var(--radius-pill)',
-            overflow: 'hidden',
-          }}
-        >
-          <button
-            type="button"
-            aria-pressed={!liveMode}
-            onClick={() => setLiveMode(false)}
-            style={{
-              fontSize: 11.5,
-              fontWeight: 600,
-              padding: '4px 12px',
-              border: 'none',
-              cursor: 'pointer',
-              color: !liveMode ? '#fff' : 'var(--text-secondary)',
-              background: !liveMode ? TEAL : '#fff',
-            }}
-          >
-            Test (safe)
-          </button>
-          <button
-            type="button"
-            aria-pressed={liveMode}
-            onClick={() => setLiveMode(true)}
-            style={{
-              fontSize: 11.5,
-              fontWeight: 600,
-              padding: '4px 12px',
-              border: 'none',
-              borderLeft: '1px solid var(--hairline-strong)',
-              cursor: 'pointer',
-              color: liveMode ? '#fff' : 'var(--text-secondary)',
-              background: liveMode ? 'var(--danger-text)' : '#fff',
-            }}
-          >
-            Live
-          </button>
-        </div>
-        <ModeBadge mode={liveMode ? 'live' : 'test_redirect'} />
-      </div>
-      <p style={{ margin: 0, fontSize: 11, color: liveMode ? 'var(--danger-text)' : 'var(--text-muted)', lineHeight: 1.45 }}>
-        {liveMode
-          ? 'Live: sends reach the REAL recipient with a clean subject. Use only when you intend real outreach.'
-          : 'Test: every send is rerouted to the operator inbox with a [TEST] marker — no real recipient is contacted.'}
-      </p>
+      {/* Send mode: default Test (safe redirect) vs explicit Live (confirm-gated). */}
+      <SendModeToggle live={liveMode} onChange={setLiveMode} disabled={sending} />
 
       {error && (
         <div
@@ -614,29 +560,5 @@ function OverrideRow({
         </button>
       )}
     </article>
-  );
-}
-
-/** A small pill badging the resolved send mode — Live (real recipient, clean) vs Test
- *  (rerouted to the operator inbox with a [TEST] marker). Honest: it reflects the mode
- *  the engine actually reported, never an assumed one. */
-function ModeBadge({ mode }: { mode: SendMode }) {
-  const live = mode === 'live';
-  return (
-    <span
-      data-mode={mode}
-      style={{
-        fontSize: 10,
-        fontWeight: 700,
-        letterSpacing: '0.02em',
-        color: live ? '#fff' : 'var(--text-secondary)',
-        background: live ? 'var(--danger-text)' : 'var(--surface-alt)',
-        border: `1px solid ${live ? 'var(--danger-text)' : 'var(--hairline-strong)'}`,
-        borderRadius: 'var(--radius-pill)',
-        padding: '2px 8px',
-      }}
-    >
-      {live ? 'LIVE' : 'TEST'}
-    </span>
   );
 }

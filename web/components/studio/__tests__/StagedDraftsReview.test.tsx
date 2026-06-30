@@ -63,7 +63,27 @@ describe('StagedDraftsReview', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Approve and publish' }));
     await waitFor(() => expect(screen.getByText(/Approved — published/i)).toBeInTheDocument());
-    expect(approveAction).toHaveBeenCalledWith('act_1', 'idem_1');
+    // Default mode is Test (safe): live=false threads through the approve.
+    expect(approveAction).toHaveBeenCalledWith('act_1', 'idem_1', false);
+  });
+
+  it('Live mode (after confirm) threads live=true into the approve; default is Test', async () => {
+    const approveAction = vi
+      .fn()
+      .mockResolvedValue({ id: 'act_1', status: 'APPROVED', mode: 'live' } as Action);
+    const adapter = fakeAdapter({ approveAction, rejectAction: vi.fn() });
+    wrap(<StagedDraftsReview pending={[pending()]} />, adapter);
+
+    // Flip to Live -> confirm gate -> Enable Live, then approve.
+    fireEvent.click(screen.getByRole('button', { name: 'Live' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Enable Live' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve and publish' }));
+
+    await waitFor(() => expect(approveAction).toHaveBeenCalledWith('act_1', 'idem_1', true));
+    // The real mode the engine reported is badged on the sent card — in addition to the
+    // toggle's own active-mode badge, so there are now two LIVE badges on screen.
+    await screen.findByText(/Approved — published/i);
+    expect(screen.getAllByText('LIVE').length).toBeGreaterThanOrEqual(2);
   });
 
   it('Reject routes the reject mutation and flips the card', async () => {

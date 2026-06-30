@@ -99,8 +99,9 @@ describe('CampaignSendControls', () => {
     render(<CampaignSendControls runId="run_1" />);
     await screen.findByText(/1 draft safe to send/i);
 
-    // Flip to Live, then send.
+    // Flip to Live -> confirm gate -> Enable Live, then send.
     fireEvent.click(screen.getByRole('button', { name: /^Live$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /enable live/i }));
     fireEvent.click(screen.getByRole('button', { name: /send eligible/i }));
     fireEvent.click(screen.getByRole('button', { name: /confirm send/i }));
 

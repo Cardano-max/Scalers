@@ -131,9 +131,13 @@ export const SYSTEM_HEALTH_QUERY = `
 `;
 
 // --- mutations (wired by the action/command beads; surface ready here) ---
+// approveAction also selects `mode` (the resolved send mode of THIS approve, 'live' |
+// 'test_redirect'). It is Action-only and transient, so it is requested HERE on the
+// mutation rather than in the shared ACTION_FIELDS fragment (which ActivityItem embeds
+// and which has no `mode` field) — same reasoning as isSeeded.
 export const APPROVE_ACTION = `
-  mutation ApproveAction($id: ID!, $idempotencyKey: String!) {
-    approveAction(id: $id, idempotencyKey: $idempotencyKey) { ${ACTION_FIELDS} }
+  mutation ApproveAction($id: ID!, $idempotencyKey: String!, $live: Boolean) {
+    approveAction(id: $id, idempotencyKey: $idempotencyKey, live: $live) { ${ACTION_FIELDS} mode }
   }
 `;
 export const REJECT_ACTION = `
