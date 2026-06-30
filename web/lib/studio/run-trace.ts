@@ -23,11 +23,26 @@ export interface RunStep {
   createdAt?: string;
 }
 
+/** One HELD draft (a PENDING `actions` row) produced by the run. Carries exactly
+ *  what the result/review surface needs to render an Approve / Reject / Deep-Review
+ *  card and drive the EXISTING approve mutation (id + idempotencyKey). Real-only. */
+export interface PendingAction {
+  id: string;
+  channel: string | null;
+  target: string | null;
+  subject: string | null;
+  draft: string;
+  idempotencyKey: string;
+  status: string;
+}
+
 export interface RunState {
   runId: string;
   status: RunStatus;
   steps: RunStep[];
   nPending: number | null;
+  /** The real HELD draft rows for this run (empty until drafts stage). */
+  pending: PendingAction[];
   archetype: string | null;
   error: string | null;
 }
@@ -73,6 +88,7 @@ export async function fetchRunState(
     status?: RunStatus;
     steps?: RunStep[];
     nPending?: number | null;
+    pending?: PendingAction[];
     archetype?: string | null;
     error?: string | null;
   };
@@ -81,6 +97,7 @@ export async function fetchRunState(
     status: d.status ?? 'unknown',
     steps: Array.isArray(d.steps) ? d.steps : [],
     nPending: d.nPending ?? null,
+    pending: Array.isArray(d.pending) ? d.pending : [],
     archetype: d.archetype ?? null,
     error: d.error ?? null,
   };

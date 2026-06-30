@@ -74,6 +74,10 @@ class CampaignPlan(BaseModel):
     tasks_per_role: dict[str, list[str]] = Field(default_factory=dict)
     assets: list[dict[str, Any]] = Field(default_factory=list)
     schedule: dict[str, str] = Field(default_factory=dict)
+    # Operator-supplied brand / strategy notes (e.g. an uploaded notes file). This is
+    # REAL context the host reads on every turn (see ``_plan_context``) and that the
+    # run loads with the plan — not a badge. Free text, persisted with the plan.
+    notes: str = ""
 
 
 @dataclass
@@ -177,7 +181,7 @@ def _plan_context(ctx: RunContext[StudioDeps]) -> str:
     p = ctx.deps.state
     channels = ", ".join(p.channels) if p.channels else "(none yet)"
     sections = ", ".join(p.sections) if p.sections else "(none yet)"
-    return (
+    base = (
         "CURRENT CAMPAIGN PLAN — this is the live SHARED STATE, already reflecting any "
         "edits the operator just made to the plan fields on the frontend. Treat it as "
         "ground truth and re-plan around it; never claim you cannot see it:\n"
@@ -186,6 +190,18 @@ def _plan_context(ctx: RunContext[StudioDeps]) -> str:
         f"- channels: {channels}\n"
         f"- sections: {sections}"
     )
+    # Surface uploaded brand / strategy notes as real planning context. The operator
+    # attached these (e.g. a brand-voice or strategy file); treat them as ground truth
+    # about the brand and weave them into the plan — never invent beyond them.
+    if p.notes.strip():
+        snippet = p.notes.strip()
+        if len(snippet) > 4000:
+            snippet = snippet[:4000] + " …[truncated]"
+        base += (
+            "\n\nOPERATOR BRAND / STRATEGY NOTES (uploaded context — ground every brand "
+            "claim in these; do not contradict or invent beyond them):\n" + snippet
+        )
+    return base
 
 
 @studio_agent.instructions
@@ -416,12 +432,21 @@ async def brainstorm_with_roles(ctx: RunContext[StudioDeps]) -> str:
 
 
 def _brief_from_plan(plan: CampaignPlan) -> str:
-    return (
+    brief = (
         f"Goal: {plan.goal or 'grow bookings'}\n"
         f"Audience: {plan.audience or 'local clients seeking custom tattoos'}\n"
         f"Channels: {', '.join(plan.channels) or 'instagram, email'}"
         + (f"\nSections: {', '.join(plan.sections)}" if plan.sections else "")
     )
+    # Carry uploaded brand / strategy notes into the run brief so the deterministic
+    # spine's cells (not just the conversational host) ground in the operator's
+    # context. Bounded so a large notes file can't blow the brief out.
+    notes = plan.notes.strip()
+    if notes:
+        if len(notes) > 2000:
+            notes = notes[:2000] + " …[truncated]"
+        brief += f"\nBrand / strategy notes (operator-provided): {notes}"
+    return brief
 
 
 def _summary_text(summary: dict[str, Any]) -> str:
@@ -1061,6 +1086,7 @@ def mount_studio_agui(app) -> None:
             steps: list[dict] = []
             runs_status = None
             n_pending = None
+            pending_actions: list[dict] = []
             with psycopg.connect(dsn, autocommit=True, row_factory=dict_row) as c:
                 rows = c.execute(
                     "SELECT role, model, input, output, created_at FROM agent_runs "
@@ -1092,6 +1118,29 @@ def mount_studio_agui(app) -> None:
                     n_pending = pr["n"] if pr else None
                 except Exception:
                     n_pending = None
+                # The actual HELD draft rows for this run — the result/review surface
+                # renders one Approve / Reject / Deep-Review card per row. Real data
+                # only (id + idempotency_key drive the existing approve mutation); an
+                # empty list is honest (no drafts staged yet / older run).
+                try:
+                    pend = c.execute(
+                        "SELECT id, channel, target, subject, draft, idempotency_key, status "
+                        "FROM actions WHERE run_id=%s AND status='pending' ORDER BY created_at",
+                        (run_id,),
+                    ).fetchall()
+                    for ar in pend:
+                        draft_txt = ar.get("draft") or ""
+                        pending_actions.append({
+                            "id": ar.get("id"),
+                            "channel": ar.get("channel"),
+                            "target": ar.get("target"),
+                            "subject": ar.get("subject"),
+                            "draft": draft_txt,
+                            "idempotencyKey": ar.get("idempotency_key"),
+                            "status": ar.get("status"),
+                        })
+                except Exception:
+                    pending_actions = []
 
             status = None
             archetype = None
@@ -1111,6 +1160,7 @@ def mount_studio_agui(app) -> None:
                 "status": status,
                 "steps": steps,
                 "nPending": n_pending,
+                "pending": pending_actions,
                 "archetype": archetype,
                 "error": reg.get("error") if reg else None,
             }
@@ -1169,3 +1219,56 @@ def mount_studio_agui(app) -> None:
             result["ingested"] = False
             result["ingest_error"] = f"{type(exc).__name__}: {exc}"
         return JSONResponse(result)
+
+    @app.post("/studio/notes")
+    async def studio_notes_route(request: Request):  # noqa: ANN202
+        """Attach operator brand / strategy notes (an uploaded text file) to the
+        session plan as REAL context.
+
+        The notes are stored on the session's persisted ``CampaignPlan.notes``, so the
+        Host reads them on every turn (``_plan_context``) AND the deterministic run
+        loads them with the plan — it is genuine planning/run context, not a badge.
+        Accepts JSON ``{sessionId, filename, content}``. NOTHING is sent."""
+        from fastapi.responses import JSONResponse
+
+        dsn = get_dsn()
+        try:
+            payload = json.loads(await request.body() or b"{}")
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        session_id = (
+            payload.get("sessionId")
+            or payload.get("threadId")
+            or request.query_params.get("session_id")
+            or "studio-default"
+        )
+        filename = payload.get("filename") or "notes.txt"
+        content = (payload.get("content") or "").strip()
+        if not content:
+            return JSONResponse(
+                {"ok": False, "error": "empty notes — no text content"}, status_code=400
+            )
+
+        def _attach() -> int:
+            plan = _load_plan(session_id, dsn)
+            plan.notes = content
+            _persist_plan(dsn, session_id, plan)
+            return len(content)
+
+        try:
+            chars = await asyncio.to_thread(_attach)
+        except Exception as exc:
+            return JSONResponse(
+                {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500
+            )
+        return JSONResponse(
+            {
+                "ok": True,
+                "filename": filename,
+                "chars": chars,
+                "note": "Brand / strategy notes attached to the plan — the team reads "
+                "them when planning and running. Nothing was sent.",
+            }
+        )

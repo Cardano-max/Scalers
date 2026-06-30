@@ -384,7 +384,7 @@ export function useStudioAgui(
     setRunningCampaign(true);
     setBusy(true);
     setError(null);
-    setRunState({ runId: '', status: 'running', steps: [], nPending: null, archetype: null, error: null });
+    setRunState({ runId: '', status: 'running', steps: [], nPending: null, pending: [], archetype: null, error: null });
 
     (async () => {
       let runId: string;
@@ -413,7 +413,7 @@ export function useStudioAgui(
       setRunningCampaign(true);
       setBusy(true);
       setError(null);
-      setRunState({ runId, status: 'running', steps: [], nPending: null, archetype: null, error: null });
+      setRunState({ runId, status: 'running', steps: [], nPending: null, pending: [], archetype: null, error: null });
       pollRun(runId);
     },
     [runningCampaign, pollRun],

@@ -13,6 +13,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useData } from '@/lib/data/DataProvider';
+import { useConsoleOptional } from '@/state/console-store';
 import { useAsync } from '@/lib/useAsync';
 import { AsyncBoundary } from './states';
 import { Dot } from './icons';
@@ -35,11 +36,16 @@ const FILTERS: Array<{ id: QueueFilter; label: string }> = [
 
 export function ReviewScreen() {
   const { adapter, tenantId } = useData();
+  // Deep Review deep-link: the studio result/review surface navigates here with the
+  // staged action id as contextId — focus that row once the queue loads. Optional read
+  // so the screen still renders in isolation (unit tests mount it without a provider).
+  const contextId = useConsoleOptional()?.contextId ?? null;
   const queue = useAsync<Action[]>(() => adapter.getReviewQueue(tenantId), [tenantId]);
 
   const [items, setItems] = useState<Action[] | null>(null);
   const [filter, setFilter] = useState<QueueFilter>('ALL');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const deepLinkApplied = useRef(false);
   const [editing, setEditing] = useState(false);
   const [draftText, setDraftText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -78,6 +84,20 @@ export function ReviewScreen() {
       setSelectedId(filtered[0].id);
     }
   }, [filtered, selectedId]);
+
+  // Apply the Deep-Review deep-link ONCE, after the queue loads: focus the requested
+  // action if it's still in the queue. Runs after the auto-select effect so it wins.
+  useEffect(() => {
+    if (deepLinkApplied.current) return;
+    if (!contextId) {
+      deepLinkApplied.current = true;
+      return;
+    }
+    if (filtered.some((a) => a.id === contextId)) {
+      setSelectedId(contextId);
+      deepLinkApplied.current = true;
+    }
+  }, [contextId, filtered]);
 
   const selected = filtered.find((a) => a.id === selectedId) ?? null;
 

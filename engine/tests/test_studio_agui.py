@@ -40,6 +40,40 @@ def test_campaign_plan_store_roundtrip() -> None:
     assert rows[0]["state"]["goal"] == "fill May"
 
 
+def test_notes_round_trip_and_surface_in_plan_context() -> None:
+    """Operator brand/strategy notes (the uploaded-notes route writes them onto the
+    plan) persist with the plan AND surface to the Host on every turn via
+    ``_plan_context`` — real planning context, not a badge. Empty notes add nothing."""
+    from types import SimpleNamespace
+
+    from studio.agui import _plan_context
+
+    sid = _sid()
+    plan_setup()
+    notes = "Warm, plain-spoken. No emoji. Fine-line specialist; never over-promise."
+    upsert_plan(sid, CampaignPlan(goal="fill May", notes=notes).model_dump())
+    rows = latest_plans(1, session_id=sid)
+    assert rows and rows[0]["state"]["notes"] == notes
+    # reloads back into the typed plan
+    assert CampaignPlan.model_validate(rows[0]["state"]).notes == notes
+
+    # surfaced to the host
+    ctx = SimpleNamespace(deps=SimpleNamespace(state=CampaignPlan(goal="fill May", notes=notes)))
+    rendered = _plan_context(ctx)  # type: ignore[arg-type]
+    assert "BRAND / STRATEGY NOTES" in rendered
+    assert "No emoji" in rendered
+
+    # empty notes → no notes block (no fabrication / clutter)
+    ctx_empty = SimpleNamespace(deps=SimpleNamespace(state=CampaignPlan(goal="fill May")))
+    assert "BRAND / STRATEGY NOTES" not in _plan_context(ctx_empty)  # type: ignore[arg-type]
+
+    # and the deterministic run brief carries the notes too (cells, not just the host)
+    from studio.agui import _brief_from_plan
+
+    assert "No emoji" in _brief_from_plan(CampaignPlan(goal="fill May", notes=notes))
+    assert "Brand / strategy notes" not in _brief_from_plan(CampaignPlan(goal="fill May"))
+
+
 def test_chat_store_allows_labeled_role_turns() -> None:
     sid = _sid()
     store = PostgresChatStore(get_dsn())

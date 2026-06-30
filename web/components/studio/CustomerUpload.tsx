@@ -6,10 +6,12 @@
  * Picks a .csv, POSTs it to the studio backend's POST /studio/upload, and shows
  * an HONEST acknowledgement of what was parsed ("Uploaded N rows · columns: …").
  *
- * HONESTY: the backend does a REAL parse and returns row count + columns + a
- * sample — it does NOT ingest into the customers table (a separate later step),
- * and this control says so. With no live endpoint (preview), it does not fake a
- * parse: it tells the operator the upload needs the live studio backend.
+ * HONESTY: the backend does a REAL parse AND upserts the rows into the customers
+ * table (keyed on tenant+email, idempotent) so the run's research tools can find
+ * them. When ingestion lands the ack says how many leads were ingested; if the
+ * backend reports it did NOT ingest (older backend / failure), the ack says so
+ * instead of claiming otherwise. With no live endpoint (preview), it does not fake
+ * a parse: it tells the operator the upload needs the live studio backend.
  */
 import { useRef, useState } from 'react';
 
@@ -19,7 +21,10 @@ interface UploadAck {
   rows?: number;
   columns?: string[];
   sample?: Array<Record<string, string>>;
+  /** True only when the backend actually upserted the rows into `customers`. */
   ingested?: boolean;
+  /** Real ingestion counts when `ingested` is true. */
+  ingest?: { ingested?: number; created?: number; matched?: number };
   error?: string;
 }
 
@@ -127,7 +132,13 @@ export function CustomerUpload({ endpoint }: { endpoint?: string }) {
           {ack.columns && ack.columns.length > 0 && (
             <> · columns: {ack.columns.join(', ')}</>
           )}
-          <div style={{ color: '#8C877D' }}>Parsed only — not ingested yet.</div>
+          <div style={{ color: '#8C877D' }}>
+            {ack.ingested
+              ? `Ingested ${ack.ingest?.ingested ?? ack.rows ?? 0} lead${
+                  (ack.ingest?.ingested ?? ack.rows) === 1 ? '' : 's'
+                } — the team can research them.`
+              : 'Parsed only — not ingested yet.'}
+          </div>
         </div>
       )}
 

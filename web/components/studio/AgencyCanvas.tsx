@@ -26,6 +26,7 @@ import { AGENT_PERSONAS } from '@/lib/studio/persona';
 import { StepSpanRow } from './StepSpanRow';
 import { ResearchSourcesRail } from './ResearchSourcesRail';
 import { SpecArtifactCard } from './SpecArtifactCard';
+import { StagedDraftsReview } from './StagedDraftsReview';
 
 const TEAL = '#0F8A82';
 
@@ -36,6 +37,8 @@ export interface AgencyCanvasProps {
   /** Idle teal CTA — kicks the real /studio/run spine. Omit to hide the CTA. */
   onRunCampaign?: () => void;
   onOpenReview?: () => void;
+  /** Open the Review Queue detail focused on ONE staged draft (Deep Review). */
+  onDeepReview?: (actionId: string) => void;
   /** Compact mode (embedded beneath the Voice hero) trims the outer chrome. */
   compact?: boolean;
 }
@@ -46,6 +49,7 @@ export function AgencyCanvas({
   connected,
   onRunCampaign,
   onOpenReview,
+  onDeepReview,
   compact = false,
 }: AgencyCanvasProps) {
   const stages = useMemo(() => deriveAgencyStages(runState, running), [runState, running]);
@@ -62,6 +66,11 @@ export function AgencyCanvas({
   const juryDone = !!juryStage?.done;
   const completed = runState?.status === 'completed';
   const hasRun = steps.length > 0 || running;
+  // Real HELD draft rows for this run. The run transitions into review mode (per-draft
+  // Approve / Reject / Deep-Review) once it completes (or the jury has landed) and
+  // there are staged drafts — never fabricated; empty list renders nothing.
+  const pendingDrafts = runState?.pending ?? [];
+  const showReview = (completed || juryDone) && pendingDrafts.length > 0;
 
   // ── Idle / not-connected states ────────────────────────────────────────────
   if (!hasRun) {
@@ -188,6 +197,12 @@ export function AgencyCanvas({
           nPending={runState.nPending}
           onOpenReview={onOpenReview}
         />
+      )}
+
+      {/* Result / review mode: the run is done — surface each real HELD draft with
+          Approve / Reject / Deep-Review, right where it was streaming. */}
+      {showReview && (
+        <StagedDraftsReview pending={pendingDrafts} onDeepReview={onDeepReview} />
       )}
 
       {/* War-room grid: roster · timeline (evidence) · research. */}

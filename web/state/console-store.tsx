@@ -130,5 +130,12 @@ export function useConsole(): ConsoleStore {
   return ctx;
 }
 
+/** Non-throwing read of the console store — returns null when used outside a
+ *  <ConsoleProvider>. For optional reads (e.g. a deep-link contextId) on screens
+ *  that must also render in isolation (unit tests render them bare). */
+export function useConsoleOptional(): ConsoleStore | null {
+  return useContext(ConsoleContext);
+}
+
 // Exported for unit testing the reset-on-nav invariant directly.
 export const __reducer = reducer;

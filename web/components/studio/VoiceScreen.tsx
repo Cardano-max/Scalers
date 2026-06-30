@@ -22,11 +22,16 @@ import { useSharedStudio } from '@/lib/studio/StudioRunProvider';
 import { useVoiceHost } from '@/lib/studio/voice/useVoiceHost';
 import { VoiceOrb } from './VoiceOrb';
 import { AgencyCanvas } from './AgencyCanvas';
-import { StudioChatPanel } from './StudioChatPanel';
+import { VoiceTweakPanel } from './VoiceTweakPanel';
 import type { ChatTurn } from '@/lib/data/studio-adapter';
 
 const HOST_ACCENT = '#6D4AE6';
 const TEAL = '#0F8A82';
+
+/** Derive a sibling studio route (e.g. /upload, /notes) from the AG-UI URL. */
+function studioRoute(aguiUrl: string, suffix: string): string {
+  return aguiUrl ? aguiUrl.replace(/\/agui(\?.*)?$/, suffix) : '';
+}
 
 /** Caption for each real voice state — never implies a state the session isn't in. */
 function caption(conn: string, awaitingGo: boolean, disabled: boolean): string {
@@ -65,6 +70,11 @@ export function VoiceScreen() {
   const convoTurns: ChatTurn[] = studio.turns.filter(
     (t) => t.role === 'OPERATOR' || t.role === 'SYSTEM',
   );
+
+  // Real upload routes — sit next to /studio/agui. Passed only when connected so the
+  // controls show the honest not-connected note in preview instead of failing.
+  const uploadEndpoint = connected ? studioRoute(studio.aguiUrl, '/upload') : undefined;
+  const notesEndpoint = connected ? studioRoute(studio.aguiUrl, '/notes') : undefined;
 
   const plan = studio.plan;
   const planChips: { label: string; value: string }[] = [
@@ -199,9 +209,9 @@ export function VoiceScreen() {
           )}
         </div>
 
-        {/* The conversation thread + the type-first composer (equal primary). */}
-        <div style={{ flex: 1, minHeight: 320, display: 'flex', padding: '0 16px 16px' }}>
-          <StudioChatPanel
+        {/* The light transcript + small "tweak" box + uploads (not a heavy chat wall). */}
+        <div style={{ flex: 1, minHeight: 300, display: 'flex', padding: '0 24px 24px', maxWidth: 640, width: '100%', margin: '0 auto' }}>
+          <VoiceTweakPanel
             turns={convoTurns}
             onSend={studio.send}
             streamStatus={studio.streamStatus}
@@ -217,6 +227,9 @@ export function VoiceScreen() {
             }
             onApprove={studio.approve}
             onReject={studio.reject}
+            uploadEndpoint={uploadEndpoint}
+            notesEndpoint={notesEndpoint}
+            sessionId={studio.sessionId}
           />
         </div>
       </div>
@@ -239,6 +252,7 @@ export function VoiceScreen() {
           compact
           onRunCampaign={connected ? studio.runCampaign : undefined}
           onOpenReview={() => navigate('review')}
+          onDeepReview={(actionId) => navigate('review', actionId)}
         />
       </aside>
     </section>

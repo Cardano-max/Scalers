@@ -20,7 +20,7 @@ function step(seq: number, role: string, output: unknown, createdAt?: string): R
 }
 
 function runState(steps: RunStep[], status: RunState['status'] = 'running'): RunState {
-  return { runId: 'r1', status, steps, nPending: null, archetype: 'outreach', error: null };
+  return { runId: 'r1', status, steps, nPending: null, pending: [], archetype: 'outreach', error: null };
 }
 
 describe('deriveAgencyStages — real counts + active + handoff gate', () => {
