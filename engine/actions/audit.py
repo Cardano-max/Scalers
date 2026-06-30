@@ -60,20 +60,24 @@ def record_send_audit(
     threshold: float | None = None,
     esc_kind: str | None = None,
     result: str | None = None,
+    mode: str | None = None,
     dsn: str | None = None,
 ) -> str:
     """Persist one operator send-decision audit row; return its id. Best-effort
-    schema-ensure first so the row never fails on a fresh DB."""
+    schema-ensure first so the row never fails on a fresh DB.
+
+    ``mode`` is the send mode the action resolved to ('live' | 'test_redirect'); it is
+    NULL for a pre-send audit (the override row written BEFORE the send runs)."""
     ensure_schema(dsn)
     aud_id = f"aud_{uuid.uuid4().hex[:16]}"
     with _connect(dsn) as conn:
         conn.execute(
             "INSERT INTO send_audit "
             "(id, action_id, run_id, tenant_id, kind, operator, reason, eligible, "
-            " conf, threshold, esc_kind, result) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            " conf, threshold, esc_kind, result, mode) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (aud_id, action_id, run_id, tenant_id, kind, operator, reason, eligible,
-             conf, threshold, esc_kind, result),
+             conf, threshold, esc_kind, result, mode),
         )
     return aud_id
 
@@ -95,7 +99,7 @@ def list_send_audit(
     with _connect(dsn) as conn:
         rows = conn.execute(
             "SELECT id, action_id, run_id, tenant_id, kind, operator, reason, eligible, "
-            "conf, threshold, esc_kind, result, created_at "
+            "conf, threshold, esc_kind, result, mode, created_at "
             f"FROM send_audit{clause} ORDER BY created_at DESC",
             tuple(params),
         ).fetchall()

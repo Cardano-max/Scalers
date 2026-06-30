@@ -2199,11 +2199,17 @@ def mount_studio_agui(app) -> None:
             payload = json.loads(await request.body() or b"{}")
         except Exception:
             payload = {}
-        operator = (payload or {}).get("operator") if isinstance(payload, dict) else None
+        if not isinstance(payload, dict):
+            payload = {}
+        operator = payload.get("operator")
+        # EXPLICIT operator live-send authorization. Default False = safe redirect; a
+        # campaign send is live ONLY when the operator flipped the toggle to Live. Any
+        # non-true value (absent / null / false) stays redirect.
+        live = payload.get("live") is True
         dsn = get_dsn()
         try:
             out = await asyncio.to_thread(
-                send_eligible, run_id=run_id, dsn=dsn, operator=operator
+                send_eligible, run_id=run_id, dsn=dsn, operator=operator, live=live
             )
         except Exception as exc:
             return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
@@ -2227,6 +2233,9 @@ def mount_studio_agui(app) -> None:
             payload = {}
         reason = (payload.get("reason") or "").strip()
         operator = payload.get("operator")
+        # EXPLICIT operator live-send authorization (default False = safe redirect). An
+        # override bypasses the confidence bar, NOT the send-path redirect default.
+        live = payload.get("live") is True
         if not reason:
             return JSONResponse(
                 {"ok": False, "error": "override requires an explicit reason"},
@@ -2235,7 +2244,7 @@ def mount_studio_agui(app) -> None:
         dsn = get_dsn()
         try:
             out = await asyncio.to_thread(
-                override_send, action_id, reason=reason, operator=operator, dsn=dsn
+                override_send, action_id, reason=reason, operator=operator, dsn=dsn, live=live
             )
         except OverrideRequiresReasonError:
             return JSONResponse(

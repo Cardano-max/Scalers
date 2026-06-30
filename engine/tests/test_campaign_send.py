@@ -179,6 +179,46 @@ def test_send_eligible_honors_gmail_allow_list_redirect(monkeypatch):
     assert gmail.calls == [("operator@inbox.test", "[TEST->stranger@real.com] Promo", "Body")]
 
 
+def test_send_eligible_live_true_sends_clean_and_surfaces_mode(monkeypatch):
+    """EXPLICIT operator live authorization flips an eligible (but redirect-default)
+    draft to a CLEAN live send to the real recipient, and the entry/audit carry
+    mode='live'. Eligibility alone never does this — only ``live=True``."""
+    monkeypatch.setenv("GMAIL_REDIRECT_TO", "operator@inbox.test")
+    draft = _row(id="act_live", channel="gmail", target="lead@real.com",
+                 conf=0.9, threshold=0.85, esc_kind="hold", worker="team",
+                 subject="Promo", draft="Body", run_id="team-camp_d-r1")
+    store = _FakeStore(draft)
+    audits = _wire(monkeypatch, store)
+    gmail = _FakeGmail()
+
+    out = cs.send_eligible(run_id="team-camp_d-r1", connectors={"gmail": gmail}, live=True)
+
+    # Clean send to the real recipient (no [TEST] redirect), because the operator
+    # explicitly authorized live.
+    assert gmail.calls == [("lead@real.com", "Promo", "Body")]
+    assert out["n_sent"] == 1
+    assert out["sent"][0]["mode"] == "live"
+    assert store.rows["act_live"].worker == "studio_real_send"  # single set-site
+    assert any(a.get("mode") == "live" for a in audits)
+
+
+def test_send_eligible_default_surfaces_test_redirect_mode(monkeypatch):
+    """Without live authorization, an eligible gmail draft still redirects and the
+    surfaced mode is 'test_redirect' (so the UI badges it Test)."""
+    monkeypatch.setenv("GMAIL_REDIRECT_TO", "operator@inbox.test")
+    draft = _row(id="act_red", channel="gmail", target="lead@real.com",
+                 conf=0.9, threshold=0.85, esc_kind="hold", worker="team",
+                 subject="Promo", draft="Body", run_id="team-camp_e-r1")
+    store = _FakeStore(draft)
+    _wire(monkeypatch, store)
+    gmail = _FakeGmail()
+
+    out = cs.send_eligible(run_id="team-camp_e-r1", connectors={"gmail": gmail})
+
+    assert out["sent"][0]["mode"] == "test_redirect"
+    assert store.rows["act_red"].worker != "studio_real_send"
+
+
 def test_override_requires_reason():
     with pytest.raises(cs.OverrideRequiresReasonError):
         cs.override_send("act_any", reason="   ")

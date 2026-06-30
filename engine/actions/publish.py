@@ -70,6 +70,19 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _with_mode(row: ActionRow | None, mode: str) -> ActionRow | None:
+    """Attach the send ``mode`` ('live' | 'test_redirect') to a returned action row.
+
+    ``mode`` is a send-time computed value, not a persisted ``actions`` column, so it
+    rides back as a transient attribute on the returned :class:`ActionRow` for the
+    caller / UI to read (the Live-Feed shows a 'Live' vs 'Test/redirect' badge). It is
+    absent (``getattr(row, 'mode', None)`` -> ``None``) on any freshly loaded row that
+    did not go through a send."""
+    if row is not None:
+        row.mode = mode
+    return row
+
+
 def _ensure_real(conn: Any) -> None:
     """Defense-in-depth real-only guard for the live send path (Slice-5).
 
@@ -120,12 +133,22 @@ def approve_and_publish(
     *,
     connectors: dict[str, Any] | None = None,
     dsn: str | None = None,
+    live: bool = False,
 ) -> ActionRow:
     """Approve an action and publish it through the channel's real connector.
 
     Returns the updated :class:`ActionRow`. Idempotent on a sent action (returns
     it unchanged, no second send). A connector failure marks the action ``failed``
     with the real error — it is never reported as a success.
+
+    ``live`` is the operator's EXPLICIT live-send authorization (default ``False`` —
+    the safe redirect default). When ``True`` the just-claimed action is marked with
+    the allow-listed live worker (``studio_real_send``) so the gmail send bypasses the
+    ``GMAIL_REDIRECT_TO`` safety redirect and reaches the real recipient with a CLEAN
+    subject (no ``[TEST]`` marker). This is the ONLY place ``studio_real_send`` is set,
+    and it is set only on the row this call now exclusively owns (the claim won), so it
+    never races the claim. Without ``live`` the worker is untouched and the safe
+    redirect default stands. ``live`` is inert for non-gmail channels.
     """
     connectors = connectors or {}
     action = get_action(action_id, dsn=dsn)
@@ -145,6 +168,16 @@ def approve_and_publish(
     if claimed is None:
         return get_action(action_id, dsn=dsn)
     action = claimed
+
+    # Operator EXPLICIT live-approval marks the just-claimed action as the allow-listed
+    # live worker. Done AFTER the claim won, on the row we now exclusively own, so it
+    # never races the atomic claim; it is the single set-site for 'studio_real_send'.
+    # With the mark in place the gmail allow-list (worker != 'studio_real_send') sends
+    # clean to the real recipient; without ``live`` the redirect default is preserved.
+    if live and getattr(action, "worker", None) != "studio_real_send":
+        marked = update_status(action.id, action.status, dsn=dsn, worker="studio_real_send")
+        if marked is not None:
+            action = marked
 
     channel = (action.channel or "").lower()
     atype = (action.type or "").lower()
@@ -186,34 +219,20 @@ def _publish_gmail(action: ActionRow, connector: Any | None, dsn: str | None) ->
 
     conn = connector or GmailConnector.from_env(enabled=True)
 
-    # TOKEN GUARD (honesty): never deliver a raw template placeholder. If the body
-    # still carries an unresolved {{...}} token (e.g. the copywriter's {{unsubscribe}}
-    # that the studio builder should have resolved), FAIL with the reason — do NOT
-    # send. Exactly-once is unaffected: the action was already claimed, this just
-    # marks it failed without an external call.
-    body = action.draft or ""
-    stray = _PLACEHOLDER_RE.search(body)
-    if stray is not None:
-        return update_status(
-            action.id, "failed", dsn=dsn,
-            last_error=(
-                f"refusing to send: unresolved template placeholder "
-                f"{stray.group(0)!r} in body"
-            ),
-        )
-
-    # SEND MODE — explicit and honest:
-    #   * live     — a REAL send to the REAL recipient with a CLEAN subject. Either the
-    #                action was explicitly staged for real outreach (worker
-    #                'studio_real_send' = an operator-approved real send), or no test
-    #                redirect is configured at all.
-    #   * redirect — a SAFE TEST send: routed to the operator inbox (GMAIL_REDIRECT_TO)
-    #                with a '[TEST->{real_to}]' subject marker so the test inbox shows
-    #                who it WOULD have reached. The DB row's `target` is LEFT UNCHANGED
-    #                (the queue still shows the real lead).
+    # SEND MODE — explicit and honest (computed BEFORE any return so every returned
+    # row carries it):
+    #   * live          — a REAL send to the REAL recipient with a CLEAN subject. Either
+    #                     the action was explicitly staged for real outreach (worker
+    #                     'studio_real_send' = an operator live-approval), or no test
+    #                     redirect is configured at all.
+    #   * test_redirect — a SAFE TEST send: routed to the operator inbox
+    #                     (GMAIL_REDIRECT_TO) with a '[TEST->{real_to}]' subject marker
+    #                     so the test inbox shows who it WOULD have reached. The DB row's
+    #                     `target` is LEFT UNCHANGED (the queue still shows the real lead).
     # A draft goes live ONLY on that explicit operator real-send; everything else still
     # redirects, so an accidental approve can never reach a real stranger. The allow-list
-    # (worker gate) and exactly-once claim are unchanged.
+    # (worker gate) and exactly-once claim are unchanged. ``mode`` rides back on the
+    # returned row (transient attr) so the Live-Feed can badge Live vs Test.
     real_to = action.target or ""
     subject = action.subject or ""
     redirect = os.environ.get("GMAIL_REDIRECT_TO")
@@ -223,9 +242,29 @@ def _publish_gmail(action: ActionRow, connector: Any | None, dsn: str | None) ->
         to_addr = real_to
         # subject stays CLEAN — no [TEST] marker on a real send.
     else:
-        mode = "redirect"
+        mode = "test_redirect"
         to_addr = redirect
         subject = f"[TEST->{real_to}] {subject}"
+
+    # TOKEN GUARD (honesty): never deliver a raw template placeholder. If the body
+    # still carries an unresolved {{...}} token (e.g. the copywriter's {{unsubscribe}}
+    # that the studio builder should have resolved), FAIL with the reason — do NOT
+    # send. Exactly-once is unaffected: the action was already claimed, this just
+    # marks it failed without an external call (and never double-fires the send).
+    body = action.draft or ""
+    stray = _PLACEHOLDER_RE.search(body)
+    if stray is not None:
+        return _with_mode(
+            update_status(
+                action.id, "failed", dsn=dsn,
+                last_error=(
+                    f"refusing to send: unresolved template placeholder "
+                    f"{stray.group(0)!r} in body"
+                ),
+            ),
+            mode,
+        )
+
     _log.info(
         "gmail publish: action=%s mode=%s to=%s clean_subject=%s",
         action.id, mode, to_addr, mode == "live",
@@ -239,13 +278,16 @@ def _publish_gmail(action: ActionRow, connector: Any | None, dsn: str | None) ->
             body=body,
         )
     except Exception as exc:  # noqa: BLE001 — surface the REAL error, never fake success
-        return update_status(action.id, "failed", dsn=dsn, last_error=str(exc))
-    return update_status(
-        action.id, "sent", dsn=dsn,
-        deep_link=getattr(result, "deep_link", None),
-        sent_at=_now(),
-        outcome_label="Sent",
-        outcome_kind="success",
+        return _with_mode(update_status(action.id, "failed", dsn=dsn, last_error=str(exc)), mode)
+    return _with_mode(
+        update_status(
+            action.id, "sent", dsn=dsn,
+            deep_link=getattr(result, "deep_link", None),
+            sent_at=_now(),
+            outcome_label="Sent",
+            outcome_kind="success",
+        ),
+        mode,
     )
 
 

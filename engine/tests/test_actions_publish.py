@@ -263,6 +263,74 @@ def test_real_test_fake_is_not_treated_as_mock(patched_store):
     assert len(gmail.calls) == 1
 
 
+# ── live-send authorization (#11): operator-explicit live vs safe test-redirect ──
+
+
+def test_live_true_sends_clean_to_real_recipient_even_with_redirect(patched_store, monkeypatch):
+    # GMAIL_REDIRECT_TO is set (the safe default), but the operator EXPLICITLY
+    # authorized a live send. The just-claimed row is marked 'studio_real_send' and the
+    # gmail send reaches the REAL recipient with a CLEAN subject (no [TEST] marker).
+    monkeypatch.setenv("GMAIL_REDIRECT_TO", "ops@inbox.example")
+    store = patched_store(_pending())
+    gmail = _FakeGmail(result=GmailSendResult(message_id="m1", deep_link="dl"))
+    out = approve_and_publish("act_test1", connectors={"gmail": gmail}, live=True)
+
+    assert gmail.calls == [("client@studio.example", "Your custom piece", "Hello from Ladies First")]
+    assert out.status == "sent"
+    assert out.mode == "live"
+    # 'studio_real_send' is the single set-site for the live worker; it was marked on
+    # the claimed row, which is why the allow-list let it bypass the redirect.
+    assert store.rows["act_test1"].worker == "studio_real_send"
+
+
+def test_default_redirects_with_test_marker_when_redirect_set(patched_store, monkeypatch):
+    # No live authorization (default False): with GMAIL_REDIRECT_TO set the send is
+    # rerouted to the operator inbox with a [TEST->real] subject. The worker is NOT
+    # marked, so the safe redirect default stands.
+    monkeypatch.setenv("GMAIL_REDIRECT_TO", "ops@inbox.example")
+    store = patched_store(_pending())
+    gmail = _FakeGmail(result=GmailSendResult(message_id="m1", deep_link="dl"))
+    out = approve_and_publish("act_test1", connectors={"gmail": gmail})
+
+    assert gmail.calls == [("ops@inbox.example", "[TEST->client@studio.example] Your custom piece", "Hello from Ladies First")]
+    assert out.status == "sent"
+    assert out.mode == "test_redirect"
+    assert store.rows["act_test1"].worker != "studio_real_send"
+
+
+def test_no_redirect_env_sends_clean_live_mode(patched_store, monkeypatch):
+    # With no GMAIL_REDIRECT_TO configured at all, a send is live by construction
+    # (clean subject, real recipient) and reports mode 'live'.
+    monkeypatch.delenv("GMAIL_REDIRECT_TO", raising=False)
+    patched_store(_pending())
+    gmail = _FakeGmail(result=GmailSendResult(message_id="m1", deep_link="dl"))
+    out = approve_and_publish("act_test1", connectors={"gmail": gmail})
+
+    assert gmail.calls == [("client@studio.example", "Your custom piece", "Hello from Ladies First")]
+    assert out.mode == "live"
+
+
+def test_unresolved_placeholder_blocks_send_and_does_not_double_fire(patched_store, monkeypatch):
+    # A draft that still carries an unresolved {{...}} token is REFUSED at the send
+    # backstop: it is marked failed, no external send happens, and a retry never
+    # double-fires (the claim is already terminal).
+    monkeypatch.setenv("GMAIL_REDIRECT_TO", "ops@inbox.example")
+    patched_store(_pending(draft="Hi {{unsubscribe}} — book now"))
+    gmail = _FakeGmail(result=GmailSendResult(message_id="m1", deep_link="dl"))
+    out = approve_and_publish("act_test1", connectors={"gmail": gmail})
+
+    assert out.status == "failed"
+    assert gmail.calls == []  # no external effect
+    assert "placeholder" in out.last_error.lower()
+    assert out.mode == "test_redirect"
+
+    # Retry: the action is terminal (failed), so the claim returns nothing and no
+    # second send fires — exactly-once holds through the placeholder backstop.
+    again = approve_and_publish("act_test1", connectors={"gmail": gmail})
+    assert again.status == "failed"
+    assert gmail.calls == []
+
+
 def test_reject_marks_rejected_no_send(patched_store):
     patched_store(_pending(id="act_rej"))
     out = reject("act_rej")

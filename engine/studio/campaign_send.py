@@ -123,12 +123,21 @@ def send_eligible(
     dsn: str | None = None,
     connectors: dict[str, Any] | None = None,
     operator: str | None = None,
+    live: bool = False,
 ) -> dict[str, Any]:
     """Operator-initiated: send ONLY the eligible/safe drafts of a campaign, each
     through the existing :func:`actions.publish.approve_and_publish` (atomic
     exactly-once claim + gmail allow-list/redirect). Non-eligible drafts are NOT
     sent — they are returned under ``skipped`` for review. Writes a ``send_eligible``
-    audit row per draft sent."""
+    audit row per draft sent.
+
+    ``live`` (default ``False``) is the operator's EXPLICIT live-send authorization,
+    passed straight through to ``approve_and_publish`` — only then does the gmail send
+    bypass the ``GMAIL_REDIRECT_TO`` safety redirect. CRITICAL: campaign-level
+    eligibility is a confidence/compliance judgement, NOT a live-vs-redirect decision;
+    left at the default, even eligible drafts still redirect to the operator inbox with
+    the [TEST] marker. Each result entry carries the per-send ``mode``
+    ('live' | 'test_redirect') so the UI can badge it."""
     from actions.audit import record_send_audit
     from actions.publish import approve_and_publish
 
@@ -142,21 +151,24 @@ def send_eligible(
         if not ok:
             skipped.append(_summary(a, eligible=False, reason=reason))
             continue
-        # SAME approve path — exactly-once claim + allow-list redirect preserved.
-        row = approve_and_publish(a.id, connectors=connectors, dsn=dsn)
+        # SAME approve path — exactly-once claim + allow-list redirect preserved. ``live``
+        # only flips the redirect when the operator explicitly authorized a live send.
+        row = approve_and_publish(a.id, connectors=connectors, dsn=dsn, live=live)
         status = getattr(row, "status", None)
+        mode = getattr(row, "mode", None)
         try:
             record_send_audit(
                 action_id=a.id, kind="send_eligible", run_id=getattr(a, "run_id", None),
                 tenant_id=getattr(a, "tenant_id", None), operator=operator, reason=None,
                 eligible=True, conf=getattr(a, "conf", None),
                 threshold=getattr(a, "threshold", None), esc_kind=getattr(a, "esc_kind", None),
-                result=status, dsn=dsn,
+                result=status, mode=mode, dsn=dsn,
             )
         except Exception:
             pass  # auditing must never break the (already-completed) send record
         entry = _summary(a, eligible=True, reason=reason)
         entry["result"] = status
+        entry["mode"] = mode
         entry["last_error"] = getattr(row, "last_error", None)
         (sent if status == "sent" else failed).append(entry)
 
@@ -185,13 +197,19 @@ def override_send(
     operator: str | None = None,
     dsn: str | None = None,
     connectors: dict[str, Any] | None = None,
+    live: bool = False,
 ) -> dict[str, Any]:
     """OVERRIDE one specific draft past the eligibility gate. This is the ONLY way a
     below-bar / flagged draft reaches the send path. It REQUIRES an explicit
     ``reason``, writes an ``override`` :mod:`actions.audit` row BEFORE sending, and
     then routes the send through the SAME :func:`approve_and_publish` (exactly-once
     + allow-list still apply — override bypasses our eligibility heuristic, never the
-    real send-path safety)."""
+    real send-path safety).
+
+    ``live`` (default ``False``) is the operator's explicit live-send authorization,
+    passed through to ``approve_and_publish``. An override past the eligibility gate is
+    still subject to the gmail redirect unless the operator ALSO live-approves — the
+    bypass is of the confidence bar, not of the send-path safety default."""
     from actions.audit import record_send_audit
     from actions.publish import ActionNotFoundError, approve_and_publish
     from actions.store import get_action
@@ -205,7 +223,8 @@ def override_send(
 
     ok, why = eligibility(action)
     # Audit the override BEFORE the send so the intent is durable even if the send
-    # then fails or the process crashes.
+    # then fails or the process crashes. The send mode is not yet known here (the send
+    # has not run), so the pre-send audit records mode=None.
     record_send_audit(
         action_id=action_id, kind="override", run_id=getattr(action, "run_id", None),
         tenant_id=getattr(action, "tenant_id", None), operator=operator,
@@ -213,12 +232,13 @@ def override_send(
         threshold=getattr(action, "threshold", None), esc_kind=getattr(action, "esc_kind", None),
         result=None, dsn=dsn,
     )
-    row = approve_and_publish(action_id, connectors=connectors, dsn=dsn)
+    row = approve_and_publish(action_id, connectors=connectors, dsn=dsn, live=live)
     return {
         "action_id": action_id,
         "was_eligible": ok,
         "eligibility_reason": why,
         "result": getattr(row, "status", None),
+        "mode": getattr(row, "mode", None),
         "last_error": getattr(row, "last_error", None),
         "operator": operator,
         "reason": reason.strip(),

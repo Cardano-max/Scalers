@@ -26,8 +26,14 @@ CREATE TABLE IF NOT EXISTS send_audit (
     threshold   DOUBLE PRECISION,
     esc_kind    TEXT,                             -- escalation kind snapshot
     result      TEXT,                             -- the action status after the send attempt
+    mode        TEXT,                             -- send mode: 'live' | 'test_redirect' (NULL pre-send)
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Additive, idempotent: bring an already-created send_audit table up to the current
+-- shape (the `mode` column landed after the initial CREATE). Safe to run on every
+-- ensure_schema; a no-op once the column exists.
+ALTER TABLE send_audit ADD COLUMN IF NOT EXISTS mode TEXT;
 
 CREATE INDEX IF NOT EXISTS send_audit_action_idx ON send_audit (action_id);
 CREATE INDEX IF NOT EXISTS send_audit_run_idx    ON send_audit (run_id);
