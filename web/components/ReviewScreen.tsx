@@ -486,8 +486,13 @@ function DetailPane({
           </span>
         </div>
         <div style={{ fontSize: 13.5, color: 'var(--text-secondary-2)' }}>{action.target}</div>
-        {/* Lineage chips — campaign / run / producing-agent reasoning / this draft,
-            plus context (created, channel, run-level trace). Deep-links both ways. */}
+        {/* Lineage chips — the FULL provenance label set for this draft: campaign / run /
+            producing-agent reasoning / this action, the recipient + lead (CSV-row) identity,
+            the brand voice used, each cited research source (clickable → opens the URL), the
+            confidence reason, plus created / channel / run-level trace. Clickable chips
+            deep-link to the EXACT item; everything else is an honest context label, and any
+            value the draft genuinely lacks is omitted (never a fake chip). Lead/recipient/
+            voice/sources/reason fill in once the evidence read resolves. */}
         <LineageChips
           lineage={{
             campaignId: action.campaignId,
@@ -497,6 +502,16 @@ function DetailPane({
             createdAt: action.createdAt,
             channel: action.channel,
             traceUrl: action.traceUrl,
+            recipient: action.target,
+            leadName: evidence?.customer?.name ?? null,
+            leadId: evidence?.customer?.customerId ?? null,
+            brandVoice:
+              evidence?.brandVoice && evidence.brandVoice.used
+                ? evidence.brandVoice.source || evidence.brandVoice.tenantId
+                : null,
+            confidenceReason: evidence?.confidenceReason ?? null,
+            sources:
+              evidence?.researchSources?.map((s) => ({ url: s.url, title: s.title })) ?? null,
           }}
         />
       </div>

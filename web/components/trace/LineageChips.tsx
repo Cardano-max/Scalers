@@ -20,7 +20,14 @@
  */
 import { type CSSProperties, type ReactNode } from 'react';
 import { useConsole } from '@/state/console-store';
+import { domainOf } from '@/lib/studio/agency';
 import { clockTime } from '../console-bits';
+
+/** One cited research source the draft was grounded in (clickable → opens the URL). */
+export interface LineageSource {
+  url: string;
+  title?: string | null;
+}
 
 export interface Lineage {
   /** Real campaign id (derived run_id → runs/agent_runs). */
@@ -37,7 +44,27 @@ export interface Lineage {
   channel?: string | null;
   /** Run-level Langfuse trace url (per-step span ids are not persisted). */
   traceUrl?: string | null;
+  // --- extended lineage (Review-queue card): the full provenance label set the
+  // operator asked for. All optional + honest-missing — a label that has no real
+  // value is simply not rendered (never a fake/empty chip). ---
+  /** Recipient address this draft targets (plain context label). */
+  recipient?: string | null;
+  /** The lead / CSV-row identity this draft was written for (customer name or id). */
+  leadName?: string | null;
+  leadId?: string | null;
+  /** Source CSV file name + 1-based row number, when the action carries them. */
+  csvFile?: string | null;
+  csvRow?: string | null;
+  /** The brand voice the copy used (e.g. the tenant/voice source), when used. */
+  brandVoice?: string | null;
+  /** The human-readable "why this confidence" reason (plain, full text in title). */
+  confidenceReason?: string | null;
+  /** Cited research sources the draft was grounded in (each clickable → opens URL). */
+  sources?: LineageSource[] | null;
 }
+
+// How many source chips to render inline before collapsing the rest into a "+N" pill.
+const MAX_SOURCE_CHIPS = 3;
 
 const PILL: CSSProperties = {
   fontFamily: "'IBM Plex Mono', monospace",
@@ -140,7 +167,10 @@ export function LineageChips({
   size?: 'sm' | 'md';
 }) {
   const console = useConsole();
-  const { campaignId, runId, agentRole, actionId, createdAt, channel, traceUrl } = lineage;
+  const {
+    campaignId, runId, agentRole, actionId, createdAt, channel, traceUrl,
+    recipient, leadName, leadId, csvFile, csvRow, brandVoice, confidenceReason, sources,
+  } = lineage;
 
   const chips: ReactNode[] = [];
 
@@ -217,6 +247,75 @@ export function LineageChips({
         style={CLICKABLE}
         onClick={() => console.navigate('activity', actionId)}
       />,
+    );
+  }
+
+  // Recipient address — a plain context label (it is the real target, not a nav link).
+  if (recipient && recipient.trim()) {
+    chips.push(
+      <Pill key="recipient" label={`to:${recipient}`} title={`Recipient ${recipient}`} style={PLAIN} />,
+    );
+  }
+
+  // Lead / CSV-row identity this draft was written for. When the action carries the
+  // source CSV file + row number we show them; otherwise we surface the resolved lead
+  // (customer name/id), which IS the row's identity. Plain labels: there is no per-row
+  // navigation target in the console, so we never render a dead link.
+  if (csvFile && csvFile.trim()) {
+    const rowLabel = csvRow && csvRow.trim() ? `${csvFile} · row ${csvRow}` : csvFile;
+    chips.push(
+      <Pill key="csv" label={`csv:${rowLabel}`} title={`Uploaded from ${rowLabel}`} style={PLAIN} />,
+    );
+  } else if ((leadName && leadName.trim()) || hasId(leadId)) {
+    const label = leadName && leadName.trim() ? leadName : leadId;
+    chips.push(
+      <Pill
+        key="lead"
+        label={`lead:${label}`}
+        title={hasId(leadId) ? `Lead ${label} (${leadId})` : `Lead ${label}`}
+        style={PLAIN}
+      />,
+    );
+  }
+
+  // Brand voice the copy used (plain — it names the real voice source).
+  if (brandVoice && brandVoice.trim()) {
+    chips.push(
+      <Pill key="voice" label={`voice:${brandVoice}`} title={`Brand voice: ${brandVoice}`} style={PLAIN} />,
+    );
+  }
+
+  // Cited research sources — each chip opens the EXACT source URL in a new tab.
+  if (Array.isArray(sources) && sources.length > 0) {
+    const real = sources.filter((s) => s && typeof s.url === 'string' && /^https?:\/\//.test(s.url));
+    real.slice(0, MAX_SOURCE_CHIPS).forEach((s, i) => {
+      chips.push(
+        <Pill
+          key={`source-${i}`}
+          label={`src:${domainOf(s.url)} ↗`}
+          title={s.title ? `${s.title} — ${s.url}` : s.url}
+          style={CLICKABLE}
+          onClick={() => window.open(s.url, '_blank')}
+        />,
+      );
+    });
+    if (real.length > MAX_SOURCE_CHIPS) {
+      chips.push(
+        <Pill
+          key="source-more"
+          label={`+${real.length - MAX_SOURCE_CHIPS} sources`}
+          title={`${real.length} cited sources in total`}
+          style={PLAIN}
+        />,
+      );
+    }
+  }
+
+  // "Why this confidence" — a plain label with the full reason in the tooltip.
+  if (confidenceReason && confidenceReason.trim()) {
+    const short = confidenceReason.length > 48 ? `${confidenceReason.slice(0, 48)}…` : confidenceReason;
+    chips.push(
+      <Pill key="why" label={`why:${short}`} title={confidenceReason} style={PLAIN} />,
     );
   }
 
