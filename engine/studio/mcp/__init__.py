@@ -23,8 +23,10 @@ Security Best Practices companion
 We implement that contract with our OWN logic (no third-party MCP SDK / skill and
 no ``jsonschema`` dependency): :mod:`~studio.mcp.validation` is a self-contained
 input validator, :mod:`~studio.mcp.principal` is the tenant-binding + scope access
-gate, :mod:`~studio.mcp.sanitize` bounds and de-fangs outputs, and
-:mod:`~studio.mcp.audit` writes one row per call. The tools in
+gate, :mod:`~studio.mcp.ratelimit` is a per-principal sliding-window cap (an
+always-on defense-in-depth floor; finer/distributed QPS shaping is deferred to the
+transport/gateway layer), :mod:`~studio.mcp.sanitize` bounds and de-fangs outputs,
+and :mod:`~studio.mcp.audit` writes one row per call. The tools in
 :mod:`~studio.mcp.tools` CONSUME the adapters read-only and never mutate, send, or
 fabricate: a not-connected source (Stribe / Mini-App) surfaces its real
 :class:`~studio.adapters.NotConfiguredError` as an honest ``not_connected`` error.
@@ -54,11 +56,17 @@ from studio.mcp.errors import (
     McpError,
     NotConnectedError,
     ProtocolError,
+    RateLimitedError,
     ToolExecutionError,
     ToolTimeoutError,
     UnknownToolError,
 )
 from studio.mcp.principal import Principal, authorize
+from studio.mcp.ratelimit import (
+    NullRateLimiter,
+    RateLimiter,
+    SlidingWindowRateLimiter,
+)
 from studio.mcp.server import (
     McpToolServer,
     build_default_server,
@@ -77,6 +85,10 @@ __all__ = [
     # identity + access control
     "Principal",
     "authorize",
+    # rate limiting
+    "RateLimiter",
+    "NullRateLimiter",
+    "SlidingWindowRateLimiter",
     # audit
     "AuditLog",
     "AuditRecord",
@@ -90,6 +102,7 @@ __all__ = [
     "ToolExecutionError",
     "InputValidationError",
     "AccessDeniedError",
+    "RateLimitedError",
     "NotConnectedError",
     "ToolTimeoutError",
 ]

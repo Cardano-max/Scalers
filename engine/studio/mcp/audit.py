@@ -152,7 +152,13 @@ class PgToolAuditLog:
     def list_rows(
         self, *, tenant_id: str | None = None, limit: int = 100
     ) -> list[dict[str, Any]]:
-        """Audit rows newest-first, optionally filtered by tenant."""
+        """Audit rows newest-first, optionally filtered by tenant.
+
+        This is a server-side / operator read — the audit log is deliberately NOT
+        exposed as an MCP tool. If it ever were, it MUST be scoped to
+        ``principal.tenant_id`` (the audit trail is itself tenant-sensitive), the
+        same isolation rule the data tools enforce; the ``tenant_id`` filter here
+        is what such a scoped tool would pass."""
         self.ensure_schema()
         clause = "WHERE tenant_id = %s" if tenant_id else ""
         params: tuple = (tenant_id, limit) if tenant_id else (limit,)

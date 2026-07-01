@@ -28,6 +28,7 @@ from studio.mcp import (
     default_tools,
     demo_principal,
 )
+from studio.mcp.ratelimit import NullRateLimiter, SlidingWindowRateLimiter
 from studio.mcp.sanitize import MAX_FIELD_LEN, sanitize_output
 from studio.mcp.validation import MAX_ARGS_BYTES, validate_arguments
 
@@ -270,6 +271,46 @@ def test_tool_timeout_is_reported_as_error():
     assert res["isError"] is True
     assert res["structuredContent"]["error"]["status"] == "timeout"
     assert audit.all()[-1].status == "timeout"
+
+
+# ── rate limiting ────────────────────────────────────────────────────────────
+def test_rate_limit_caps_calls_per_principal():
+    """Over the per-principal cap, the call is refused (rate_limited) and audited;
+    every attempt — including the refused ones — is recorded."""
+    audit = InMemoryAuditLog()
+    srv = McpToolServer(
+        default_tools(), audit=audit,
+        rate_limiter=SlidingWindowRateLimiter(2, 60.0),  # 2 calls / window
+    )
+    p = demo_principal(TENANT)
+    ok1 = srv.call_tool(p, "artist.list_artists", {"source": "seeded"})
+    ok2 = srv.call_tool(p, "artist.list_artists", {"source": "seeded"})
+    blocked = srv.call_tool(p, "artist.list_artists", {"source": "seeded"})
+    assert ok1["isError"] is False and ok2["isError"] is False
+    assert blocked["isError"] is True
+    assert blocked["structuredContent"]["error"]["status"] == "rate_limited"
+    assert audit.all()[-1].status == "rate_limited"
+    assert [r.status for r in audit.all()] == ["ok", "ok", "rate_limited"]
+
+
+def test_rate_limit_is_per_principal_not_global():
+    """One principal hitting its cap must not block a different principal/tenant."""
+    srv = McpToolServer(
+        default_tools(), rate_limiter=SlidingWindowRateLimiter(1, 60.0)
+    )
+    a = demo_principal("tenant_a", subject="agent_a")
+    b = demo_principal("tenant_b", subject="agent_b")
+    assert srv.call_tool(a, "artist.list_artists", {"source": "seeded"})["isError"] is False
+    assert srv.call_tool(a, "artist.list_artists", {"source": "seeded"})["isError"] is True
+    # b has its own budget.
+    assert srv.call_tool(b, "artist.list_artists", {"source": "seeded"})["isError"] is False
+
+
+def test_null_rate_limiter_never_blocks():
+    srv = McpToolServer(default_tools(), rate_limiter=NullRateLimiter())
+    p = demo_principal(TENANT)
+    for _ in range(50):
+        assert srv.call_tool(p, "artist.list_artists", {"source": "seeded"})["isError"] is False
 
 
 # ── audit hashing ────────────────────────────────────────────────────────────

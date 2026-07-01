@@ -30,6 +30,7 @@ STATUS_OK = "ok"
 STATUS_PROTOCOL_ERROR = "protocol_error"
 STATUS_INVALID_INPUT = "invalid_input"
 STATUS_ACCESS_DENIED = "access_denied"
+STATUS_RATE_LIMITED = "rate_limited"
 STATUS_NOT_CONNECTED = "not_connected"
 STATUS_TIMEOUT = "timeout"
 STATUS_ERROR = "error"
@@ -93,6 +94,14 @@ class AccessDeniedError(ToolExecutionError):
     status = STATUS_ACCESS_DENIED
 
 
+class RateLimitedError(ToolExecutionError):
+    """The principal exceeded its allowed call rate — the invocation is refused.
+    Implements the spec's "Servers MUST rate limit tool invocations" as an
+    in-process, per-principal cap (defense in depth)."""
+
+    status = STATUS_RATE_LIMITED
+
+
 class NotConnectedError(ToolExecutionError):
     """A tool routed to a source whose backing integration is not connected yet
     (Stribe / Mini-App). Wraps the adapter's :class:`NotConfiguredError` message
@@ -112,6 +121,7 @@ __all__ = [
     "STATUS_PROTOCOL_ERROR",
     "STATUS_INVALID_INPUT",
     "STATUS_ACCESS_DENIED",
+    "STATUS_RATE_LIMITED",
     "STATUS_NOT_CONNECTED",
     "STATUS_TIMEOUT",
     "STATUS_ERROR",
@@ -123,6 +133,7 @@ __all__ = [
     "ToolExecutionError",
     "InputValidationError",
     "AccessDeniedError",
+    "RateLimitedError",
     "NotConnectedError",
     "ToolTimeoutError",
 ]

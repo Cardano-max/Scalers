@@ -5,6 +5,7 @@ Implements the two MCP operations the supervisor contract needs (spec 2025-11-25
 every "Servers MUST" security control the spec lists applied in order on every
 call:
 
+    rate limit              → per-principal sliding-window cap (studio.mcp.ratelimit)
     resolve tool            → unknown ⇒ JSON-RPC protocol error (never isError)
     access control          → scope + tenant binding (studio.mcp.principal)
     validate all inputs     → studio.mcp.validation (reject, don't pass through)
@@ -44,6 +45,7 @@ from studio.mcp.errors import (
     UnknownToolError,
 )
 from studio.mcp.principal import Principal, authorize
+from studio.mcp.ratelimit import NullRateLimiter, RateLimiter, SlidingWindowRateLimiter
 from studio.mcp.sanitize import sanitize_output
 from studio.mcp.tools import ToolContext, ToolDef, default_tools
 from studio.mcp.validation import validate_arguments
@@ -51,6 +53,13 @@ from studio.mcp.validation import validate_arguments
 # Default per-call deadline (seconds). A read-only CRM / doc lookup is fast; a
 # call that blows this is treated as a timeout rather than hanging the caller.
 DEFAULT_TIMEOUT_S = 10.0
+
+# Default per-principal rate cap installed by build_default_server (a
+# defense-in-depth floor; finer QPS shaping is the transport/gateway's job).
+DEFAULT_RATE_MAX_CALLS = 120
+DEFAULT_RATE_WINDOW_S = 60.0
+
+_UNSET = object()
 
 
 class McpToolServer:
@@ -63,11 +72,15 @@ class McpToolServer:
         audit: AuditLog | None = None,
         dsn: str | None = None,
         timeout_s: float = DEFAULT_TIMEOUT_S,
+        rate_limiter: RateLimiter | None = None,
     ) -> None:
         self._tools: dict[str, ToolDef] = {t.name: t for t in tools}
         self._audit: AuditLog = audit if audit is not None else InMemoryAuditLog()
         self._ctx = ToolContext(dsn=dsn)
         self._timeout_s = timeout_s
+        # No limiter passed ⇒ disabled (NullRateLimiter). build_default_server
+        # installs a real per-principal cap by default.
+        self._rate_limiter: RateLimiter = rate_limiter or NullRateLimiter()
 
     @property
     def audit(self) -> AuditLog:
@@ -100,6 +113,10 @@ class McpToolServer:
         error_kind: str | None = None
         source = arguments.get("source") if isinstance(arguments, dict) else None
         try:
+            # 0) rate limit — a per-principal cap counted on EVERY call (incl.
+            #    unknown-tool and denied attempts, which is the abuse surface).
+            self._rate_limiter.check(f"{principal.subject}:{principal.tenant_id}")
+
             tool = self._tools.get(name)
             if tool is None:
                 raise UnknownToolError(name)
@@ -231,11 +248,24 @@ def build_default_server(
     dsn: str | None = None,
     audit: AuditLog | None = None,
     timeout_s: float = DEFAULT_TIMEOUT_S,
+    rate_limiter: RateLimiter | None = _UNSET,  # type: ignore[assignment]
 ) -> McpToolServer:
     """A server wired with the full default tool set. ``audit`` defaults to an
     in-memory log; pass :class:`~studio.mcp.audit.PgToolAuditLog` for durable
-    auditing. ``dsn`` overrides the DB DSN used by the DB-backed tools."""
-    return McpToolServer(default_tools(), audit=audit, dsn=dsn, timeout_s=timeout_s)
+    auditing. ``dsn`` overrides the DB DSN used by the DB-backed tools.
+
+    ``rate_limiter`` defaults to a per-principal
+    :class:`~studio.mcp.ratelimit.SlidingWindowRateLimiter`
+    (``DEFAULT_RATE_MAX_CALLS`` per ``DEFAULT_RATE_WINDOW_S``); pass a
+    :class:`~studio.mcp.ratelimit.NullRateLimiter` to disable, or a custom one."""
+    if rate_limiter is _UNSET:
+        rate_limiter = SlidingWindowRateLimiter(
+            DEFAULT_RATE_MAX_CALLS, DEFAULT_RATE_WINDOW_S
+        )
+    return McpToolServer(
+        default_tools(), audit=audit, dsn=dsn, timeout_s=timeout_s,
+        rate_limiter=rate_limiter,
+    )
 
 
 def demo_principal(
@@ -253,4 +283,6 @@ __all__ = [
     "build_default_server",
     "demo_principal",
     "DEFAULT_TIMEOUT_S",
+    "DEFAULT_RATE_MAX_CALLS",
+    "DEFAULT_RATE_WINDOW_S",
 ]
