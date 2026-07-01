@@ -2391,7 +2391,12 @@ def mount_studio_agui(app) -> None:
                     SimpleNamespace(run_id=run_id, status=p.get("status"))
                     for p in pending_actions
                 ]
-                board = board_for_run(run_id, None, steps, run_actions, plan_ctx).model_dump()
+                # Reflect the REAL run status on the board (board_for_run passes record=None,
+                # which would otherwise always read 'running' even for a completed run).
+                board_record = SimpleNamespace(status=status) if status else None
+                board = board_for_run(
+                    run_id, board_record, steps, run_actions, plan_ctx
+                ).model_dump()
             except Exception:
                 board = None
 
