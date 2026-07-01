@@ -268,11 +268,18 @@ def _free_consult_claim(voice: VoiceBundle) -> bool:
     return any("free" in c.lower() and "consult" in c.lower() for c in voice.approved_claims)
 
 
-def _hashtags_for(pick: ArtworkPick | None, voice: VoiceBundle, *, limit: int) -> list[str]:
-    """Grounded hashtags: derived from the picked piece's REAL styles/motifs first, then
-    filled from the pack's approved example tags. Lowercased, de-duped, capped at
-    ``limit``. Never spam tags; every tag traces to a real style/motif or an approved
-    pack example."""
+def _hashtags_for(
+    pick: ArtworkPick | None,
+    voice: VoiceBundle,
+    *,
+    limit: int,
+    extra_tags: tuple[str, ...] = (),
+) -> list[str]:
+    """Grounded hashtags: the picked piece's REAL styles/motifs first, then any approved
+    ``extra_tags`` (a collection/season tag for the theme angle — Rec 5), then the pack's
+    approved example tags. Lowercased, de-duped, capped at ``limit``. Never spam tags;
+    every tag traces to a real style/motif, an approved collection/season, or a pack
+    example."""
     out: list[str] = []
     seen: set[str] = set()
 
@@ -287,9 +294,161 @@ def _hashtags_for(pick: ArtworkPick | None, voice: VoiceBundle, *, limit: int) -
             _add(re.sub(r"[^a-z0-9]", "", s.lower()) + "tattoo")
         for mtf in pick.motifs:
             _add(re.sub(r"[^a-z0-9]", "", mtf.lower()) + "tattoo")
+    for ex in extra_tags:
+        _add(ex)
     for ex in voice.example_hashtags:
         _add(ex)
     return out[:limit]
+
+
+# --------------------------------------------------------------------------- #
+# Angle layer (Rec 1/2/5) — pure, deterministic angle selection. The angle swaps ONLY
+# the opener hook + one framing sentence + the CTA (+ one approved theme hashtag). Every
+# concrete token still comes from the pack lexicon or a real stored artwork field; no
+# angle introduces a price, a count, urgency, a superlative, or banned framing — the
+# outputs stay inside ``check_caption``.
+# --------------------------------------------------------------------------- #
+def _canon(term: str | None) -> str:
+    """Canonical token: lowercase, non-alphanumerics dropped ('fine-line'->'fineline')."""
+    return re.sub(r"[^a-z0-9]", "", (term or "").lower())
+
+
+# Rec 1 — pure style -> angle. Keyed on the canonical style token.
+_STYLE_ANGLE: dict[str, str] = {
+    "fineline": "made_for_you",
+    "micro": "made_for_you",
+    "minimalist": "made_for_you",
+    "floral": "made_for_you",
+    "botanical": "made_for_you",
+    "traditional": "artist_spotlight",
+    "neotraditional": "artist_spotlight",
+    "color": "artist_spotlight",
+    "blackwork": "artist_spotlight",
+    "geometric": "artist_spotlight",
+    "script": "your_words",
+    "lettering": "your_words",
+    "coverup": "fresh_start",
+}
+_DEFAULT_ANGLE = "made_for_you"
+
+# Rec 2 — theme/collection -> seasonal/availability angle. Keyed on canonical token.
+_THEME_ANGLE: dict[str, str] = {
+    "lunchmenu": "new_flash_sheet",
+    "4thofjuly": "seasonal",
+    "pride": "community",
+    "buildapin": "build_your_own",
+    "charm": "build_your_own",
+}
+
+# Rec 5 — one approved collection/season hashtag per theme angle (no location tag unless
+# the pack supplies one; the pack has no location field today, so none is emitted).
+_THEME_HASHTAG: dict[str, str] = {
+    "pride": "pridetattoo",
+    "4thofjuly": "patriotictattoo",
+    "lunchmenu": "flashtattoo",
+    "buildapin": "flashtattoo",
+    "charm": "flashtattoo",
+}
+
+# Rec 5 — CTA per angle. IG is lowercase/DM-first; FB is a sentence. Both fail-closed
+# clean (no fabricated urgency); the free-consult clause is appended only if approved.
+_ANGLE_CTA_IG: dict[str, str] = {
+    "made_for_you": "dm to start your design.",
+    "artist_spotlight": "dm to book this piece.",
+    "your_words": "dm to start your lettering.",
+    "fresh_start": "dm to start your cover-up.",
+    "new_flash_sheet": "dm to book yours.",
+    "seasonal": "dm to book yours.",
+    "community": "dm to book yours.",
+    "build_your_own": "pick your charms, dm to build your piece.",
+}
+_ANGLE_CTA_FB: dict[str, str] = {
+    "made_for_you": "Send me a message to start your design.",
+    "artist_spotlight": "Send me a message to book this piece.",
+    "your_words": "Send me a message to start your lettering.",
+    "fresh_start": "Send me a message to start your cover-up.",
+    "new_flash_sheet": "Send me a message to book yours.",
+    "seasonal": "Send me a message to book yours.",
+    "community": "Send me a message to book yours.",
+    "build_your_own": "Pick your charms and send me a message to build your piece.",
+}
+
+
+def pick_angle(pick: ArtworkPick | None, theme: str | None = None) -> str:
+    """Rec 1: choose a STYLE angle from the pick's matched (else own) styles, falling back
+    to the theme/collection token, then the default ``made_for_you``. Pure + deterministic
+    (needed for exactly-once staging)."""
+    styles: list[str] = []
+    if pick is not None:
+        styles = list(pick.matched_styles or pick.styles or [])
+    for s in styles:
+        a = _STYLE_ANGLE.get(_canon(s))
+        if a:
+            return a
+    coll = getattr(pick, "collection", "") if pick is not None else ""
+    for t in (theme, coll):
+        a = _STYLE_ANGLE.get(_canon(t))
+        if a:
+            return a
+    return _DEFAULT_ANGLE
+
+
+def theme_angle(theme: str | None = None, collection: str | None = None) -> str | None:
+    """Rec 2: the seasonal/availability angle named by the piece's ``collection`` (preferred,
+    so the angle + hashtag always match the actual picked piece) or the post ``theme``.
+    ``None`` when neither names a known flash concept. Pure + deterministic."""
+    for t in (collection, theme):
+        a = _THEME_ANGLE.get(_canon(t))
+        if a:
+            return a
+    return None
+
+
+def _theme_hashtag(theme: str | None, collection: str | None) -> str:
+    """The one approved collection/season hashtag for the active theme angle (from the
+    piece's collection first, then the theme). ``''`` when none applies."""
+    for t in (collection, theme):
+        h = _THEME_HASHTAG.get(_canon(t))
+        if h:
+            return h
+    return ""
+
+
+def _sentence(frag: str) -> str:
+    """Capitalize the first character of a lowercase clause (for the FB register)."""
+    frag = frag.strip()
+    return frag[:1].upper() + frag[1:] if frag else frag
+
+
+def _angle_lines(angle: str, *, os_: str, om: str, piece_l: str, st: str) -> list[str]:
+    """The angle's opener hook + framing/piece clauses, all LOWERCASE and grounded:
+    ``os_``/``om`` are pack-lexicon phrases (your story / made for you); ``piece_l`` is the
+    real artwork caption; ``st`` is the real style tag. Theme angles fold the piece into an
+    availability sentence using only 'new flash sheet'/'up to book'/'available to book'
+    (never 'flash day/friday/sale/pricing'); scarcity stays honest (exists + bookable)."""
+    if angle in ("new_flash_sheet", "community"):
+        return ["new flash sheet.", f"{piece_l}, up to book."]
+    if angle == "seasonal":
+        return ["new flash sheet.", f"{piece_l}, available to book."]
+    if angle == "build_your_own":
+        return ["build your own piece.", f"{piece_l}, up to book."]
+    if angle == "artist_spotlight":
+        if st:
+            return [f"{st}.", f"{piece_l}.", f"{om}."]
+        return [f"{om}.", f"{piece_l}."]
+    if angle == "your_words":
+        opener = f"{os_}, in {st}." if st else f"{os_}, {om}."
+        return [opener, f"{piece_l}.", f"{om}."]
+    if angle == "fresh_start":
+        base = [f"a fresh start, {om}.", f"{piece_l}."]
+        if st:
+            base.append(f"{st}, {om}.")
+        return base
+    # made_for_you (default)
+    base = [f"{os_}, {om}.", f"{piece_l}."]
+    if st:
+        base.append(f"{st}, {om}.")
+    return base
 
 
 def compose_caption(
@@ -321,6 +480,14 @@ def compose_caption(
         emoji = " " + voice.emoji_allowed[0]
         grounding.append(f"emoji={voice.emoji_allowed[0]}")
 
+    # Angle selection (Rec 1/2): a theme/seasonal angle (named by the piece's collection
+    # or the post theme) takes precedence for the availability hook; otherwise the style
+    # angle drives. Fully deterministic — needed for exactly-once staging.
+    collection = getattr(pick, "collection", "") if pick is not None else ""
+    t_ang = theme_angle(theme, collection)
+    angle = t_ang or pick_angle(pick, theme)
+    grounding.append(f"angle={angle}")
+
     lines: list[str] = []
     if pick and pick.caption:
         grounding.append(f"artwork_asset={pick.asset_id}")
@@ -329,16 +496,23 @@ def compose_caption(
         style_tag = _join(pick.matched_styles or pick.styles)
         if style_tag:
             grounding.append(f"artwork_styles={style_tag}")
+        if collection:
+            grounding.append(f"artwork_collection={collection}")
+        if t_ang:
+            # Honest availability: the piece exists and is up to book — never a count.
+            grounding.append("availability=exists-bookable")
+        frags = _angle_lines(
+            angle,
+            os_=opener_story,
+            om=opener_made.lower(),
+            piece_l=piece.lower(),
+            st=style_tag.lower(),
+        )
         if is_ig:
-            lines.append(f"{opener_story}, {opener_made.lower()}.{emoji}")
-            lines.append(f"{piece.lower()}.")
-            if style_tag:
-                lines.append(f"{style_tag.lower()}, {opener_made.lower()}.")
+            lines.append(frags[0] + emoji)
+            lines.extend(frags[1:])
         else:
-            sentence = f"{opener_story.capitalize()}, {opener_made.lower()}."
-            piece_sentence = f"This one is {piece.lower()}"
-            piece_sentence += f", in {style_tag.lower()}." if style_tag else "."
-            lines.append(f"{sentence} {piece_sentence}")
+            lines.append(" ".join(_sentence(f) for f in frags))
     else:
         # HONEST no-artwork path: we say we'd attach the right piece on approval; we do
         # not invent one.
@@ -363,19 +537,27 @@ def compose_caption(
 
     body = "\n".join(lines) if is_ig else " ".join(lines)
 
-    # CTA — a warm invite (voice guidance), free-consult only if it is an approved claim.
+    # CTA — an angle-aware warm invite (Rec 5); free-consult only if it is an approved
+    # claim. Every CTA is pre-cleared against check_caption (no fabricated urgency).
     consult = _free_consult_claim(voice)
     if consult:
         grounding.append("claim=free-consultation")
+    grounding.append(f"cta_angle={angle}")
     if is_ig:
-        cta = "dm to start your design." + (" consults are free." if consult else "")
+        cta = _ANGLE_CTA_IG.get(angle, _ANGLE_CTA_IG[_DEFAULT_ANGLE])
+        cta = cta + (" consults are free." if consult else "")
     else:
-        cta = "Send me a message to start your design." + (
-            " Consults are always free." if consult else ""
-        )
+        cta = _ANGLE_CTA_FB.get(angle, _ANGLE_CTA_FB[_DEFAULT_ANGLE])
+        cta = cta + (" Consults are always free." if consult else "")
 
+    # Rec 5: add one approved collection/season hashtag for the theme angle (from the
+    # piece's collection first). No location tag — the pack supplies no location field.
+    theme_tag = _theme_hashtag(theme, collection) if t_ang else ""
+    extra_tags = (theme_tag,) if theme_tag else ()
+    if theme_tag:
+        grounding.append(f"theme_hashtag={theme_tag}")
     limit = voice.hashtag_max if is_ig else min(2, voice.hashtag_max)
-    hashtags = _hashtags_for(pick, voice, limit=limit)
+    hashtags = _hashtags_for(pick, voice, limit=limit, extra_tags=extra_tags)
     # IG honours the pack minimum; FB stays deliberately light.
     if is_ig and len(hashtags) < voice.hashtag_min:
         grounding.append(f"hashtags=below-min({len(hashtags)})")
