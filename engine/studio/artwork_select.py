@@ -79,12 +79,17 @@ class ArtworkRef:
     motifs: list[str] = field(default_factory=list)
     is_best_example: bool = False
     source: str = "seed"
+    # The flash-concept bucket this piece belongs to (e.g. '4th-of-july', 'pride',
+    # 'build-a-pin', 'lunch-menu'). First-party studio metadata like styles/motifs;
+    # absent on legacy seed rows (stays ''), so the read contract is unchanged.
+    collection: str = ""
 
     @classmethod
     def from_asset_row(cls, row: dict[str, Any]) -> "ArtworkRef | None":
         """Normalize an ``assets`` row (content is JSONB) into an :class:`ArtworkRef`,
         or ``None`` if the row is not a studio-artwork row. Never fabricates missing
-        fields — an absent caption stays empty, absent tags stay ``[]``."""
+        fields — an absent caption stays empty, absent tags stay ``[]``, an absent
+        collection stays ``''`` (older seed rows have none — still valid)."""
         if (row.get("asset_type") or "") != ARTWORK_ASSET_TYPE:
             return None
         c = row.get("content") or {}
@@ -99,6 +104,7 @@ class ArtworkRef:
             motifs=[m for m in (c.get("motifs") or []) if isinstance(m, str) and m.strip()],
             is_best_example=bool(c.get("is_best_example")),
             source=str(c.get("source") or "seed"),
+            collection=str(c.get("collection") or "").strip(),
         )
 
 
@@ -122,6 +128,11 @@ class ArtworkPick:
     # caption + preview render. Never invented; copied straight off the asset row.
     styles: list[str] = field(default_factory=list)
     motifs: list[str] = field(default_factory=list)
+    # The piece's own collection tag, plus the collection value that actually matched the
+    # post theme (empty when the theme did not name this piece's collection). Both trace
+    # to a stored field; the theme/seasonal caption angle reads ``collection``.
+    collection: str = ""
+    matched_collection: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -131,8 +142,10 @@ class ArtworkPick:
             "caption": self.caption,
             "styles": list(self.styles),
             "motifs": list(self.motifs),
+            "collection": self.collection,
             "matched_styles": list(self.matched_styles),
             "matched_motifs": list(self.matched_motifs),
+            "matched_collection": self.matched_collection,
             "score": self.score,
             "exact_match": self.exact_match,
             "why": self.why,
@@ -207,13 +220,19 @@ def select_artwork(
     """The best REAL portfolio piece for this artist + theme, or ``None`` when the
     library is empty (never invented).
 
+    Selection is COLLECTION-FIRST: if the post theme names a piece's ``collection``
+    (e.g. theme='4th-of-july'), that piece wins outright over any piece whose collection
+    the theme did not name — a themed draft always draws from the themed collection, not
+    an incidentally style-heavy piece from another one. Within that primary bucket (and
+    when no collection is named at all), the tag score decides:
     Score = 2·(style tags matching the artist's style OR the theme) + 1·(motif tags
     matching the theme) + 1 if flagged the artist's best example. Deterministic
-    tie-break: higher score, then best-example, then a stable asset-id order — so the
-    same inputs always pick the same piece (needed for exactly-once staging).
+    tie-break: collection-match, then higher score, then best-example, then CSV (real
+    artwork) ahead of seed (mock), then a stable asset-id order — so the same inputs
+    always pick the same piece (needed for exactly-once staging).
 
-    If the top piece has NO tag overlap at all it is still returned, but as an honest
-    PORTFOLIO FALLBACK (``exact_match=False``) — the "why" says so rather than
+    If the top piece has NO tag/collection overlap at all it is still returned, but as an
+    honest PORTFOLIO FALLBACK (``exact_match=False``) — the "why" says so rather than
     claiming a match that is not there."""
     if not artworks:
         return None
@@ -221,18 +240,25 @@ def select_artwork(
     style_cmp = _norm_set(artist_styles) | _norm_set(theme_terms)
     theme_cmp = _norm_set(theme_terms)
 
-    scored: list[tuple[int, bool, str, ArtworkRef, list[str], list[str]]] = []
+    scored: list[tuple[int, int, bool, int, str, ArtworkRef, list[str], list[str], str]] = []
     for a in artworks:
         matched_styles = _overlap(a.styles, style_cmp)
         matched_motifs = _overlap(a.motifs, theme_cmp)
+        # The theme may name the piece's collection directly (e.g. theme='4th-of-july').
+        matched_collection = a.collection if (_norm(a.collection) and _norm(a.collection) in theme_cmp) else ""
+        coll_flag = 1 if matched_collection else 0
         score = 2 * len(matched_styles) + len(matched_motifs) + (1 if a.is_best_example else 0)
-        scored.append((score, a.is_best_example, a.asset_id, a, matched_styles, matched_motifs))
+        # CSV (real, first-party artwork) outranks seed (mock) on an otherwise exact tie.
+        source_rank = 0 if _norm(a.source) == _norm("csv") else 1
+        scored.append(
+            (coll_flag, score, a.is_best_example, source_rank, a.asset_id, a, matched_styles, matched_motifs, matched_collection)
+        )
 
-    # Best: highest score, then best-example, then stable asset-id (ascending) so the
-    # choice is fully deterministic.
-    scored.sort(key=lambda t: (-t[0], not t[1], t[2]))
-    score, _best, _aid, art, matched_styles, matched_motifs = scored[0]
-    exact = bool(matched_styles or matched_motifs)
+    # Best: collection-match first, then highest score, then best-example, then
+    # CSV-over-seed, then stable asset-id (ascending) so the choice is fully deterministic.
+    scored.sort(key=lambda t: (-t[0], -t[1], not t[2], t[3], t[4]))
+    _cf, score, _best, _src, _aid, art, matched_styles, matched_motifs, matched_collection = scored[0]
+    exact = bool(matched_styles or matched_motifs or matched_collection)
     pick = ArtworkPick(
         asset_id=art.asset_id,
         artist=art.artist,
@@ -245,6 +271,8 @@ def select_artwork(
         why="",
         styles=list(art.styles),
         motifs=list(art.motifs),
+        collection=art.collection,
+        matched_collection=matched_collection,
     )
     pick.why = build_why(pick)
     return pick
@@ -264,6 +292,8 @@ def build_why(pick: ArtworkPick) -> str:
             )
         if pick.matched_motifs:
             bits.append(f"its {_join(pick.matched_motifs)} motif fits this post")
+        if pick.matched_collection:
+            bits.append(f"it is part of the {pick.matched_collection} collection")
         reason = "; ".join(bits) if bits else "matches this post"
         return (
             f'Picked "{caption}" because it is {reason}. '
