@@ -11,6 +11,7 @@ Two layers:
 from __future__ import annotations
 
 import os
+import uuid
 
 import pytest
 
@@ -102,8 +103,50 @@ _pg = pytest.mark.skipif(
 )
 
 
+# These integration tests wipe+reseed the eval-KB tables on the fixed SMOKE_TENANT.
+# The suite's Postgres is SHARED — other engine workers run the same smoke loader
+# concurrently — and ``TRUNCATE gold_example`` is table-wide (NOT tenant-scoped, and
+# the fixture role is a BYPASSRLS superuser so RLS can't gate it either), so a
+# neighbour's truncate can delete an example row between our own
+# ``upsert_gold_example`` and its dependent ``gold_label`` insert, surfacing as a
+# ForeignKeyViolation. We isolate this module's eval-KB into a PRIVATE per-process
+# schema (via ``search_path``): a concurrent ``TRUNCATE public.gold_example`` can no
+# longer touch our rows, so the gold-set tests are deterministic regardless of what
+# else is hitting the database (CustomerAcq-gel).
+_ISO_SCHEMA = f"smoke_gel_{os.getpid()}_{uuid.uuid4().hex[:8]}"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _isolated_schema():
+    """Create (and drop) a private schema so this module's eval-KB never collides
+    with a concurrent worker's ``public`` gold tables on the shared Postgres."""
+    import psycopg
+
+    from tests.conftest import DB_DSN
+
+    with psycopg.connect(DB_DSN, autocommit=True) as conn:
+        conn.execute(f'DROP SCHEMA IF EXISTS "{_ISO_SCHEMA}" CASCADE')
+        conn.execute(f'CREATE SCHEMA "{_ISO_SCHEMA}"')
+    yield
+    with psycopg.connect(DB_DSN, autocommit=True) as conn:
+        conn.execute(f'DROP SCHEMA IF EXISTS "{_ISO_SCHEMA}" CASCADE')
+
+
+@pytest.fixture
+def dsn(_isolated_schema) -> str:
+    """Point every eval-KB connection this module opens (fixture setup + the
+    KbStore) at the private schema, so its tables are isolated from ``public``."""
+    from tests.conftest import DB_DSN, bounded_dsn
+
+    return bounded_dsn(DB_DSN, search_path=f"{_ISO_SCHEMA},public")
+
+
 @pytest.fixture
 def kb_store(dsn):
+    """A clean eval-KB store, materialized inside the module's private schema so a
+    concurrent worker's ``TRUNCATE public.gold_example`` cannot wipe our rows
+    mid-test (CustomerAcq-gel). The reseed still runs through the normal
+    tenant-scoped DAL, so tenant isolation stays exercised."""
     import psycopg
 
     from kb.store import KbStore
@@ -111,6 +154,8 @@ def kb_store(dsn):
 
     schema = Path(__file__).resolve().parents[2] / "infra" / "initdb" / "03-eval-kb.sql"
     with psycopg.connect(dsn, autocommit=True) as conn:
+        # search_path[0] is the private schema, so the eval-KB tables are created
+        # and wiped THERE — isolated from any concurrent truncate on public.
         conn.execute(schema.read_text(encoding="utf-8"))
         conn.execute("TRUNCATE gold_example, gold_label, eval_metric")
     return KbStore(dsn)
