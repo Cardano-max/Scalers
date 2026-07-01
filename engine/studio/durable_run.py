@@ -269,11 +269,21 @@ class DurableRun:
         (a replay after a pause/restart), ``fn`` is NOT run and the recorded
         result is returned: a completed send/draft never re-fires.
 
-        ``fn`` receives the live connection so its DB effects join the atomic
-        claim. For a truly *external* effect (a real email send) use the
-        two-phase outbox path instead (see ``sideeffects/`` and the design doc);
-        this in-transaction form is exactly-once for DB-visible effects, which is
-        what the campaign loop's ``record_pending_action`` staging is.
+        ``fn`` receives the live connection: any writes it makes **on ``conn``**
+        join the atomic claim — this is the guarantee the tests exercise, and it
+        is exactly-once for DB-visible effects written on ``conn``. Two things it
+        is deliberately NOT:
+
+        * A call that opens its OWN connection — e.g. the campaign loop's
+          ``record_pending_action`` (``actions/store.py`` opens an autocommit
+          connection; it takes a ``dsn``, not a caller ``conn``) — is *not* bound
+          into this transaction. Used with such a call, ``step()`` is a
+          REPLAY-SKIP marker (don't re-run the orchestration on resume) and that
+          call's own idempotency key owns its exactly-once. See the design doc
+          §5.1 for the layering.
+        * A truly *external* effect (a real email send) must use the two-phase
+          outbox instead (``sideeffects/`` + the design doc) — a rolled-back
+          transaction cannot un-send a network call.
         """
         result_key = f"__result__:{step_key}"
         with _connect(self._dsn, autocommit=False) as conn:

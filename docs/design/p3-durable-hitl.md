@@ -98,23 +98,29 @@ def _execute_provided_leads_sync(plan, session_id, tenant_id, dsn, run_id=None):
                 campaign_angle = decision.get("angle") or campaign_angle   # operator edit
             # 'approve' → fall through and draft the cohort with the (possibly edited) angle
 
-        # (C) PER-LEAD loop (agui.py:1225). Each lead is ONE durable step keyed by
-        #     the SAME idempotency handle the action row already uses.
+        # (C) PER-LEAD loop (agui.py:1225). Each lead is ONE durable step, used as a
+        #     REPLAY-SKIP marker: on resume a completed lead's step is a ledger no-op,
+        #     so its research→draft→critic chain is not re-run. IMPORTANT: the step fn
+        #     does NOT bind these existing calls into the step's transaction —
+        #     record_pending_action opens its OWN autocommit connection
+        #     (actions/store.py:98,102), it does not take a caller conn. The action
+        #     ROW's exactly-once stays owned by its idempotency_key {run_id}:{cust_id},
+        #     independent of the step ledger (see §5.1).
         for facts in leads:
             cust_id = facts["customer_id"]
-            def stage_lead(conn, facts=facts):
+            def stage_lead(_conn, facts=facts):   # _conn unused: these calls own their tx
                 # research → analyst → offer → draft → critic → record_pending_action
-                # (agui.py:1227-1395), UNCHANGED, but the record_pending_action call
-                # rides `conn` so it commits atomically with the ledger claim.
-                return _stage_one_provided_lead(conn, facts, ...)
+                # (agui.py:1227-1395), UNCHANGED.
+                return _stage_one_provided_lead(facts, ...)
             run.step(f"{run_id}:{cust_id}:stage", stage_lead)
             run.checkpoint(cursor=run.cursor + 1)   # advance progress marker
 
         # (D) Optional per-batch pause every N leads for very large cohorts:
         #     `if i and i % batch == 0: run.interrupt({"kind":"batch_checkpoint", ...})`
 
-        # (E) Final jury summary + runs row (agui.py:1398-1410) — also a step.
-        return run.step(f"{run_id}:jury", lambda conn: _finalize(...))
+        # (E) Final jury summary + runs row (agui.py:1398-1410) — also a replay-skip step
+        #     (its stores own their own connections/tx, same as (C)).
+        return run.step(f"{run_id}:jury", lambda _conn: _finalize(...))
 
     outcome = run.run(body)          # or run.resume(Command(resume=answer), body) on resume
     return _summary_from(outcome)
@@ -130,14 +136,14 @@ Interrupt points, concretely:
 
 ## 5. How resume replays without re-firing (exactly-once preserved)
 
-On resume the body re-drives from the top. Each unit is protected two ways (belt-and-suspenders):
+On resume the body re-drives from the top. Exactly-once is preserved by **layered ownership**, not by binding everything into one transaction:
 
-1. **`durable_step_ledger`** — `run.step(f"{run_id}:{cust_id}:stage", …)` is a ledger no-op for every lead already staged, so the whole research→draft→critic chain for a completed lead is skipped (no re-spend, no re-fire).
-2. **`actions.idempotency_key`** — even if a step were re-run, `record_pending_action(idempotency_key=f"{run_id}:{cust_id}")` (`agui.py:1381`, `actions/store.py:147`) still returns the existing action id rather than inserting a duplicate.
+1. **`durable_step_ledger` — replay-skip.** `run.step(f"{run_id}:{cust_id}:stage", …)` is a ledger no-op for every lead already completed, so its research→draft→critic chain is not re-run (no re-spend). The claim commits only *after* the step fn returns, so "ledger = done" ⟹ the orchestration ran at least once.
+2. **`actions.idempotency_key` — the staged row.** `record_pending_action(idempotency_key=f"{run_id}:{cust_id}")` (`agui.py:1381`, `actions/store.py:147`) runs on its **own** autocommit connection (`actions/store.py:98,102`) and de-dupes the row itself. So even in the narrow window where a lead's orchestration re-runs before its step claim commits, `record_pending_action` returns the existing action id — no duplicate row.
 
-Because `stage_lead` runs `record_pending_action` on the step's transaction, the action row and the ledger claim **commit together**. The proof test uses a *deliberately non-idempotent* insert (no unique key) to show the ledger alone stops the double-fire — the real wiring is even safer because the action key is also unique.
+These are **independent** mechanisms at two granularities: the step ledger does **not** co-commit the action row (they are on different connections), and it does not need to. The proof test (`test_restart_resume_exactly_once_no_refire`) exercises the *primitive's* in-transaction guarantee directly, with a deliberately non-idempotent effect written **on the step's connection**; the wiring above instead uses `step()` as a replay-skip marker and leaves the row's exactly-once to `idempotency_key`.
 
-**True external sends** (a real email/post — not the HELD staging) must NOT use the in-transaction `step()`; they go through the existing **two-phase outbox** (`engine/sideeffects/boundary.py` + `dispatcher.py`: durable `SENDING` claim → connector → `SENT`, `engine/tests/test_exactly_once.py`), which is at-least-once delivery + an idempotent connector. The durable run *enqueues intent* in a `step()` (exactly-once intent), the dispatcher *delivers* (exactly-once effect via the keyed connector). This separation is called out so no one wraps a live send in the in-tx form and assumes a network send rolls back.
+**True external sends** (a real email/post — not the HELD staging) are owned entirely by the existing **two-phase outbox** (`engine/sideeffects/boundary.py` + `dispatcher.py`: durable `SENDING` claim → connector → `SENT`, `engine/tests/test_exactly_once.py`: at-least-once delivery + an idempotent connector) — **not** by `step()`. They are **not** wrapped in `step()`'s in-transaction form: as §5.1 details, `enqueue` is async over `AsyncConnection` while `step()` is sync, and a rolled-back transaction cannot un-send a network call. The outbox's `UNIQUE(idempotency_key)` + the async dispatcher own send exactly-once end to end.
 
 ### 5.1 Reconciliation: three exactly-once *layers*, not three competing paths
 
@@ -149,15 +155,15 @@ Because `stage_lead` runs `record_pending_action` on the step's transaction, the
 | The per-lead **orchestration** (research→analyst→draft→critic) isn't re-run on replay | `durable_step_ledger` (this module) | `{run_id}:{cust_id}:stage` | `studio/durable_run.py` — `UNIQUE(run_id, step_key)` |
 | The external **send** is delivered once | HARN-04 `outbox` + `side_effect_ledger` (existing) | `idempotency_key(channel, target, …)` | `sideeffects/*` — `SENDING→SENT` + idempotent connector |
 
-**Staging path (today's HELD loop) — how the two layers stack, not compete:**
-- `step()` is the **outer, coarse** guard: "did I already process this lead in this run?" It short-circuits the expensive LLM chain on replay. It calls `record_pending_action` on **its own transaction**, so the action row and the step claim commit atomically.
-- `actions.idempotency_key` remains the **inner, authoritative** guard for the row itself. If a lead is ever staged *outside* the durable wrapper, the `UNIQUE` still de-dupes the row. `step()` does not weaken or shadow it — the row-level `UNIQUE` stays the single source of truth *for the row*. So for staging they are belt-and-suspenders at two granularities, with no ambiguity about which one owns the row (the `idempotency_key` does).
+**Staging path (today's HELD loop) — two independent guards, NOT one atomic unit:**
+- `step()` is the **outer, coarse** guard: "did I already process this lead in this run?" It short-circuits the expensive LLM chain on replay. Its ledger claim commits only after the step fn returns, so it is a **completion marker** — it does **not** bind `record_pending_action` into its transaction. `record_pending_action` opens its **own autocommit connection** (`actions/store.py:98,102`) and takes a `dsn`, not a caller `conn`, so it *cannot* ride the step's tx (and does not need to).
+- `actions.idempotency_key` is the **inner, authoritative** guard for the row itself, on its own tx (`{run_id}:{cust_id}`, `UNIQUE … ON CONFLICT DO NOTHING`, `actions/store.py:147`). It de-dupes the row whether or not `step()` re-runs the orchestration. So **staging exactly-once is owned by `idempotency_key`**; `step()` only prevents the *re-run* (a cost saving), it is not the row's authority.
 
-**Send path (future) — `step()` DEFERS to the outbox, never owns delivery:**
-- A live send is not a DB-visible effect on `step()`'s connection, so it **cannot** be made exactly-once by `step()`'s in-tx claim (a rolled-back transaction does not un-send an email). Hard rule: never wrap a live send in `step()`'s in-transaction form.
-- Instead `step()` wraps the **enqueue**: `run.step(f"{run_id}:{cust_id}:enqueue", lambda conn: SideEffectBoundary().enqueue(conn, key, channel, payload))` (`sideeffects/boundary.py:37`). The enqueue is itself idempotent on the outbox's `UNIQUE(idempotency_key)`, so **the outbox — not `step()` — owns delivery exactly-once**. Here `step()` only records that the run *reached* the enqueue point; the guarantee lives in the outbox key + the dispatcher's `SENDING→SENT`.
+**Send path (future) — the outbox owns delivery; `step()` is NOT in the effect path:**
+- A live send is not a DB-visible effect on `step()`'s connection, so `step()`'s in-tx claim cannot make it exactly-once (a rolled-back transaction does not un-send a network call). And `SideEffectBoundary.enqueue` is **`async` over `psycopg.AsyncConnection`** (`boundary.py:37-39`) while `step()` passes a **sync** `psycopg.Connection` — so the enqueue is **not wrappable in `step()`'s in-transaction form at all** (wrong connection type + an un-awaited coroutine). Hard rule: never route a send, or its enqueue, through `step()`'s sync tx.
+- **Send exactly-once is owned end to end by the outbox:** `enqueue`'s `UNIQUE(idempotency_key)` de-dupes the intent, and the async dispatcher's `SENDING→SENT` + idempotent connector own delivery (`test_exactly_once.py`). If the durable run needs to *record that it reached* the enqueue point, that is a separate replay-skip `step()` whose fn triggers the enqueue on its **own `AsyncConnection`** (not the step's) — the enqueue is idempotent regardless, so the step is bookkeeping, never the authority.
 
-Net: no concern has two authorities. Row → `idempotency_key`. Send → outbox. Orchestration replay → step-ledger. `step()` is the run-level *coordinator* that routes each effect to its existing authority; it introduces a new authority only for the one concern that had none (don't re-run a lead's orchestration on replay).
+Net: no concern has two authorities. Row → `idempotency_key` (own tx). Send → outbox (own async tx + dispatcher). Orchestration replay → step-ledger. `step()` introduces a new authority only for the one concern that had none — *don't re-run a lead's orchestration on replay* — and defers each **effect** to its existing owner rather than re-committing it.
 
 ---
 
@@ -177,6 +183,8 @@ COMMIT                                                                          
 ```
 
 The claim is inserted **before** `fn` runs and is committed **with** the effect. So there is **no window where the effect is durable but the claim is not** (and vice-versa) — they share a commit. Any hypothesized "effect happened, ledger insert didn't" ordering does not exist in this code; the claim precedes and co-commits the effect.
+
+**Scope of this table:** it is the guarantee of the *primitive* `step()` — for an effect written **on the passed `conn`** (exactly what the tests do). In the §4/§5 wiring, `record_pending_action` is *not* on that conn (it owns its tx + `idempotency_key`), so its atomicity is its own; there the step ledger provides **replay-skip**, and the ordering above guarantees only that "ledger = done" ⟹ `fn` (the orchestration) ran to completion — never that the action row co-committed with the claim.
 
 | # | Crash / race point | What happens on recovery | Double-fire? | Covered by |
 |---|---|---|---|---|
