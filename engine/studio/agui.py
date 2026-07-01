@@ -1245,7 +1245,13 @@ def _execute_provided_leads_sync(
     from studio.adapters.message_source import DbConversationSource
     from studio.dossier import build_dossier
     from studio.skill_select import select_skill
-    from studio.campaign_runner import _materialize_runs_row, _summarize_output
+    from studio.campaign_runner import (
+        FAILCLOSED_REQUIRED_ROLES,
+        _materialize_runs_row,
+        _summarize_output,
+        campaign_run_status,
+        required_step_failures,
+    )
     from studio.customer_research import (
         _research_enabled,
         build_outreach_draft,
@@ -1765,19 +1771,40 @@ def _execute_provided_leads_sync(
         _reasons = "; ".join(sorted({str(s["reason"]) for s in skipped}))
         _skip_phrase = (f"; {len(skipped)} skipped"
                         + (f" (rows {_rows})" if _rows else "") + f": {_reasons}")
-    _rec(
-        "jury", JURY_MODEL,
-        {"n_leads": len(leads), "lead_source": "provided"},
-        {
+    # FAIL-CLOSED (0dy/37y): the jury cannot certify drafts on top of a required gate that
+    # FAILED. If the strategist or the critic could not run (credit-out), the jury records
+    # an HONEST ``blocked`` verdict (aggregate 0.0) — drafts stay pending_review, NOT
+    # approved — instead of the old fake ``aggregate=1.0`` whenever drafts merely existed.
+    _upstream_failures = required_step_failures(agent_runs, ("strategist", "critic"))
+    if _upstream_failures:
+        _blocked_gates = ", ".join(sorted({f["agent"] for f in _upstream_failures}))
+        _jury_output = {
+            "aggregate": 0.0, "decision": "blocked", "status": "failed",
+            "error": (f"cannot certify drafts: required step(s) failed ({_blocked_gates}); "
+                      f"drafts held pending_review, not approved"),
+            "output_ledger": output_ledger,
+            "note": (f"{len(pending)} draft(s) staged but NOT approved — {_blocked_gates} "
+                     f"failed; run held for retry (nothing sent)"),
+        }
+    else:
+        _jury_output = {
             "aggregate": 1.0 if pending else 0.0, "decision": "review",
             "output_ledger": output_ledger,
             "note": (f"{len(pending)} of {expected_n} per-lead draft(s) staged HELD from "
                      f"{source_note}{_skip_phrase}; approve-first — nothing sent"),
-        },
-    )
+        }
+    _rec("jury", JURY_MODEL, {"n_leads": len(leads), "lead_source": "provided"}, _jury_output)
+
+    # The FAIL-CLOSED terminal status decided from the REAL agent_runs (incl. the honest
+    # jury above): 'failed' when any required gate failed, else 'completed'. The runs row,
+    # the in-memory registry (_bg), and the summary all read from THIS — never a hardcoded
+    # 'completed'. The failure_summary surfaces agent/step/error/retryable/can_continue/impact.
+    run_status = campaign_run_status(agent_runs, FAILCLOSED_REQUIRED_ROLES)
+    failure_summary = required_step_failures(agent_runs, FAILCLOSED_REQUIRED_ROLES)
 
     runs_row = _materialize_runs_row(
-        dsn=dsn, run_id=run_id, tenant_id=tenant_id, agent_runs=agent_runs
+        dsn=dsn, run_id=run_id, tenant_id=tenant_id, agent_runs=agent_runs,
+        terminal_status=run_status,
     )
 
     # Mirror each per-role trace into the chat thread (same as the spine path).
@@ -1835,6 +1862,11 @@ def _execute_provided_leads_sync(
             ),
         ],
         "runs_row": runs_row,
+        # Fail-closed outcome (0dy/37y): 'completed' only when every required gate passed;
+        # 'failed' + surfaced failure_summary when a required step (strategist/critic/jury)
+        # errored. _bg marks the run registry from this — never a hardcoded 'completed'.
+        "run_status": run_status,
+        "failure_summary": failure_summary,
     }
 
 
@@ -1944,7 +1976,18 @@ async def launch_studio_run(
             summary = await asyncio.to_thread(
                 _execute_campaign_sync, plan, session_id, tenant_id, dsn, run_id
             )
-            runs_registry[run_id] = {"status": "completed", "summary": summary, "error": None}
+            # FAIL-CLOSED (0dy): mark the registry from the summary's real terminal status.
+            # A run whose required gate (strategist/critic/jury) failed reads 'failed' with
+            # its surfaced failure_summary — NEVER a hardcoded 'completed' over an errored run.
+            _run_status = summary.get("run_status") or "completed"
+            _failures = summary.get("failure_summary") or []
+            runs_registry[run_id] = {
+                "status": _run_status,
+                "summary": summary,
+                "error": (None if _run_status == "completed"
+                          else "; ".join(f"{f['agent']}: {f['error']}" for f in _failures)
+                          or "required step failed"),
+            }
             try:
                 await asyncio.to_thread(
                     _log_turn, dsn, session_id, "host", _summary_text(summary), HOST_AGUI_MODEL

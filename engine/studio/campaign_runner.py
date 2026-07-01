@@ -228,6 +228,95 @@ def derive_agent_statuses(
     return out
 
 
+# --------------------------------------------------------------------------- #
+# Fail-closed orchestration (CustomerAcq-0dy / -37y).
+#
+# A required quality gate that could not be performed must FAIL CLOSED: the run is
+# NOT marked ``completed`` and its drafts are NOT approved. The reproduced bug
+# (run team-camp_fa3aa98cd10a-...) marked a run ``completed`` even though the
+# strategist AND every critic pass errored (credit-out). These helpers are the
+# single fail-closed decision both the provided-leads path and the compose path
+# use — and the same decision the runs-row materializer writes to the DB status,
+# so a failed run can never read ``completed`` in Postgres either.
+# --------------------------------------------------------------------------- #
+
+# The quality gates whose failure fails the whole run. research can honestly
+# degrade (no provider key) and planner/analyst are supporting, so they are not in
+# this set; strategy/critic/jury are the gates that certify the drafts.
+FAILCLOSED_REQUIRED_ROLES: tuple[str, ...] = ("strategist", "critic", "jury")
+
+
+def _role_of(ar: dict[str, Any]) -> str:
+    return str(ar.get("role") or "").lower()
+
+
+def _first_failure_error(runs: list[dict[str, Any]]) -> str:
+    """The first honest error string among a role's failed runs (for the summary)."""
+    for ar in runs:
+        out = ar.get("output")
+        if isinstance(out, dict):
+            err = out.get("error") or out.get("rationale")
+            if err:
+                return str(err)
+    return "required step failed"
+
+
+def _failure_entry(agent: str, error: str, *, ran: bool) -> dict[str, Any]:
+    """The structured failure record the operator asked to surface: agent, step id,
+    error reason, retry option, can-continue, and the impact on the run."""
+    return {
+        "agent": agent,
+        "step": agent,
+        "step_id": agent,
+        "error": str(error),
+        "retryable": True,          # a credit/rate-limit/transient model error is retryable
+        "can_continue": False,      # a required gate failed -> run cannot be completed
+        "ran": ran,
+        "impact": "run not marked completed; drafts held pending_review, not approved",
+    }
+
+
+def required_step_failures(
+    agent_runs: list[dict[str, Any]],
+    required_roles: tuple[str, ...] = FAILCLOSED_REQUIRED_ROLES,
+    *,
+    present_only: bool = True,
+) -> list[dict[str, Any]]:
+    """Structured failure record per REQUIRED step that could not be honestly completed.
+
+    A required role FAILS CLOSED when it ran but EVERY recorded attempt is an honest
+    failure (strategist ``status='failed'`` / critic ``verdict='error'`` / a blocked
+    jury), OR (when ``present_only`` is False) a required role produced no run at all.
+    ONE successful attempt satisfies the gate, so a single transient per-lead critic
+    hiccup among good ones does not fail the whole run."""
+    failures: list[dict[str, Any]] = []
+    for role in required_roles:
+        runs = [ar for ar in agent_runs if _role_of(ar) == role]
+        if runs:
+            if all(_agent_run_failed(ar) for ar in runs):
+                failures.append(_failure_entry(role, _first_failure_error(runs), ran=True))
+        elif not present_only:
+            failures.append(
+                _failure_entry(role, f"required step '{role}' did not run", ran=False)
+            )
+    return failures
+
+
+def campaign_run_status(
+    agent_runs: list[dict[str, Any]],
+    required_roles: tuple[str, ...] = FAILCLOSED_REQUIRED_ROLES,
+    *,
+    present_only: bool = True,
+) -> str:
+    """``'failed'`` when any required step failed closed, else ``'completed'``. The one
+    place run-completion is decided — never a hardcoded ``completed``."""
+    return (
+        "failed"
+        if required_step_failures(agent_runs, required_roles, present_only=present_only)
+        else "completed"
+    )
+
+
 def _summarize_output(role: str, output: Any) -> str:
     """A short, readable one/two-liner for one role's output (for the chat trace)."""
     if not isinstance(output, dict):
@@ -259,10 +348,21 @@ def _summarize_output(role: str, output: Any) -> str:
 
 
 def _materialize_runs_row(
-    *, dsn: str | None, run_id: str, tenant_id: str, agent_runs: list[dict[str, Any]]
+    *,
+    dsn: str | None,
+    run_id: str,
+    tenant_id: str,
+    agent_runs: list[dict[str, Any]],
+    terminal_status: str = "completed",
 ) -> bool:
     """Write a ``runs`` row whose ``steps`` are the per-role agent_runs as top-level
     spans, so the existing Runs query/UI surfaces node/model/input/output traces.
+
+    ``terminal_status`` is the FAIL-CLOSED run outcome (``'completed'`` | ``'failed'``,
+    from :func:`campaign_run_status`) — the runs row records ``failed`` when a required
+    step failed, so a failed run never reads ``completed`` in Postgres. A per-role span
+    whose agent_run is an honest failure is written ``status='failed'`` (the Runs UI
+    renders it red), never a green ``ok`` over a step that errored.
 
     Best-effort: returns True on success, False (swallowed) on any failure — a
     runs-row problem must never break the real campaign run."""
@@ -297,7 +397,7 @@ def _materialize_runs_row(
                     input=_io(ar.get("input")),
                     output=_io(out),
                     model=ar.get("model"),
-                    status="ok",
+                    status="failed" if _agent_run_failed(ar) else "ok",
                     seq=i,
                     at=now,
                     text=f"{role}: {_summarize_output(role, out)}"[:240],
@@ -305,7 +405,10 @@ def _materialize_runs_row(
                 )
             )
         store.append_spans(run_id, spans)
-        store.finish_run(run_id, status=RunStatus.COMPLETED, review_count=len(agent_runs))
+        # Fail-closed: the runs row records the REAL terminal status. A run whose
+        # required gate failed is written FAILED, never COMPLETED (the reproduced bug).
+        _rs = RunStatus.FAILED if str(terminal_status).lower() == "failed" else RunStatus.COMPLETED
+        store.finish_run(run_id, status=_rs, review_count=len(agent_runs))
 
         # Best-effort Langfuse mirror so the studio campaign run emits a trace with
         # one span per agent (strategist/draft/critic/jury) WHEN keys are present.
@@ -376,8 +479,16 @@ def run_and_trace(
     except Exception:
         agent_runs = []
 
+    # FAIL-CLOSED: decide the terminal status from the REAL agent_runs BEFORE writing the
+    # runs row, so a required gate that errored (credit-out) writes FAILED to the DB, not
+    # a hardcoded COMPLETED. Only a gate that RAN and failed counts (present_only) — an
+    # archetype that legitimately skips a role is not a failure.
+    failure_summary = required_step_failures(agent_runs)
+    run_status = "failed" if failure_summary else "completed"
+
     runs_row = _materialize_runs_row(
-        dsn=dsn, run_id=state.run_id, tenant_id=tenant_id, agent_runs=agent_runs
+        dsn=dsn, run_id=state.run_id, tenant_id=tenant_id, agent_runs=agent_runs,
+        terminal_status=run_status,
     )
 
     spec = registry.get(aid)
@@ -388,7 +499,7 @@ def run_and_trace(
     # has to fall back to a silent "queued". Any required role still missing here is a
     # genuine gap (surfaced honestly, not hidden behind a complete claim).
     agent_status = derive_agent_statuses(
-        aid, agent_runs, "completed", force_research=force_research
+        aid, agent_runs, run_status, force_research=force_research
     )
     incomplete_roles = sorted(
         role for role, st in agent_status.items()
@@ -407,4 +518,8 @@ def run_and_trace(
         "channels": channels,
         "step_notes": list(state.step_log),
         "runs_row": runs_row,
+        # Fail-closed outcome for the caller (_bg marks the registry from this, never a
+        # hardcoded "completed") + the surfaced per-step failure records.
+        "run_status": run_status,
+        "failure_summary": failure_summary,
     }
