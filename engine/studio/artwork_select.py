@@ -118,6 +118,10 @@ class ArtworkPick:
     score: int
     exact_match: bool
     why: str
+    # The piece's OWN stored tags (superset of the matched subsets) — real metadata the
+    # caption + preview render. Never invented; copied straight off the asset row.
+    styles: list[str] = field(default_factory=list)
+    motifs: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -125,6 +129,8 @@ class ArtworkPick:
             "artist": self.artist,
             "image_ref": self.image_ref,
             "caption": self.caption,
+            "styles": list(self.styles),
+            "motifs": list(self.motifs),
             "matched_styles": list(self.matched_styles),
             "matched_motifs": list(self.matched_motifs),
             "score": self.score,
@@ -237,6 +243,8 @@ def select_artwork(
         score=score,
         exact_match=exact,
         why="",
+        styles=list(art.styles),
+        motifs=list(art.motifs),
     )
     pick.why = build_why(pick)
     return pick
@@ -252,7 +260,7 @@ def build_why(pick: ArtworkPick) -> str:
         bits: list[str] = []
         if pick.matched_styles:
             bits.append(
-                f"tagged {_join(pick.matched_styles)} — matching {artist}'s style"
+                f"tagged {_join(pick.matched_styles)}, matching {artist}'s style"
             )
         if pick.matched_motifs:
             bits.append(f"its {_join(pick.matched_motifs)} motif fits this post")
