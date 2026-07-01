@@ -144,6 +144,20 @@ class CampaignBlueprint(BaseModel):
     compliance_constraints: list[str] = Field(default_factory=list)
     review_rules: list[str] = Field(default_factory=list)
     stop_conditions: StopConditions = Field(default_factory=StopConditions)
+    # --- P1-D: the enriched, operator-confirmable spec fields. Grounded — each is read
+    # straight from the interview plan (empty when the operator didn't answer). The
+    # supervisor reads these back in `interview.plan_summary` and runs exactly what was
+    # shown. NEVER fabricated: an unanswered field stays empty, not a made-up default. --
+    brand_voice: str = ""
+    research_depth: str = ""
+    personalization_rules: str = ""
+    do_not_use: str = ""
+    success_criteria: str = ""
+    # P1-B carried onto the executable spec so the run has the exec-discovery context.
+    segment: str = ""
+    offer_type: str = ""
+    no_convert_reason: str = ""
+    prior_contact: str = ""
     # Honest provenance: the tier the planner ACTUALLY ran at. ``grounded_rules`` when
     # the deterministic core built the plan with no model call; the Opus pin when the
     # LLM enrichment made a real call.
@@ -346,6 +360,16 @@ def build_blueprint(
         compliance_constraints=list(_COMPLIANCE_CONSTRAINTS),
         review_rules=list(_REVIEW_RULES),
         stop_conditions=stop,
+        # P1-D/P1-B enriched spec — read straight from the interview plan, honest empties.
+        brand_voice=(getattr(plan, "brand_voice", "") or "").strip(),
+        research_depth=(getattr(plan, "research_depth", "") or "").strip(),
+        personalization_rules=(getattr(plan, "personalization_rules", "") or "").strip(),
+        do_not_use=(getattr(plan, "do_not_use", "") or "").strip(),
+        success_criteria=(getattr(plan, "success_criteria", "") or "").strip(),
+        segment=(getattr(plan, "segment", "") or "").strip(),
+        offer_type=(getattr(plan, "offer_type", "") or "").strip(),
+        no_convert_reason=(getattr(plan, "no_convert_reason", "") or "").strip(),
+        prior_contact=(getattr(plan, "prior_contact", "") or "").strip(),
         planner_model="grounded_rules",
         planner_rationale=_deterministic_rationale(category, scope, total_quota, channels),
     )

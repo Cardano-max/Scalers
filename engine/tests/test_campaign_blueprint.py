@@ -54,6 +54,46 @@ def test_blueprint_is_deterministic_and_grounds_offers(monkeypatch) -> None:
     assert all(r.substantiated and r.offer_code for r in bp.offer_logic)
 
 
+def test_blueprint_carries_enriched_spec_fields_grounded_in_the_plan(monkeypatch) -> None:
+    # P1-D: brand-voice / research-depth / personalization / do-not-use / success-criteria
+    # (and the P1-B exec-discovery fields) are read STRAIGHT from the interview plan onto
+    # the executable blueprint — grounded, verbatim, never fabricated.
+    monkeypatch.setattr(offers_mod, "get_offers", lambda tid, dsn=None: [])
+    plan = CampaignPlan(
+        goal="win back lapsed clients",
+        channels=["email"],
+        output_count=3,
+        brand_voice="warm and plain-spoken, never salesy",
+        research_depth="deep",
+        personalization_rules="reference their style, not personal life",
+        do_not_use="no discounts, no emojis",
+        success_criteria="5 bookings",
+        segment="warm",
+        offer_type="booking",
+        no_convert_reason="price felt steep",
+        prior_contact="we DMed last month",
+    )
+    bp = build_blueprint(plan, "ladies8391", None, use_llm=False)
+    assert bp.brand_voice == "warm and plain-spoken, never salesy"
+    assert bp.research_depth == "deep"
+    assert bp.personalization_rules == "reference their style, not personal life"
+    assert bp.do_not_use == "no discounts, no emojis"
+    assert bp.success_criteria == "5 bookings"
+    assert bp.segment == "warm"
+    assert bp.offer_type == "booking"
+    assert bp.no_convert_reason == "price felt steep"
+    assert bp.prior_contact == "we DMed last month"
+
+
+def test_blueprint_spec_fields_are_empty_when_plan_unanswered(monkeypatch) -> None:
+    # HONESTY: an unanswered enriched field stays EMPTY on the blueprint (no default made up).
+    monkeypatch.setattr(offers_mod, "get_offers", lambda tid, dsn=None: [])
+    bp = build_blueprint(CampaignPlan(goal="g", channels=["email"], output_count=1),
+                         "t", None, use_llm=False)
+    assert bp.brand_voice == "" and bp.research_depth == "" and bp.do_not_use == ""
+    assert bp.success_criteria == "" and bp.segment == "" and bp.offer_type == ""
+
+
 def test_blueprint_never_invents_an_offer_when_none_exist(monkeypatch) -> None:
     # No offers doc -> offer_logic is EMPTY (no None-rules, no invented codes); a lead can
     # never reference a discount.
