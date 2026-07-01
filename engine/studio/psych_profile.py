@@ -688,9 +688,15 @@ def analyze_customer(
     through the SAME corpus-validation gate — no read survives that the customer's own
     data does not evidence. Returns the profile; every field is tagged stated/inferred/
     insufficient-signal and carries its evidence span. NEVER fabricates."""
-    # Normalize the conversation input to a list of turns.
+    # Normalize the conversation input to a list of turns. Accepts a list of
+    # ``{speaker,text}`` turns, the ``get_conversation`` dict (``{turns,...}``), OR a
+    # message-source ``ConversationThread`` (has a ``.turns`` attribute) — the adapter's
+    # own contract, so the analyst and the message-source adapters compose without the
+    # caller having to unwrap. ``None`` / empty stays honestly empty.
     if isinstance(conversation, dict):
         turns = conversation.get("turns") or []
+    elif conversation is not None and not isinstance(conversation, (list, tuple)) and hasattr(conversation, "turns"):
+        turns = getattr(conversation, "turns") or []
     else:
         turns = conversation or []
 
