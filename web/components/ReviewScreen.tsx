@@ -40,6 +40,82 @@ const FILTERS: Array<{ id: QueueFilter; label: string }> = [
   { id: 'POSTS', label: 'Posts' },
 ];
 
+/** A campaign's drafts, grouped for the Review-queue lineage (operator order pt6). */
+export interface CampaignGroup {
+  /** Stable group key (campaignId → runId → the no-campaign sentinel). */
+  key: string;
+  campaignId: string | null;
+  runId: string | null;
+  /** Human-readable campaign label shown on the group header. */
+  label: string;
+  /** Newest createdAt in the group — the group's sort key + displayed time. */
+  newestAt: string;
+  drafts: Action[];
+}
+
+const NO_CAMPAIGN_KEY = '__no_campaign__';
+
+/** ISO-8601 lexical compare is chronological; newest first. */
+function byCreatedDesc(a: Action, b: Action): number {
+  return a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0;
+}
+
+function nonBlank(v: string | null | undefined): string | null {
+  if (typeof v !== 'string') return null;
+  const t = v.trim();
+  if (!t || t.toLowerCase() === 'null' || t.toLowerCase() === 'undefined') return null;
+  return t;
+}
+
+/** A readable campaign label from a campaign id (honest fallbacks, never blank). */
+export function campaignLabel(action: Action): string {
+  const cid = nonBlank(action.campaignId);
+  if (cid) {
+    // Drop a short leading tenant token (e.g. "nw-"), then Title Case the rest.
+    const body = cid.replace(/^[a-z0-9]{1,6}-/i, '').replace(/[-_]+/g, ' ').trim() || cid;
+    return body.replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+  const rid = nonBlank(action.runId);
+  if (rid) return `Run ${rid}`;
+  return 'Unassigned drafts';
+}
+
+/**
+ * Group a run's staged drafts by the campaign that generated them, NEWEST campaign
+ * on top, drafts newest-first within each group. Drafts with no campaign AND no run
+ * are collected into one honest "Unassigned drafts" group (never dropped, never
+ * interleaved unlabeled) — so there are no orphan drafts.
+ */
+export function groupDraftsByCampaign(actions: Action[]): CampaignGroup[] {
+  const byKey = new Map<string, Action[]>();
+  for (const a of actions) {
+    const key = nonBlank(a.campaignId) ?? nonBlank(a.runId) ?? NO_CAMPAIGN_KEY;
+    const bucket = byKey.get(key);
+    if (bucket) bucket.push(a);
+    else byKey.set(key, [a]);
+  }
+  const groups: CampaignGroup[] = [];
+  for (const [key, drafts] of byKey) {
+    const sorted = [...drafts].sort(byCreatedDesc);
+    const head = sorted[0];
+    groups.push({
+      key,
+      campaignId: nonBlank(head.campaignId),
+      runId: nonBlank(head.runId),
+      label: key === NO_CAMPAIGN_KEY ? 'Unassigned drafts' : campaignLabel(head),
+      newestAt: sorted[0].createdAt,
+      drafts: sorted,
+    });
+  }
+  // Newest campaign on top; the no-campaign group always sorts last (oldest-anchored).
+  groups.sort((a, b) => {
+    if (a.key === NO_CAMPAIGN_KEY) return 1;
+    if (b.key === NO_CAMPAIGN_KEY) return -1;
+    return a.newestAt < b.newestAt ? 1 : a.newestAt > b.newestAt ? -1 : 0;
+  });
+  return groups;
+}
+
 export function ReviewScreen() {
   const { adapter, tenantId } = useData();
   // Deep Review deep-link: the studio result/review surface navigates here with the
@@ -80,15 +156,15 @@ export function ReviewScreen() {
   }, []);
 
   const list = useMemo(() => items ?? [], [items]);
-  const filtered = useMemo(
-    () =>
-      list
-        .filter((a) => matchesFilter(a.type, filter))
-        // NEWEST drafts at the TOP (operator ask). createdAt is ISO-8601, so a
-        // lexical compare is chronological; non-mutating (filter already copied).
-        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0)),
+  // Lineage grouping (operator order pt6): drafts are grouped by the CAMPAIGN that
+  // generated them, NEWEST campaign on top, so the queue reads as campaign → its
+  // drafts instead of an undifferentiated pile. `filtered` is the flattened group
+  // order, so selection/keyboard/approve advance in the same order the operator sees.
+  const groups = useMemo(
+    () => groupDraftsByCampaign(list.filter((a) => matchesFilter(a.type, filter))),
     [list, filter],
   );
+  const filtered = useMemo(() => groups.flatMap((g) => g.drafts), [groups]);
   const counts = useMemo(() => countByFilter(list), [list]);
 
   // Keep a valid selection within the current filter.
@@ -269,18 +345,25 @@ export function ReviewScreen() {
             emptyHint="Nothing escalated — the engine is handling everything in policy."
           >
             {() => (
-              <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-                {filtered.map((a) => (
-                  <QueueRow
-                    key={a.id}
-                    action={a}
-                    selected={a.id === selectedId}
-                    highlighted={a.id === highlightId}
-                    scrollRef={a.id === highlightId ? scrollRef : undefined}
-                    onSelect={() => selectRow(a.id)}
-                  />
+              <div>
+                {groups.map((g) => (
+                  <section key={g.key} aria-label={`Campaign ${g.label}`}>
+                    <CampaignGroupHeader group={g} />
+                    <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+                      {g.drafts.map((a) => (
+                        <QueueRow
+                          key={a.id}
+                          action={a}
+                          selected={a.id === selectedId}
+                          highlighted={a.id === highlightId}
+                          scrollRef={a.id === highlightId ? scrollRef : undefined}
+                          onSelect={() => selectRow(a.id)}
+                        />
+                      ))}
+                    </ul>
+                  </section>
                 ))}
-              </ul>
+              </div>
             )}
           </AsyncBoundary>
         </div>
@@ -311,6 +394,55 @@ export function ReviewScreen() {
       </div>
 
       {toast ? <Toast toast={toast} /> : null}
+    </div>
+  );
+}
+
+/* ---------------- campaign group header ---------------- */
+
+/**
+ * The lineage header above each campaign's drafts: the campaign label + clickable
+ * campaign / run / trace chips + the draft count + when the campaign last produced.
+ * This is what makes the queue read "newest campaign → its drafts" and gives every
+ * draft below it an unambiguous parent (no orphans).
+ */
+function CampaignGroupHeader({ group }: { group: CampaignGroup }) {
+  const n = group.drafts.length;
+  return (
+    <div
+      style={{
+        position: 'sticky',
+        top: 0,
+        zIndex: 1,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '9px 16px 8px',
+        background: 'var(--surface-alt)',
+        borderTop: '1px solid var(--hairline)',
+        borderBottom: '1px solid var(--hairline-lighter)',
+      }}
+    >
+      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)' }}>{group.label}</span>
+      <span className="mono" style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>
+        {n} draft{n === 1 ? '' : 's'}
+      </span>
+      <span className="mono" style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>
+        {clockTime(group.newestAt)}
+      </span>
+      {group.campaignId || group.runId ? (
+        <div style={{ marginLeft: 'auto' }}>
+          <LineageChips lineage={{ campaignId: group.campaignId, runId: group.runId }} />
+        </div>
+      ) : (
+        <span
+          className="mono"
+          title="These drafts are not tied to a campaign run"
+          style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-muted)' }}
+        >
+          no campaign
+        </span>
+      )}
     </div>
   );
 }
@@ -394,20 +526,21 @@ function QueueRow({
             Confidence {pct(action.confidence)}%
           </span>
         </div>
-        {/* Lineage chips — deep-link to the producing run / agent reasoning / this
-            draft. Renders only the ids that genuinely exist (honest-null). */}
-        {action.runId || action.campaignId ? (
-          <div style={{ marginTop: 7 }}>
-            <LineageChips
-              lineage={{
-                campaignId: action.campaignId,
-                runId: action.runId,
-                agentRole: action.agentRole,
-                actionId: action.id,
-              }}
-            />
-          </div>
-        ) : null}
+        {/* Per-draft lineage — ALWAYS rendered so no draft is an unlabeled orphan.
+            The campaign/run live on the group header above; the row carries this
+            draft's own identity: action/draft id, the lead + recipient it targets,
+            the producing agent, and when it was created. Honest-null omits any chip
+            that genuinely lacks a value (never a fake chip). */}
+        <div style={{ marginTop: 7 }}>
+          <LineageChips
+            lineage={{
+              actionId: action.id,
+              agentRole: action.agentRole,
+              leadName: action.target,
+              createdAt: action.createdAt,
+            }}
+          />
+        </div>
       </button>
     </li>
   );
