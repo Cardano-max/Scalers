@@ -85,6 +85,33 @@ OPTIONAL: tuple[tuple[str, str], ...] = (
                                  "you to tailor the outreach? (yes/no)"),
     ("attach_artwork", "Want us to match and attach the right artist's artwork to each "
                        "message where it fits? (yes/no)"),
+    # --- P1-B: executive discovery questions (typed CTA, segmentation, why-no-convert,
+    #     prior contact). All optional so they never block the run, but the interview
+    #     DOES ask them and the answers flow into the plan summary + the run. --------- #
+    ("offer_type", "What's the main thing you want them to do? "
+                   "(book an appointment, a free consult, grab a flash design, a "
+                   "discount, a touch-up, or spotlight one of your artists)"),
+    ("segment", "Where are these folks in their journey with you — brand-new/cold, warm "
+                "(they've shown interest), past clients, or regulars?"),
+    ("no_convert_reason", "Why do you think they haven't booked yet? "
+                          "(for example: price felt steep, bad timing, still deciding, "
+                          "or you're not sure)"),
+    ("prior_contact", "Have you spoken with these people before — and if so, roughly what "
+                      "was said? (or 'no prior contact')"),
+    # --- P1-D: enrich the confirmable spec — brand voice, research depth, what's OK to
+    #     personalize on, what NOT to say, and what success looks like. -------------- #
+    ("brand_voice", "How should these sound — any brand-voice notes? "
+                    "(for example: warm and plain-spoken, a bit playful, never salesy) "
+                    "— or leave it to your usual voice"),
+    ("research_depth", "How much homework should the team do before writing — a light "
+                       "look, a standard pass, or deep research on each person? "
+                       "(light / standard / deep)"),
+    ("personalization_rules", "Any rules for making it personal — what's fair game to "
+                              "mention, and what should stay off-limits?"),
+    ("do_not_use", "Anything we should absolutely NOT say or mention? "
+                   "(for example: no discounts, don't mention a specific artist, no emojis)"),
+    ("success_criteria", "What would make this campaign a win for you? "
+                         "(for example: 5 bookings, replies from regulars, filled Tuesdays)"),
 )
 
 # Every field the interview is allowed to set on the plan.
@@ -322,6 +349,26 @@ def plan_summary(plan: Any) -> dict[str, Any] | None:
     tone = (getattr(plan, "tone", "") or "").strip()
     offer = (getattr(plan, "offer", "") or "").strip()
     goal = (getattr(plan, "goal", "") or "").strip()
+    # P1-B executive-discovery answers (all optional; shown only when answered).
+    offer_type = (getattr(plan, "offer_type", "") or "").strip()
+    segment = (getattr(plan, "segment", "") or "").strip()
+    no_convert_reason = (getattr(plan, "no_convert_reason", "") or "").strip()
+    prior_contact = (getattr(plan, "prior_contact", "") or "").strip()
+    # P1-D enriched-spec answers (all optional; shown only when answered).
+    brand_voice = (getattr(plan, "brand_voice", "") or "").strip()
+    research_depth = (getattr(plan, "research_depth", "") or "").strip()
+    personalization_rules = (getattr(plan, "personalization_rules", "") or "").strip()
+    do_not_use = (getattr(plan, "do_not_use", "") or "").strip()
+    success_criteria = (getattr(plan, "success_criteria", "") or "").strip()
+
+    _OFFER_TYPE_LABELS = {
+        "booking": "book an appointment",
+        "consult": "book a free consult",
+        "flash": "grab a flash design",
+        "discount": "use a discount",
+        "touch-up": "book a touch-up",
+        "artist-spotlight": "check out an artist spotlight",
+    }
 
     lines: list[dict[str, str]] = []
 
@@ -356,11 +403,44 @@ def plan_summary(plan: Any) -> dict[str, Any] | None:
         using_bits.append("deep web research first")
     lines.append({"label": "Using", "value": ", ".join(using_bits)})
 
+    # P1-B: which lifecycle segment we're addressing (cold / warm / past / recurring).
+    if segment:
+        lines.append({"label": "Segment", "value": segment})
+
     if channels:
         lines.append({"label": "Channels", "value": ", ".join(channels)})
-    if offer:
-        lines.append({"label": "The ask", "value": offer})
-    if tone:
+
+    # P1-B: the ask — prefer the typed CTA (offer_type) and add the free-text detail.
+    if offer_type or offer:
+        ask_bits: list[str] = []
+        if offer_type:
+            ask_bits.append(_OFFER_TYPE_LABELS.get(offer_type, offer_type))
+        if offer and offer.lower() not in " ".join(ask_bits).lower():
+            ask_bits.append(offer)
+        lines.append({"label": "The ask", "value": " — ".join(ask_bits)})
+
+    # P1-B: the operator's read on WHY these leads haven't booked, and prior contact.
+    if no_convert_reason:
+        lines.append({"label": "Why they haven't booked", "value": no_convert_reason})
+    if prior_contact:
+        lines.append({"label": "Prior contact", "value": prior_contact})
+
+    # P1-D: brand voice, research depth, personalization rules, do-not-use, success.
+    if brand_voice:
+        lines.append({"label": "Brand voice", "value": brand_voice})
+    elif tone:
+        # Fall back to the lighter 'tone' answer when no explicit brand-voice note given.
+        lines.append({"label": "Tone", "value": tone})
+    if research_depth:
+        lines.append({"label": "Research depth", "value": research_depth})
+    if personalization_rules:
+        lines.append({"label": "Personalization rules", "value": personalization_rules})
+    if do_not_use:
+        lines.append({"label": "Do NOT use", "value": do_not_use})
+    if success_criteria:
+        lines.append({"label": "Success looks like", "value": success_criteria})
+    if tone and brand_voice:
+        # keep the tone visible too if BOTH were answered (they refine each other)
         lines.append({"label": "Tone", "value": tone})
 
     # Fixed truth: the studio always holds. Nothing sends without the operator.
@@ -443,6 +523,90 @@ def _coerce_lead_source(value: Any) -> str:
     return ""
 
 
+# --- P1-B typed offer/CTA menu -------------------------------------------------- #
+# Canonical CTA -> the synonyms an operator might say. Coercion maps to the canonical
+# value; an unrecognized answer is kept as the operator's own stripped text (honest —
+# it's what they said — and it means the interview does not loop re-asking).
+OFFER_TYPES: tuple[str, ...] = (
+    "booking", "consult", "flash", "discount", "touch-up", "artist-spotlight",
+)
+_OFFER_TYPE_SYNONYMS: dict[str, str] = {
+    "booking": "booking", "book": "booking", "appointment": "booking",
+    "appointments": "booking", "book an appointment": "booking", "session": "booking",
+    "consult": "consult", "consultation": "consult", "free consult": "consult",
+    "consult call": "consult",
+    "flash": "flash", "flash design": "flash", "flash sheet": "flash",
+    "flash tattoo": "flash",
+    "discount": "discount", "promo": "discount", "sale": "discount", "deal": "discount",
+    "coupon": "discount", "offer code": "discount",
+    "touch-up": "touch-up", "touch up": "touch-up", "touchup": "touch-up",
+    "artist-spotlight": "artist-spotlight", "artist spotlight": "artist-spotlight",
+    "spotlight": "artist-spotlight", "feature an artist": "artist-spotlight",
+}
+
+
+def _coerce_offer_type(value: Any) -> str:
+    s = str(value or "").strip().lower()
+    if not s:
+        return ""
+    if s in _OFFER_TYPE_SYNONYMS:
+        return _OFFER_TYPE_SYNONYMS[s]
+    for phrase, canon in _OFFER_TYPE_SYNONYMS.items():
+        if phrase in s:
+            return canon
+    return str(value or "").strip()  # keep the operator's own words (no guess, no loop)
+
+
+# --- P1-B lifecycle segment (cold / warm / past / recurring) --------------------- #
+SEGMENTS: tuple[str, ...] = ("cold", "warm", "past", "recurring")
+_SEGMENT_SYNONYMS: dict[str, str] = {
+    "cold": "cold", "new": "cold", "brand new": "cold", "brand-new": "cold",
+    "prospect": "cold", "prospects": "cold", "never booked": "cold",
+    "warm": "warm", "hot": "warm", "interested": "warm", "inquired": "warm",
+    "enquired": "warm", "engaged": "warm", "lead": "warm", "leads": "warm",
+    "past": "past", "past client": "past", "past clients": "past", "lapsed": "past",
+    "former": "past", "old client": "past", "old clients": "past", "inactive": "past",
+    "recurring": "recurring", "regular": "recurring", "regulars": "recurring",
+    "repeat": "recurring", "loyal": "recurring", "returning": "recurring",
+}
+
+
+def _coerce_segment(value: Any) -> str:
+    s = str(value or "").strip().lower()
+    if not s:
+        return ""
+    if s in _SEGMENT_SYNONYMS:
+        return _SEGMENT_SYNONYMS[s]
+    for phrase, canon in _SEGMENT_SYNONYMS.items():
+        if phrase in s:
+            return canon
+    return str(value or "").strip()
+
+
+# --- P1-D research depth (light / standard / deep) ------------------------------- #
+RESEARCH_DEPTHS: tuple[str, ...] = ("light", "standard", "deep")
+_RESEARCH_DEPTH_SYNONYMS: dict[str, str] = {
+    "light": "light", "quick": "light", "basic": "light", "shallow": "light",
+    "minimal": "light", "a light look": "light",
+    "standard": "standard", "normal": "standard", "medium": "standard",
+    "default": "standard", "a standard pass": "standard",
+    "deep": "deep", "deep research": "deep", "thorough": "deep", "heavy": "deep",
+    "detailed": "deep", "full": "deep",
+}
+
+
+def _coerce_research_depth(value: Any) -> str:
+    s = str(value or "").strip().lower()
+    if not s:
+        return ""
+    if s in _RESEARCH_DEPTH_SYNONYMS:
+        return _RESEARCH_DEPTH_SYNONYMS[s]
+    for phrase, canon in _RESEARCH_DEPTH_SYNONYMS.items():
+        if phrase in s:
+            return canon
+    return str(value or "").strip()
+
+
 def _coerce_bool(value: Any, *, field: str) -> bool | None:
     if isinstance(value, bool):
         return value
@@ -495,6 +659,12 @@ def coerce_field(field: str, value: Any) -> Any:
     Unknown fields pass through as a stripped string."""
     if field == "lead_source":
         return _coerce_lead_source(value)
+    if field == "offer_type":
+        return _coerce_offer_type(value)
+    if field == "segment":
+        return _coerce_segment(value)
+    if field == "research_depth":
+        return _coerce_research_depth(value)
     if field in _BOOL_FIELDS:
         return _coerce_bool(value, field=field)
     if field in _INT_FIELDS:

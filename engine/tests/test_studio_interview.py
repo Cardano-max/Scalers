@@ -86,6 +86,16 @@ def test_optional_questions_follow_gating_then_stop() -> None:
     plan.scope = "whole studio"
     plan.use_conversation_history = True
     plan.attach_artwork = False
+    # P1-B/P1-D exec-discovery + enriched-spec optionals (also asked after the rest).
+    plan.offer_type = "booking"
+    plan.segment = "warm"
+    plan.no_convert_reason = "price felt steep"
+    plan.prior_contact = "no prior contact"
+    plan.brand_voice = "warm and plain-spoken"
+    plan.research_depth = "standard"
+    plan.personalization_rules = "style only"
+    plan.do_not_use = "no discounts"
+    plan.success_criteria = "5 bookings"
     assert next_question(plan) is None
 
 
@@ -196,3 +206,90 @@ def test_plan_summary_shared_message_does_not_claim_per_lead() -> None:
     create = next(ln["value"] for ln in plan_summary(plan)["lines"] if ln["label"] == "Create")
     assert "shared" in create.lower()
     assert "one per lead" not in create.lower()
+
+
+# --------------------------------------------------------------------------- #
+# P1-B — executive discovery questions (typed CTA + segment + why-no-convert +
+# prior-contact). All OPTIONAL (never break the gate) but the interview asks them
+# and they flow into the plan summary.
+# --------------------------------------------------------------------------- #
+_EXEC_FIELDS = ("offer_type", "segment", "no_convert_reason", "prior_contact")
+_SPEC_FIELDS = ("brand_voice", "research_depth", "personalization_rules",
+                "do_not_use", "success_criteria")
+
+
+def test_exec_and_spec_fields_are_asked_but_never_gate() -> None:
+    from studio.interview import GATING_FIELDS, INTERVIEW_FIELDS
+    # the new fields are part of the interview (asked) ...
+    for f in (*_EXEC_FIELDS, *_SPEC_FIELDS):
+        assert f in INTERVIEW_FIELDS, f
+    # ... but NONE of them gate the run (arming behavior preserved).
+    for f in (*_EXEC_FIELDS, *_SPEC_FIELDS):
+        assert f not in GATING_FIELDS, f
+    # a fully-gated plan is armed even with every new field unanswered
+    assert is_armed(_full_plan()) is True
+
+
+def test_offer_type_coercion_to_typed_menu() -> None:
+    assert coerce_field("offer_type", "book an appointment") == "booking"
+    assert coerce_field("offer_type", "consultation") == "consult"
+    assert coerce_field("offer_type", "flash sheet") == "flash"
+    assert coerce_field("offer_type", "a promo") == "discount"
+    assert coerce_field("offer_type", "touch up") == "touch-up"
+    assert coerce_field("offer_type", "spotlight") == "artist-spotlight"
+    # an unmapped answer is kept verbatim (honest, and does not loop re-asking)
+    assert coerce_field("offer_type", "mystery box") == "mystery box"
+
+
+def test_segment_coercion_to_lifecycle_buckets() -> None:
+    assert coerce_field("segment", "brand new") == "cold"
+    assert coerce_field("segment", "warm leads") == "warm"
+    assert coerce_field("segment", "past clients") == "past"
+    assert coerce_field("segment", "my regulars") == "recurring"
+
+
+def test_research_depth_coercion() -> None:
+    assert coerce_field("research_depth", "a light look") == "light"
+    assert coerce_field("research_depth", "standard pass") == "standard"
+    assert coerce_field("research_depth", "deep research") == "deep"
+
+
+def test_free_text_exec_fields_pass_through() -> None:
+    assert coerce_field("no_convert_reason", "  price felt steep ") == "price felt steep"
+    assert coerce_field("prior_contact", "we DMed last month") == "we DMed last month"
+    assert coerce_field("do_not_use", "no discounts, no emojis") == "no discounts, no emojis"
+
+
+def test_exec_and_spec_fields_appear_in_plan_summary() -> None:
+    plan = _full_plan()
+    apply_fields(plan, {
+        "offer_type": "book an appointment",
+        "segment": "warm",
+        "no_convert_reason": "price felt steep",
+        "prior_contact": "we DMed last month",
+        "brand_voice": "warm and plain-spoken, never salesy",
+        "research_depth": "deep",
+        "personalization_rules": "reference their style, not personal life",
+        "do_not_use": "no discounts",
+        "success_criteria": "5 bookings",
+    })
+    summary = plan_summary(plan)
+    flat = {ln["label"]: ln["value"] for ln in summary["lines"]}
+    assert flat.get("Segment") == "warm"
+    assert "book an appointment" in flat.get("The ask", "")
+    assert flat.get("Why they haven't booked") == "price felt steep"
+    assert flat.get("Prior contact") == "we DMed last month"
+    assert "warm and plain-spoken" in flat.get("Brand voice", "")
+    assert flat.get("Research depth") == "deep"
+    assert "reference their style" in flat.get("Personalization rules", "")
+    assert flat.get("Do NOT use") == "no discounts"
+    assert flat.get("Success looks like") == "5 bookings"
+
+
+def test_unanswered_spec_fields_are_absent_from_summary() -> None:
+    # HONESTY: a field the operator didn't answer does NOT appear (no fabricated spec).
+    summary = plan_summary(_full_plan())
+    labels = {ln["label"] for ln in summary["lines"]}
+    for absent in ("Segment", "Research depth", "Do NOT use", "Success looks like",
+                   "Personalization rules", "Why they haven't booked", "Prior contact"):
+        assert absent not in labels, absent

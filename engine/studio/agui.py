@@ -117,6 +117,27 @@ class CampaignPlan(BaseModel):
     # The offer / call-to-action the message drives toward (a booking link, a promo, or
     # "reply to book"). A gating field — a campaign with no ask is half a campaign.
     offer: str = ""
+    # --- P1-B (executive discovery) optional refinements (never gate a run) -------- #
+    # offer_type: a TYPED CTA menu (booking / consult / flash / discount / touch-up /
+    # artist-spotlight) — the structured counterpart to the free-text ``offer``.
+    # segment: which lifecycle bucket we're addressing (cold / warm / past / recurring).
+    # no_convert_reason: the operator's read on WHY these leads didn't book (free text).
+    # prior_contact: what prior contact / conversation there has been (free text).
+    offer_type: str = ""
+    segment: str = ""
+    no_convert_reason: str = ""
+    prior_contact: str = ""
+    # --- P1-D (enrich the confirmable spec) optional fields (never gate a run) ----- #
+    # brand_voice: how it should sound / brand-voice notes for THIS campaign.
+    # research_depth: how deep to research (light / standard / deep).
+    # personalization_rules: what personalization is OK (free text — honest guardrails).
+    # do_not_use: anything the drafts must NOT say / mention (free text).
+    # success_criteria: what would make this campaign a win (free text).
+    brand_voice: str = ""
+    research_depth: str = ""
+    personalization_rules: str = ""
+    do_not_use: str = ""
+    success_criteria: str = ""
     # per_lead: one personalized message per lead (True / default) vs one shared message
     # (False). personalize: tailor each message from the lead's history + profile (True /
     # default). Both surface in the plan summary; None = unanswered (sensible default).
@@ -339,6 +360,27 @@ def _customers_context(ctx: RunContext[StudioDeps]) -> str:
         f"- columns: {cols}",
         f"- ingested into the customer DB: {'yes' if c.get('ingested') else 'no (parsed only)'}",
     ]
+    # P1-A: the honest semantic read of the file — a natural summary (real counts) the
+    # supervisor should STATE to the operator, plus the column roles + any columns we
+    # could not map. HONESTY: this is a REAL profile of the uploaded rows; never invent a
+    # segment/objection/social count beyond it, and name unknown columns rather than guess.
+    summary = str(c.get("summary") or "").strip()
+    if summary:
+        lines.append(
+            "- semantic summary (REAL counts from the rows — say this back to the "
+            f"operator, verbatim numbers): {summary}"
+        )
+    profile = c.get("profile") or {}
+    roles = profile.get("column_roles") if isinstance(profile, dict) else None
+    if roles:
+        role_bits = ", ".join(f"{col} → {role}" for col, role in roles.items())
+        lines.append(f"- column roles I recognized: {role_bits}")
+    unknown = profile.get("unknown_columns") if isinstance(profile, dict) else None
+    if unknown:
+        lines.append(
+            "- columns I could NOT map (do not guess what they mean): "
+            + ", ".join(str(u) for u in unknown)
+        )
     sample = c.get("sample") or []
     if sample:
         lines.append("- sample rows (first few, verbatim from the file):")
@@ -2099,13 +2141,27 @@ def parse_customers_csv(content: str, filename: str = "upload.csv") -> dict[str,
             obj[key] = cell if cell is not None else ""
         return obj
 
+    # SEMANTIC PROFILE (P1-A): classify the columns into marketing roles and count the
+    # REAL segments / objections / social presence over ALL data rows, then attach an
+    # honest natural-language summary. Pure (no I/O) — see studio.csv_profiler. Never
+    # fabricates: absent dimensions are reported absent, unknown columns named.
+    from studio.csv_profiler import build_profile
+
+    all_objs = [_row_to_obj(r) for r in data]
+    profile = build_profile(header, all_objs)
+
     return {
         "ok": True,
         "filename": filename,
         "rows": len(data),
         "columns": header,
-        "sample": [_row_to_obj(r) for r in data[:5]],
+        "sample": all_objs[:5],
         "ingested": False,  # honesty: parsed only, not written to the customers table
+        # The honest semantic read of the file (roles, real counts, unknown columns) +
+        # the natural summary the supervisor states. Attached to the plan by the upload
+        # route and surfaced by `_customers_context`.
+        "profile": profile.as_dict(),
+        "summary": profile.summary_text,
     }
 
 
@@ -2555,6 +2611,10 @@ def mount_studio_agui(app) -> None:
                     "sample": list(result.get("sample") or []),
                     "ingested": bool(result.get("ingested")),
                     "customer_ids": cust_ids,
+                    # P1-A: the semantic profile + honest natural summary of the file, so
+                    # the supervisor can read back real counts (see `_customers_context`).
+                    "profile": dict(result.get("profile") or {}),
+                    "summary": result.get("summary") or "",
                 }
                 if result.get("rows"):
                     plan.lead_count = int(result["rows"])
