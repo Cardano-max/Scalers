@@ -156,6 +156,14 @@ def test_gate_flags_too_many_emoji():
     assert any("too many emoji" in v for v in check_caption("hi \U0001F338 \U0001F337", voice))
 
 
+def test_gate_catches_walk_in_flash_and_macho_framing():
+    voice = _voice()
+    assert any("framing" in v for v in check_caption("walk-in welcome, flash friday deals", voice))
+    assert any("framing" in v for v in check_caption("biker studio, macho energy", voice))
+    # A legit mention of flash ART must NOT trip the framing tripwire.
+    assert not any("framing" in v for v in check_caption("she loves fine-line flash art", voice))
+
+
 # --------------------------------------------------------------------------- #
 # Orchestration — staging via monkeypatched stores (no DB).
 # --------------------------------------------------------------------------- #

@@ -69,6 +69,9 @@ _HYPE_EMOJI = set("🔥💯✨👑🙌⚡️💥🚀")
 _DISCOUNT_RE = re.compile(r"\b(price|priced|pricing|discount|discounted|sale|deal|deals|coupon|promo|percent)\b|%|\$", re.I)
 _SCARCITY_RE = re.compile(r"\b(only\s+\d+|\d+\s+(spots?|slots?|left)|last\s+chance|hurry|limited\s+time|selling\s+fast|book\s+now\s+before)\b", re.I)
 _SUPERLATIVE_RE = re.compile(r"\b(best|#1|number\s+one|world[- ]class|the\s+finest|unbeatable|greatest)\b", re.I)
+# Walk-in / flash-day / macho-biker FRAMING (the pack bans these). Targeted so a legit
+# mention of "flash art" is not caught — only the banned framings are.
+_FRAMING_RE = re.compile(r"\bwalk[- ]?in\b|\bflash\s+(day|friday|pricing|deal|sale)\b|\b(biker|macho)\b", re.I)
 
 
 def _dsn(dsn: str | None = None) -> str:
@@ -216,6 +219,8 @@ def check_caption(text: str, voice: VoiceBundle) -> list[str]:
         violations.append("fabricated scarcity/urgency")
     if _SUPERLATIVE_RE.search(text):
         violations.append("superlative claim")
+    if _FRAMING_RE.search(text):
+        violations.append("walk-in/flash or macho framing")
     if "—" in text:  # em-dash — the pack bans em-dash-as-drama; avoid entirely
         violations.append("em-dash (AI-tell)")
     emoji_n = len(_EMOJI_RE.findall(text))
