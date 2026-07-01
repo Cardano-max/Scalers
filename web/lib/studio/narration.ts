@@ -36,7 +36,7 @@ function leadLabel(input: Record<string, unknown>): string {
 }
 
 // Per-lead roles whose narration carries an "X of N" progress tag when N is known.
-const PER_LEAD_ROLES = new Set(['researcher', 'draft', 'critic']);
+const PER_LEAD_ROLES = new Set(['researcher', 'analyst', 'draft', 'critic']);
 
 /** The REAL planned lead count for this run, read from the recorded steps (the
  *  strategist / jury record n_leads). 0 when none carries it, so "X of N" is dropped
@@ -64,6 +64,14 @@ export function narrationLine(step: RunStep, progress = ''): string {
     if (failed) return 'The strategist hit a snag setting the angle, so the team is drafting straight from your goal.';
     const angle = String(output.target_angle ?? output.angle ?? '').trim();
     return angle ? `The strategist set the campaign angle: “${angle}”.` : 'The strategist set the campaign angle for the team.';
+  }
+  if (role === 'analyst') {
+    const who = lead || 'this lead';
+    if (failed) return `Reading ${who}'s history${prog} hit a snag — continuing from what's on file.`;
+    const cat = String(output.umbrella_category ?? '').replace(/-/g, ' ').trim();
+    const obj = String(output.primary_objection ?? '').trim();
+    if (obj && obj !== 'none-found') return `Analyzing ${who}${prog} — ${cat ? `${cat}, ` : ''}reading their objection: ${obj}.`;
+    return `Analyzing ${who}${prog} — reading where they sit${cat ? `: ${cat}` : ''}.`;
   }
   if (role === 'researcher') {
     const who = lead || 'this lead';

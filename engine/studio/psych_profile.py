@@ -39,6 +39,7 @@ recorded as a real ``agent_run(role="analyst")`` so it shows in the lanes honest
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -152,6 +153,17 @@ class PsychProfile(_Camel):
 # --------------------------------------------------------------------------- #
 # Corpus + present-source computation (the anti-fabrication substrate).
 # --------------------------------------------------------------------------- #
+_NORM_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _norm(text: str) -> str:
+    """Normalize for the evidence-match: lowercase, collapse all non-alphanumeric runs
+    (punctuation + whitespace) to single spaces, strip. So a ``stated`` read's verbatim
+    quote survives trivial differences ("short on budget" vs "a bit short on budget,")
+    but a genuinely absent quote still fails the substring check. We normalize BOTH the
+    corpus and the evidence identically, keeping substring semantics — always erring
+    toward downgrade (insufficient-signal) over a fabricated read when uncertain."""
+    return _NORM_RE.sub(" ", (text or "").lower()).strip()
 def _facts_kv(facts: dict[str, Any]) -> list[str]:
     """The lead's real CRM facts as ``key=value`` tokens (so an ``inferred`` read that
     references a real field, and a ``stated`` read on a CSV value, can be corpus-checked).
@@ -189,7 +201,9 @@ def _build_corpus(
     parts.extend(_facts_kv(facts))
     if social:
         parts.append(str(social))
-    return "\n".join(parts).lower()
+    # Normalized (case/whitespace/punctuation-collapsed) so a verbatim quote matches
+    # despite trivial differences; the evidence is normalized identically at compare time.
+    return _norm("\n".join(parts))
 
 
 def _present_sources(
@@ -225,7 +239,7 @@ def _validate_field(field: PsychField, corpus: str, present: set[str]) -> PsychF
     if not field.value.strip():
         return PsychField.insufficient(field.evidence)
     if field.signal == STATED:
-        ev = (field.evidence or "").strip().lower()
+        ev = _norm(field.evidence)
         if ev and ev in corpus:
             return field
         return PsychField.insufficient("stated read failed corpus grounding; dropped")

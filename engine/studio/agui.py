@@ -663,7 +663,7 @@ def _lead_label(step: dict[str, Any]) -> str:
 
 # Per-lead roles whose narration carries an "X of N" progress tag when the planned
 # total N is genuinely known. Strategist / jury are one-shot and get no tag.
-_PER_LEAD_ROLES = ("researcher", "draft", "critic")
+_PER_LEAD_ROLES = ("researcher", "analyst", "draft", "critic")
 
 
 def _planned_lead_total(steps: list[dict[str, Any]]) -> int:
@@ -701,6 +701,15 @@ def _narration_line(step: dict[str, Any], progress: str = "") -> str:
         angle = str(out.get("target_angle") or out.get("angle") or "").strip()
         return f"The strategist set the campaign angle: “{angle}”." if angle else \
             "The strategist set the campaign angle for the team."
+    if role == "analyst":
+        who = lead or "this lead"
+        if failed:
+            return f"Reading {who}'s history{prog} hit a snag — continuing from what's on file."
+        cat = str(out.get("umbrella_category") or "").replace("-", " ").strip()
+        obj = str(out.get("primary_objection") or "").strip()
+        if obj and obj != "none-found":
+            return f"Analyzing {who}{prog} — {cat + ', ' if cat else ''}reading their objection: {obj}."
+        return f"Analyzing {who}{prog} — reading where they sit" + (f": {cat}." if cat else ".")
     if role == "researcher":
         who = lead or "this lead"
         if failed:
@@ -1262,7 +1271,8 @@ def _execute_provided_leads_sync(
             _rec(
                 "analyst", ("anthropic:claude-sonnet-4-6" if profile.source.endswith("llm")
                             else "grounded_rules"),
-                {"customer_id": cust_id, "had_conversation": profile.had_conversation},
+                {"customer_id": cust_id, "name": facts.get("name"),
+                 "had_conversation": profile.had_conversation},
                 {
                     "umbrella_category": profile.umbrella_category.value,
                     "primary_objection": (po.value if po.signal != "insufficient-signal" else "none-found"),

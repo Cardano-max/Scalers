@@ -108,6 +108,34 @@ def test_reactivation_category_from_lifecycle_only():
     assert "lifecycle" in prof.umbrella_category.evidence.lower()
 
 
+def test_evidence_match_is_normalized_but_still_rejects_absent_quotes():
+    """A verbatim quote survives trivial case/whitespace/punctuation differences; a quote
+    that is genuinely absent from the source is still downgraded (errs toward safe)."""
+    from studio.psych_profile import (
+        INFERRED,
+        PsychField,
+        SRC_CONVERSATION,
+        _validate_field,
+    )
+
+    corpus = "i like it but maybe later short on budget right now"  # normalized form
+    present = {SRC_CONVERSATION}
+    # Same words, different case + punctuation + spacing -> still grounded (survives).
+    ok = _validate_field(
+        PsychField(value="price", signal=STATED,
+                   evidence="  Short on BUDGET, right now!! ", evidence_source=SRC_CONVERSATION),
+        corpus, present,
+    )
+    assert ok.signal == STATED and ok.value == "price"
+    # A quote the customer never said -> downgraded, never a fabricated read.
+    bad = _validate_field(
+        PsychField(value="trust", signal=STATED,
+                   evidence="I don't trust this shop", evidence_source=SRC_CONVERSATION),
+        corpus, present,
+    )
+    assert bad.signal == INSUFFICIENT and bad.value == ""
+
+
 def test_trust_objection_routes_trust_level_low_grounded():
     conv = parse_conversation_text(
         "Customer: It's my first tattoo and I'm a bit nervous, can I see healed work? / "
