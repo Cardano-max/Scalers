@@ -11,18 +11,17 @@ draft's ``agent_run``, mapping the per-lead :class:`~studio.dossier.Dossier` to 
 
 The upgrade design (Part C) names re-authored skillpacks under ``engine/studio/skillpacks/``
 (``marketing_playbook``, ``research_ops``, ``growth_marketing_patterns``,
-``customer_psychology``). Per ``docs/skills/registry.md`` these packs DO carry
-``REGISTERED — IN USE`` rows (operator-approved 2026-07-01), BUT with two live caveats: their
-**eval-gate is PENDING** (no gold-set yet) and their **loaders are DORMANT**
-(``registered:false`` in each ``manifest.json`` — a separate belt-and-suspenders flag, distinct
-from the registry ROW status). The operator's rule is that a pack must clear the eval gold-set
-before its prose is used for PRODUCTION writing. So this selector, deliberately:
+``customer_psychology``). Per ``docs/skills/registry.md`` every one of these packs is still
+``IN-VETTING`` -- there is NO ``REGISTERED-IN-USE`` row for any of them (sec/eval/operator gates
+all PENDING), and their loaders are DORMANT (``registered:false`` in each ``manifest.json``).
+The HARD RULE is: a non-registered skill may not be loaded, executed, OR referenced by loading
+its prose. So this selector, deliberately:
 
   * does **NOT** import any pack ``loader.py`` (dormant), run any bundled script, or inject any
-    pack ``SKILL.md`` prose into a production model prompt (eval-pending);
+    pack ``SKILL.md`` prose into a production model prompt (IN-VETTING, eval-pending);
   * uses only **our own first-party** guidance/tone prose (authored here);
-  * records, per play, an honestly-labeled ``aligned_pack`` POINTER — the REGISTERED pack whose
-    domain the play maps to — flagged ``pack_status`` (eval-pending / loader-dormant / not
+  * records, per play, an honestly-labeled ``aligned_pack`` POINTER -- naming only the DOMAIN an
+    IN-VETTING pack would one day cover -- flagged ``pack_status`` (not loaded / prose not
     injected) so no one mistakes a routing label for injected pack content.
 
 Once a pack's eval gold-set is green, its vetted guidance can replace the first-party
@@ -39,10 +38,11 @@ from pydantic import BaseModel
 if TYPE_CHECKING:
     from studio.dossier import Dossier
 
-# Honest label attached to every selection: the aligned pack is REGISTERED but its eval-gate
-# is PENDING and its loader is DORMANT, so its prose is NOT injected into production drafts.
-_PACK_STATUS = ("aligned to a REGISTERED pack (eval-pending, loader dormant); "
-                "prose NOT injected — guidance is first-party")
+# Honest label attached to every selection: the aligned pack is still IN-VETTING (no
+# REGISTERED-IN-USE row), its loader is DORMANT and eval PENDING, so it is NOT loaded and its
+# prose is NOT injected into production drafts -- the guidance is entirely first-party.
+_PACK_STATUS = ("aligned domain pointer only: pack is IN-VETTING (eval-pending), not loaded; "
+                "prose not injected -- guidance is first-party")
 
 
 class SkillSelection(BaseModel):
@@ -51,8 +51,8 @@ class SkillSelection(BaseModel):
     ``skill_id`` — our first-party play id (recorded as the draft's ``skill_used``).
     ``why`` — the traceable reason, grounded in the dossier's real signals.
     ``guidance`` / ``tone`` — first-party prose shaping the angle/voice (no pack loaded).
-    ``aligned_pack`` — an honest pointer to the REGISTERED pack whose domain this play maps to
-    (eval-pending + loader dormant, so its prose is not injected); ``pack_status`` says so.
+    ``aligned_pack`` — an honest pointer naming the DOMAIN an IN-VETTING pack would cover
+    (not loaded, prose not injected -- so this is a label, not pack content); ``pack_status`` says so.
     ``angle_key`` — links back to the ``customer_research`` angle the draft already leads with."""
 
     skill_id: str

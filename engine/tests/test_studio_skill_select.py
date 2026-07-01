@@ -1,7 +1,7 @@
 """Per-lead SKILL selection (P2-B, CustomerAcq-65w.6): the dossier routes to the RIGHT
 first-party marketing play, deterministically, with an honest reason. The aligned pack is
-REGISTERED but eval-pending + loader-dormant, so no pack prose is injected — ``aligned_pack``
-is a labeled pointer only."""
+IN-VETTING (no REGISTERED-IN-USE row) + eval-pending + loader-dormant, so it is not loaded and
+no pack prose is injected -- ``aligned_pack`` is a labeled domain pointer only."""
 
 from __future__ import annotations
 
