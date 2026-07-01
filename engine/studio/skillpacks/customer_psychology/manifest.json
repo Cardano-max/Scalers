@@ -2,7 +2,7 @@
   "name": "customer-psychology",
   "version": "0.1.0-draft",
   "provenance": "ORIGINAL",
-  "pinned": "c15864bee7a4f0a8975bf179782b99e05ed15867",
+  "pinned": "ORIGINAL",
   "status": "IN-VETTING",
   "registered": false,
   "wraps": "engine/studio/psych_profile.py::analyze_customer",

@@ -6,7 +6,7 @@ description: Use when a run classifies a lead's psychology before drafting — d
   stated/inferred/insufficient-signal with a verbatim evidence span). Trigger words:
   psych, objection, readiness, where-customer-sits, lead classification, analyst.
 upstream: ORIGINAL — first-party (wraps engine/studio/psych_profile.py; no third-party code)
-pinned: c15864bee7a4f0a8975bf179782b99e05ed15867
+pinned: ORIGINAL
 license: first-party (internal)
 status: IN-VETTING — PENDING sec sign-off (NOT registered; live path still imports psych_profile.py directly)
 ---
@@ -36,9 +36,10 @@ imported directly by the provided-leads run (`studio/agui.py`). This scaffold is
 ## Provenance
 
 **First-party / ORIGINAL.** No third-party code is vendored — the pack wraps our own
-`psych_profile.py`. The `pinned:` field is the real trunk commit this scaffold was authored
-against (`c15864bee7a4f0a8975bf179782b99e05ed15867`), so the registry row's pin matches this
-`SKILL.md`. On any change to the wrapped analyst, sec re-vets and re-pins.
+`psych_profile.py`. There is NO upstream repo/commit to pin, so `pinned: ORIGINAL` (the
+first-party precedent set by `copywriter` / `reply`) — a fabricated 40-hex SHA would itself
+violate the no-fabrication gate. The registry row's pin is likewise `ORIGINAL`, matching this
+`SKILL.md`. On any change to the wrapped analyst, sec re-vets.
 
 ## What it wraps
 

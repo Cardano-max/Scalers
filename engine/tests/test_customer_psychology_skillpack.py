@@ -32,10 +32,13 @@ def test_pack_is_not_registered() -> None:
     assert man["status"] == "IN-VETTING"
 
 
-def test_manifest_pin_is_real_40hex_and_matches_skill_md() -> None:
+def test_pin_is_original_first_party_not_a_fabricated_sha() -> None:
+    # First-party pack: no upstream repo exists, so the pin is ORIGINAL (fabricating a
+    # 40-hex SHA would itself violate the no-fabrication gate). manifest + SKILL.md agree.
     man = loader.manifest()
-    pin = man["pinned"]
-    assert re.fullmatch(r"[0-9a-f]{40}", pin), f"pin is not a real 40-hex sha: {pin}"
+    assert man["pinned"] == "ORIGINAL"
     skill_md = (_PACK_DIR / "SKILL.md").read_text(encoding="utf-8")
-    m = re.search(r"^pinned:\s*([0-9a-f]{40})", skill_md, re.MULTILINE)
-    assert m and m.group(1) == pin  # registry/manifest/SKILL.md pin are consistent
+    m = re.search(r"^pinned:\s*(\S+)", skill_md, re.MULTILINE)
+    assert m and m.group(1) == "ORIGINAL"
+    # No fabricated 40-hex sha anywhere in the frontmatter.
+    assert not re.search(r"\b[0-9a-f]{40}\b", skill_md.split("---", 2)[1])

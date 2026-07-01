@@ -14,6 +14,13 @@ progressive-disclosure seam + carry the pack through vetting.
 
 The loader adds NOTHING to the analyst's behavior — it imports and returns the existing
 callable. All anti-fabrication guarantees remain in ``psych_profile.py``.
+
+DO NOT move this pack into ``engine/skills/`` (or ``skills/``) until it is REGISTERED — a
+HELD / IN-VETTING bundle discovered under a scanned SKILL_ROOT is a hard FAIL in
+``scripts/check_skill_registry.py`` and would trip the done-gate. It lives under
+``engine/studio/skillpacks/`` precisely so CI stays green while it is IN-VETTING. This
+loader is DORMANT: nothing on the live path imports it (``studio/agui.py`` calls
+``studio.psych_profile.analyze_customer`` DIRECTLY).
 """
 
 from __future__ import annotations
