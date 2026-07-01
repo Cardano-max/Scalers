@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from studio.agui import CampaignPlan
 from studio.voice import (
+    REALTIME_VOICE,
+    VOICE_INSTRUCTIONS,
     VOICE_TOOL_NAMES,
     VOICE_TOOLS,
     build_session_config,
@@ -78,6 +80,29 @@ def test_minted_session_declares_only_the_two_tools() -> None:
     assert [t["name"] for t in cfg["tools"]] == ["update_plan", "request_orchestration"]
     # input transcription enabled so the server receives the go-phrase utterance
     assert cfg["audio"]["input"]["transcription"]["model"]
+
+
+def test_default_voice_is_premium_male_not_marin() -> None:
+    """The pinned voice is a premium MALE Realtime voice (cedar), not the old
+    light/female 'marin'. The session config carries it through to the browser."""
+    assert REALTIME_VOICE == "cedar"
+    assert REALTIME_VOICE != "marin"
+    cfg = build_session_config()
+    assert cfg["audio"]["output"]["voice"] == "cedar"
+
+
+def test_persona_is_senior_executive_not_flight_attendant() -> None:
+    """Persona reads as a senior marketing-agency executive (confident/senior/calm),
+    NOT a light 'flight-attendant' greeter — while KEEPING the send-incapable guardrail."""
+    lower = VOICE_INSTRUCTIONS.lower()
+    assert "executive" in lower
+    assert "senior" in lower
+    assert "confident" in lower
+    # explicitly repudiates the old light register
+    assert "flight-attendant" in lower
+    # functional guardrails preserved
+    assert "cannot send or publish" in lower
+    assert "ears, mouth, and interviewer" in lower
 
 
 # --------------------------------------------------------------------------- #
