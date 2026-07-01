@@ -76,6 +76,15 @@ OPTIONAL: tuple[tuple[str, str], ...] = (
                    "campaign)"),
     ("drafts_only", "Should the team just write drafts, or stage them in your Review "
                     "Queue for approval? (drafts / stage)"),
+    # P1 (tattoo pivot) — refine WHO and HOW. All optional so they never block the run.
+    ("target_category", "Which kind of customer are we focusing on — new enquiries, a "
+                        "specific artist's leads, people who booked but haven't paid, "
+                        "regulars, or folks we haven't seen in a while? (or 'all')"),
+    ("scope", "How wide should this go — one artist, one shop, or the whole studio?"),
+    ("use_conversation_history", "Should the team read each person's past messages with "
+                                 "you to tailor the outreach? (yes/no)"),
+    ("attach_artwork", "Want us to match and attach the right artist's artwork to each "
+                       "message where it fits? (yes/no)"),
 )
 
 # Every field the interview is allowed to set on the plan.
@@ -92,7 +101,11 @@ READY_MESSAGE = (
 # Types the supervisor renders as yes/no chips and number/text inputs on the client.
 # ``per_lead`` is a two-way choice (personalized-per-lead vs one shared) coerced like a
 # bool: True = one personalized message per lead, False = one shared message.
-_BOOL_FIELDS = frozenset({"deep_research", "drafts_only", "personalize", "per_lead"})
+_BOOL_FIELDS = frozenset({
+    "deep_research", "drafts_only", "personalize", "per_lead",
+    # P1 tattoo-pivot yes/no refinements (optional; never gate).
+    "use_conversation_history", "attach_artwork",
+})
 _INT_FIELDS = frozenset({"output_count", "lead_count"})
 _LIST_FIELDS = frozenset({"channels"})
 

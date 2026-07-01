@@ -126,6 +126,15 @@ class CampaignPlan(BaseModel):
     # leads (uploaded CSV / existing DB), researched per-lead; "source_new" = find new
     # prospects on the web. Empty = not chosen yet. Drives the orchestration mode.
     lead_source: str = ""
+    # --- P1 (tattoo pivot) optional refinements (never gate a run) ---------------- #
+    # target_category: which customer cohort to focus on (new/artist-specific/unpaid/
+    # recurring/reactivation/all); scope: one artist / one shop / whole studio;
+    # use_conversation_history: read each lead's prior messages for the psych analyst;
+    # attach_artwork: match the right artist artwork where it fits (P4-gated capability).
+    target_category: str = ""
+    scope: str = ""
+    use_conversation_history: bool | None = None
+    attach_artwork: bool | None = None
     # Uploaded customer list — a REAL parse of the operator's CSV ({filename, rows,
     # columns, sample, ingested}). Persisted with the plan and surfaced to the
     # supervisor on every turn (see `_customers_context`) so it can truthfully say

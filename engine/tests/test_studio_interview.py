@@ -81,6 +81,11 @@ def test_optional_questions_follow_gating_then_stop() -> None:
     plan.action_type = "outreach"
     plan.lead_count = 25
     plan.drafts_only = False
+    # P1 tattoo-pivot optional refinements (also optional; asked after the rest).
+    plan.target_category = "all"
+    plan.scope = "whole studio"
+    plan.use_conversation_history = True
+    plan.attach_artwork = False
     assert next_question(plan) is None
 
 
