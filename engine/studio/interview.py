@@ -61,15 +61,50 @@ GATING: tuple[tuple[str, str], ...] = (
 
 # Asked after the gating set is complete — they refine the run but never block it.
 # Each has a sensible default so the operator can say "use your judgment" and move on.
+#
+# ORDER MATTERS (P1-C adaptive sequencing): the highest-value EXECUTIVE-DISCOVERY
+# questions come first so they fit inside the follow-up budget (``_MAX_FOLLOW_UPS``)
+# before the long-tail refinements. ``per_lead`` stays first (a fundamental choice that
+# also gates the personalization sub-questions). ``next_question`` walks this order but
+# SKIPS entries that are irrelevant to the answers so far (see ``_should_skip_optional``)
+# and STOPS once the follow-up budget is spent — so the interview probes like a senior
+# exec, not an interrogation. None of these gate a run.
 OPTIONAL: tuple[tuple[str, str], ...] = (
     ("per_lead", "Should each person get their own personalized message, or do you want "
                  "one shared message that goes to everyone? (personalized / shared)"),
     ("personalize", "Want me to use each person's history and social profiles to tailor "
                     "their message? (yes/no)"),
+    # --- P1-B: executive discovery questions (segmentation, typed CTA, why-no-convert,
+    #     prior contact). Asked EARLY (high signal) — but branch-aware: a "recurring"
+    #     segment skips the why-no-convert probe, brand-new prospects skip prior-contact.
+    ("segment", "Where are these folks in their journey with you — brand-new/cold, warm "
+                "(they've shown interest), past clients, or regulars?"),
+    ("offer_type", "What's the main thing you want them to do? "
+                   "(book an appointment, a free consult, grab a flash design, a "
+                   "discount, a touch-up, or spotlight one of your artists)"),
+    ("no_convert_reason", "Why do you think they haven't booked yet? "
+                          "(for example: price felt steep, bad timing, still deciding, "
+                          "or you're not sure)"),
+    ("prior_contact", "Have you spoken with these people before — and if so, roughly what "
+                      "was said? (or 'no prior contact')"),
     ("deep_research", "Should I dig into each lead with deeper web research first before "
                       "writing? (yes/no)"),
+    # --- P1-D: enrich the confirmable spec — brand voice, research depth, what's OK to
+    #     personalize on, what NOT to say, and what success looks like. -------------- #
+    ("brand_voice", "How should these sound — any brand-voice notes? "
+                    "(for example: warm and plain-spoken, a bit playful, never salesy) "
+                    "— or leave it to your usual voice"),
+    ("research_depth", "How much homework should the team do before writing — a light "
+                       "look, a standard pass, or deep research on each person? "
+                       "(light / standard / deep)"),
+    ("success_criteria", "What would make this campaign a win for you? "
+                         "(for example: 5 bookings, replies from regulars, filled Tuesdays)"),
     ("tone", "Any particular tone you'd like — warm, playful, professional? "
              "(or leave it to your brand voice)"),
+    ("personalization_rules", "Any rules for making it personal — what's fair game to "
+                              "mention, and what should stay off-limits?"),
+    ("do_not_use", "Anything we should absolutely NOT say or mention? "
+                   "(for example: no discounts, don't mention a specific artist, no emojis)"),
     ("action_type", "And what should the team actually produce — outreach messages, "
                     "social posts, replies, or comments?"),
     ("lead_count", "How many leads should we target? (put 0 if this isn't a leads "
@@ -85,39 +120,52 @@ OPTIONAL: tuple[tuple[str, str], ...] = (
                                  "you to tailor the outreach? (yes/no)"),
     ("attach_artwork", "Want us to match and attach the right artist's artwork to each "
                        "message where it fits? (yes/no)"),
-    # --- P1-B: executive discovery questions (typed CTA, segmentation, why-no-convert,
-    #     prior contact). All optional so they never block the run, but the interview
-    #     DOES ask them and the answers flow into the plan summary + the run. --------- #
-    ("offer_type", "What's the main thing you want them to do? "
-                   "(book an appointment, a free consult, grab a flash design, a "
-                   "discount, a touch-up, or spotlight one of your artists)"),
-    ("segment", "Where are these folks in their journey with you — brand-new/cold, warm "
-                "(they've shown interest), past clients, or regulars?"),
-    ("no_convert_reason", "Why do you think they haven't booked yet? "
-                          "(for example: price felt steep, bad timing, still deciding, "
-                          "or you're not sure)"),
-    ("prior_contact", "Have you spoken with these people before — and if so, roughly what "
-                      "was said? (or 'no prior contact')"),
-    # --- P1-D: enrich the confirmable spec — brand voice, research depth, what's OK to
-    #     personalize on, what NOT to say, and what success looks like. -------------- #
-    ("brand_voice", "How should these sound — any brand-voice notes? "
-                    "(for example: warm and plain-spoken, a bit playful, never salesy) "
-                    "— or leave it to your usual voice"),
-    ("research_depth", "How much homework should the team do before writing — a light "
-                       "look, a standard pass, or deep research on each person? "
-                       "(light / standard / deep)"),
-    ("personalization_rules", "Any rules for making it personal — what's fair game to "
-                              "mention, and what should stay off-limits?"),
-    ("do_not_use", "Anything we should absolutely NOT say or mention? "
-                   "(for example: no discounts, don't mention a specific artist, no emojis)"),
-    ("success_criteria", "What would make this campaign a win for you? "
-                         "(for example: 5 bookings, replies from regulars, filled Tuesdays)"),
 )
 
 # Every field the interview is allowed to set on the plan.
 INTERVIEW_FIELDS: tuple[str, ...] = tuple(f for f, _ in (*GATING, *OPTIONAL))
 
 GATING_FIELDS: tuple[str, ...] = tuple(f for f, _ in GATING)
+OPTIONAL_FIELDS: tuple[str, ...] = tuple(f for f, _ in OPTIONAL)
+
+# --------------------------------------------------------------------------- #
+# P1-C — adaptive follow-up sequencing. The follow-up (OPTIONAL) questions are
+# asked one at a time, BRANCHING on the answers so far: irrelevant questions are
+# skipped, and the whole exec-discovery pass is capped so it never interrogates.
+# GATING is never capped or skipped — the run gate stays deterministic.
+# --------------------------------------------------------------------------- #
+
+# Cap on how many OPTIONAL follow-ups the interview will ask (senior-exec discipline:
+# probe the few things that matter, then stop — ~5-7 exchanges, not an interrogation).
+# Counted against ANSWERED optional fields, so once this many are answered the interview
+# stops asking optionals (GATING questions are never subject to this cap).
+_MAX_FOLLOW_UPS = 7
+
+# A goal answer is "thin/vague" when every content word is a generic marketing platitude
+# ("more clients", "grow the business", "increase sales") — it carries no concrete target
+# for the team to aim at, so the exec asks ONE clarifying probe. A goal with any specific
+# word ("fill quiet Tuesdays", "win back lapsed clients", "new flash sheet") is NOT vague
+# and gets no probe. Detection is a closed word-set match — deterministic, no model.
+_GOAL_STOPWORDS: frozenset[str] = frozenset({
+    "a", "an", "the", "my", "our", "us", "to", "for", "of", "some", "please",
+    "just", "want", "wants", "wanting", "need", "needs", "would", "like", "i",
+    "we", "get", "getting", "got", "really", "simply", "and", "with", "on", "in",
+    "this", "that", "them", "me", "make", "making",
+})
+_GOAL_GENERIC: frozenset[str] = frozenset({
+    "more", "clients", "client", "customers", "customer", "business", "businesses",
+    "sales", "sale", "booking", "bookings", "leads", "lead", "people", "growth",
+    "grow", "growing", "marketing", "market", "promotion", "promote", "exposure",
+    "awareness", "new", "increase", "increasing", "boost", "boosting", "revenue",
+    "money", "traffic", "reach", "engagement", "results", "success", "attention",
+})
+
+_GOAL_PROBE = (
+    "Got it — can you get a little more specific about that? For instance, is it a "
+    "particular slow day you want to fill, a certain group of clients to win back, or "
+    "a promotion you want people to hear about? One concrete target helps the whole "
+    "team aim the campaign."
+)
 
 READY_MESSAGE = (
     "Great — I have everything I need. Here's the plan below. Have a quick look, and "
@@ -167,12 +215,115 @@ def is_armed(plan: Any) -> bool:
     return not missing_gating(plan)
 
 
-def next_question(plan: Any) -> dict[str, str] | None:
-    """The next question to ask: the first unanswered gating field, then the first
-    unanswered optional field, then ``None`` (nothing left to ask)."""
-    for f, q in (*GATING, *OPTIONAL):
+import re as _re
+
+
+def _is_vague_goal(goal: Any) -> bool:
+    """Whether a (present) goal answer is too thin to aim a campaign at — i.e. every
+    content word is a generic marketing platitude. Deterministic closed-set match, no
+    model. Callers must only apply this to a goal that is actually PRESENT; an empty
+    goal is 'unanswered' (gating asks it), not 'vague'."""
+    toks = _re.findall(r"[a-z']+", str(goal or "").lower())
+    content = [t for t in toks if t not in _GOAL_STOPWORDS]
+    if not content:
+        return True  # only filler words -> no concrete target
+    return all(t in _GOAL_GENERIC for t in content)
+
+
+# Lifecycle keywords used to INFER the segment when the operator stated it in the goal /
+# campaign type / target category rather than answering the segment question directly.
+_RECURRING_HINTS = ("regular", "recurring", "repeat", "loyal", "returning")
+_COLD_HINTS = ("brand new", "brand-new", "cold ", "cold-", "new prospect", "never booked")
+
+
+def _effective_segment(plan: Any) -> str:
+    """The lifecycle segment the campaign addresses (cold / warm / past / recurring / "")
+    — the explicit ``segment`` answer if given, else inferred from goal / campaign_type /
+    target_category text. Used only to SKIP irrelevant follow-ups; it never gates a run
+    and never fabricates a plan value (nothing is written back)."""
+    seg = (getattr(plan, "segment", "") or "").strip().lower()
+    if seg in SEGMENTS:
+        return seg
+    blob = " ".join(
+        str(getattr(plan, f, "") or "")
+        for f in ("segment", "campaign_type", "target_category", "goal", "audience")
+    ).lower()
+    if any(h in blob for h in _RECURRING_HINTS):
+        return "recurring"
+    if any(h in blob for h in _COLD_HINTS):
+        return "cold"
+    return ""
+
+
+def _is_source_new(plan: Any) -> bool:
+    return (getattr(plan, "lead_source", "") or "").strip().lower() == LEAD_SOURCE_NEW
+
+
+def _should_skip_optional(plan: Any, field: str) -> bool:
+    """Whether an (unanswered) OPTIONAL follow-up is IRRELEVANT given the answers so far,
+    so the interview branches past it instead of asking a question that makes no sense.
+    Purely a projection of the plan — it only suppresses a QUESTION; it never writes a
+    value, so arming and the plan summary stay honest (a skipped field stays unanswered)."""
+    segment = _effective_segment(plan)
+    source_new = _is_source_new(plan)
+    personalize_off = getattr(plan, "personalize", None) is False
+    per_lead_shared = getattr(plan, "per_lead", None) is False
+
+    # "Why didn't they book yet?" is nonsensical for your active regulars — they DO book.
+    if field == "no_convert_reason" and segment == "recurring":
+        return True
+    # Prior conversation history only exists for your OWN leads you've spoken with, not
+    # for brand-new online prospects you're about to source — and not for a cold segment.
+    if field in ("prior_contact", "use_conversation_history") and source_new:
+        return True
+    if field == "prior_contact" and segment == "cold":
+        return True
+    # Personalization sub-questions are moot once the operator opted OUT of personalizing
+    # (or chose one shared message for everyone).
+    if field in ("use_conversation_history", "personalization_rules") and personalize_off:
+        return True
+    if field == "personalization_rules" and per_lead_shared:
+        return True
+    return False
+
+
+def _answered_optional_count(plan: Any) -> int:
+    """How many OPTIONAL follow-ups have already been answered (spent budget)."""
+    return sum(1 for f in OPTIONAL_FIELDS if field_present(plan, f))
+
+
+def next_question(plan: Any) -> dict[str, Any] | None:
+    """The next question to ask — ADAPTIVE (P1-C). In order:
+
+    1. If the goal is answered but VAGUE, ask ONE clarifying probe before moving on
+       (``probe: True``). A specific goal skips this.
+    2. The first unanswered GATING field (this is what ARMS the run — unchanged,
+       deterministic; a vague goal still counts as answered and does not block).
+    3. The first unanswered OPTIONAL follow-up that is still RELEVANT to the answers so
+       far (irrelevant ones are skipped), UNTIL the follow-up budget is spent — then
+       ``None``. GATING is never skipped or capped.
+
+    Returns ``None`` when nothing is left to ask."""
+    # 1. Probe a thin/vague (but present) goal exactly enough to get a concrete target.
+    #    A specific goal is never probed, so a single clarification ends the probe.
+    if field_present(plan, "goal") and _is_vague_goal(getattr(plan, "goal", "")):
+        return {"field": "goal", "question": _GOAL_PROBE, "probe": True}
+
+    # 2. Gating walk — the deterministic arming set, always asked, never capped.
+    for f, q in GATING:
         if not field_present(plan, f):
             return {"field": f, "question": q}
+
+    # 3. Adaptive optional walk — skip irrelevant follow-ups; stop at the budget so the
+    #    interview probes like a senior exec instead of interrogating.
+    if _answered_optional_count(plan) >= _MAX_FOLLOW_UPS:
+        return None
+    for f, q in OPTIONAL:
+        if field_present(plan, f):
+            continue
+        if _should_skip_optional(plan, f):
+            continue
+        return {"field": f, "question": q}
     return None
 
 
