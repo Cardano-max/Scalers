@@ -51,7 +51,7 @@ describe('blueprint view helpers', () => {
       missing: [],
       leads_total: 4,
       leads_done: 2,
-      objections_resolved: ['price'],
+      objections_addressed: ['price'],
       contradictions: [],
       channels_complete: [],
     };

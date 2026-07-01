@@ -191,9 +191,9 @@ export function BlueprintBoardPanel({ blueprint, board }: BlueprintBoardPanelPro
                     Replan: {board.contradictions.join('; ')}
                   </div>
                 )}
-                {board.objections_resolved.length > 0 && (
+                {board.objections_addressed.length > 0 && (
                   <div style={{ fontSize: 12, color: '#46423B' }}>
-                    Objections measured: {board.objections_resolved.join(', ')}
+                    Objections addressed (HELD): {board.objections_addressed.join(', ')}
                   </div>
                 )}
                 {board.known.length > 0 && (

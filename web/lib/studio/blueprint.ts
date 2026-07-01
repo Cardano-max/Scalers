@@ -61,7 +61,10 @@ export interface ProgressBoard {
   missing: string[];
   leads_total: number;
   leads_done: number;
-  objections_resolved: string[];
+  // Objections the analyst measured for leads that produced a STAGED (HELD) draft.
+  // "addressed" not "resolved" — nothing sends in this slice, so an outcome would be a
+  // fabrication.
+  objections_addressed: string[];
   contradictions: string[];
   channels_complete: string[];
 }
