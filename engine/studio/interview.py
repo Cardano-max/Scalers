@@ -654,6 +654,75 @@ def _coerce_list(value: Any) -> list[str]:
     return [p.strip().lower() for p in parts if p.strip()]
 
 
+# --- Real outreach channels (zero-drafts fix) ------------------------------------ #
+# The channels answer is validated against this vocabulary so a NON-channel answer — an
+# offer/CTA like "reply to book your session", or a stray sentence — can never become a
+# bogus channel that leaks into the blueprint's per_channel_quota and makes the team
+# draft for a channel that does not exist (the operator's "0 drafts" symptom). A
+# free-text answer maps each token to a canonical channel and DROPS anything unrecognized
+# (never kept as a fake channel); a structured list from the UI channel picker is trusted
+# and passed through (only stripped). An empty result stays empty — the gate re-asks
+# rather than inventing a channel.
+CHANNELS: tuple[str, ...] = ("email", "instagram", "facebook", "sms")
+_CHANNEL_SYNONYMS: dict[str, str] = {
+    "email": "email", "emails": "email", "e-mail": "email", "mail": "email",
+    "gmail": "email", "newsletter": "email",
+    "instagram": "instagram", "insta": "instagram", "ig": "instagram",
+    "instagram dm": "instagram", "instagram dms": "instagram", "dm": "instagram",
+    "dms": "instagram",
+    "facebook": "facebook", "fb": "facebook", "messenger": "facebook",
+    "facebook messenger": "facebook", "fb messenger": "facebook",
+    "sms": "sms", "text": "sms", "texts": "sms", "text message": "sms",
+    "text messages": "sms", "texting": "sms", "phone": "sms",
+}
+# "a mix / all / both" -> a sane real spread rather than an unusable empty answer.
+_CHANNEL_MIX: frozenset[str] = frozenset({
+    "mix", "a mix", "a mix of those", "a mix of them", "all", "all of them",
+    "both", "mixture", "combination", "combo", "everything", "any", "any of them",
+})
+_DEFAULT_CHANNEL_SPREAD: tuple[str, ...] = ("email", "instagram")
+# Distinctive substrings used to classify a token that is not an exact synonym (so
+# "instagram dm" / "on facebook" still resolve). Short abbreviations (ig/fb/dm) are
+# NOT substring-matched — they misfire inside ordinary words.
+_CHANNEL_SUBSTR: tuple[str, ...] = (
+    "instagram", "facebook", "messenger", "newsletter", "email", "gmail", "sms", "text",
+)
+
+
+def _coerce_channels(value: Any) -> list[str]:
+    """Coerce the channels answer to a list of REAL canonical channels.
+
+    A structured list (the UI picker) is trusted and passed through stripped. Free text
+    is tokenized and each token mapped to a canonical channel via the synonym table;
+    anything unrecognized (an offer/CTA, a stray phrase) is DROPPED so it can never leak
+    into the blueprint as a fake channel. 'mix/all/both' expands to a sane real spread."""
+    if isinstance(value, (list, tuple)):
+        return [str(v).strip() for v in value if str(v).strip()]
+    import re
+
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return []
+    if raw in _CHANNEL_MIX:
+        return list(_DEFAULT_CHANNEL_SPREAD)
+    tokens = [
+        t.strip()
+        for t in re.split(r"[,;/]|\band\b|\bor\b", raw, flags=re.IGNORECASE)
+        if t.strip()
+    ]
+    out: list[str] = []
+    for tok in tokens:
+        canon = _CHANNEL_SYNONYMS.get(tok)
+        if canon is None:
+            for name in _CHANNEL_SUBSTR:
+                if name in tok:
+                    canon = _CHANNEL_SYNONYMS[name]
+                    break
+        if canon and canon not in out:
+            out.append(canon)
+    return out
+
+
 def coerce_field(field: str, value: Any) -> Any:
     """Coerce a raw interview answer into the typed value the plan field expects.
     Unknown fields pass through as a stripped string."""
@@ -665,6 +734,8 @@ def coerce_field(field: str, value: Any) -> Any:
         return _coerce_segment(value)
     if field == "research_depth":
         return _coerce_research_depth(value)
+    if field == "channels":
+        return _coerce_channels(value)
     if field in _BOOL_FIELDS:
         return _coerce_bool(value, field=field)
     if field in _INT_FIELDS:

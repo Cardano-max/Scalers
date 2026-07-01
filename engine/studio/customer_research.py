@@ -1330,7 +1330,12 @@ def upsert_lead(
     email = (row.get("email") or "").strip() or None
     name = (row.get("name") or "").strip() or None
     city, state = _split_location(row.get("location") or row.get("city"))
-    interests_raw = row.get("interests") or ""
+    # Accept the common SINGULAR header too ("interest") — a real uploaded CSV often uses
+    # it, and dropping that column left EVERY lead with no interest, collapsing the whole
+    # cohort onto the generic angle so drafts came out identical (the operator's "same
+    # generic result"). Reading the real column grounds each draft in the lead's own,
+    # distinct craft interest — real evidence from their CSV, never a fabricated one.
+    interests_raw = row.get("interests") or row.get("interest") or ""
     interests = [s.strip() for s in interests_raw.replace(",", ";").split(";") if s.strip()]
     linkedin = (row.get("linkedin") or "").strip() or None
     # Extended, adapter-normalized fields (ADR §4.6) — persisted so the ``notes`` angle

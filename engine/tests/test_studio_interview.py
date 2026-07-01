@@ -111,6 +111,21 @@ def test_coercion_of_answer_types() -> None:
     assert coerce_field("goal", "  fill Tuesdays  ") == "fill Tuesdays"
 
 
+def test_channels_coercion_validates_against_real_channels() -> None:
+    # A NON-channel answer — an offer/CTA mistakenly given at the channels question —
+    # is DROPPED, never kept as a bogus channel that would leak into per_channel_quota
+    # and make the team draft for a channel that does not exist (the "0 drafts" bug).
+    assert coerce_field("channels", "reply to book your session") == []
+    # Real free-text channels map to canonical channels.
+    assert coerce_field("channels", "text message") == ["sms"]
+    assert coerce_field("channels", "instagram or facebook") == ["instagram", "facebook"]
+    assert coerce_field("channels", "just email please") == ["email"]
+    # A "mix / all" answer expands to a sane real spread rather than an empty answer.
+    assert coerce_field("channels", "a mix of those") == ["email", "instagram"]
+    # A structured picker list is trusted and passed through (only stripped).
+    assert coerce_field("channels", ["sms", "email"]) == ["sms", "email"]
+
+
 def test_lead_source_coercion_to_two_canonical_modes() -> None:
     for provided in ("provided", "use my CSV", "database", "existing", "uploaded", "use my leads"):
         assert coerce_field("lead_source", provided) == "provided", provided
