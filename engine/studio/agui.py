@@ -1205,6 +1205,7 @@ def _execute_provided_leads_sync(
         _research_enabled,
         build_outreach_draft,
         churn_risk_leads,
+        conversation_leads,
         lookup_leads,
         research_studio,
     )
@@ -1258,8 +1259,16 @@ def _execute_provided_leads_sync(
         )
     else:
         limit = min(plan.lead_count or plan.output_count or 10, effective_cap)
-        leads = churn_risk_leads(tenant_id, limit=limit, dsn=dsn, memory_store=store)
-        source_note = f"existing-database win-back / lapsing cohort ({len(leads)})"
+        # Prefer the tenant's WARM leads — the customers that HAVE real conversation
+        # history (the whole point of the provided-leads pivot: per-lead psych analysis
+        # off their own chat, e.g. Sarah Kim's price-objection SMS). Fall back to the
+        # churn cohort ONLY when the tenant has no conversation leads.
+        leads = conversation_leads(tenant_id, limit=limit, dsn=dsn, memory_store=store)
+        if leads:
+            source_note = f"your warm leads with conversation history ({len(leads)})"
+        else:
+            leads = churn_risk_leads(tenant_id, limit=limit, dsn=dsn, memory_store=store)
+            source_note = f"existing-database win-back / lapsing cohort ({len(leads)})"
 
     goal = plan.goal or "win back lapsed clients"
     deep = _research_enabled(plan.deep_research)
@@ -2391,7 +2400,12 @@ def mount_studio_agui(app) -> None:
                     SimpleNamespace(run_id=run_id, status=p.get("status"))
                     for p in pending_actions
                 ]
-                board = board_for_run(run_id, None, steps, run_actions, plan_ctx).model_dump()
+                # Reflect the REAL run status on the board (board_for_run passes record=None,
+                # which would otherwise always read 'running' even for a completed run).
+                board_record = SimpleNamespace(status=status) if status else None
+                board = board_for_run(
+                    run_id, board_record, steps, run_actions, plan_ctx
+                ).model_dump()
             except Exception:
                 board = None
 

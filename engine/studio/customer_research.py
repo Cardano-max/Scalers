@@ -237,6 +237,40 @@ def churn_risk_leads(
     )
 
 
+def conversation_leads(
+    tenant_id: str, *, limit: int = 50, dsn: str | None = None,
+    memory_store: Any | None = None,
+) -> list[dict[str, Any]]:
+    """Grounded facts for the tenant's WARM leads — the customers that HAVE prior
+    conversation history (a row in ``lead_conversations``).
+
+    These are the operator's own warm leads and the whole point of the provided-leads
+    pivot: per-lead psychology analysis off their REAL chat (e.g. Sarah Kim's price-
+    objection SMS). Ordered by earliest conversation so the seeded cohort is stable.
+    Returns full grounded facts for each; empty when the tenant has no conversation leads
+    (the caller then falls back to the churn cohort). Best-effort — a store hiccup yields
+    ``[]`` rather than a crash."""
+    try:
+        with _connect(dsn) as conn:
+            rows = conn.execute(
+                """
+                SELECT customer_id, MIN(created_at) AS mc
+                FROM lead_conversations
+                WHERE tenant_id = %s
+                GROUP BY customer_id
+                ORDER BY mc
+                LIMIT %s
+                """,
+                (tenant_id, limit),
+            ).fetchall()
+    except Exception:
+        return []
+    ids = [r["customer_id"] for r in rows]
+    return lookup_leads(
+        tenant_id, [{"customer_id": i} for i in ids], dsn=dsn, memory_store=memory_store
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Personalized draft builder — grounded in REAL persona facts only
 # --------------------------------------------------------------------------- #
