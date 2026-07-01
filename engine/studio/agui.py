@@ -2629,6 +2629,19 @@ def mount_studio_agui(app) -> None:
             except Exception:
                 board = None
 
+            # CustomerAcq-6bv: the ONE real-state surface the voice supervisor answers
+            # from — the SAME ordered draft rows the frontend renders, so "draft #1", the
+            # count, and "did the strategist run" can never disagree between voice + FE.
+            # Credit-independent (DB only). Reads ALL of the run's draft actions (every
+            # status, full fields) so the count is truthful — not just the pending subset.
+            try:
+                from studio.campaign_state import campaign_state, describe_state
+
+                voice_state = campaign_state(run_id, dsn=dsn, run_status=runs_status)
+                voice_briefing = describe_state(voice_state)
+            except Exception:
+                voice_state, voice_briefing = None, None
+
             return {
                 "status": status,
                 "steps": steps,
@@ -2640,6 +2653,9 @@ def mount_studio_agui(app) -> None:
                 "blueprint": blueprint,
                 "board": board,
                 "error": reg.get("error") if reg else None,
+                # Real campaign state for the voice supervisor (draft #1, counts, agents).
+                "state": voice_state,
+                "voiceBriefing": voice_briefing,
             }
 
         data = await asyncio.to_thread(_load)
