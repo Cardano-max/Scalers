@@ -1,0 +1,18 @@
+{
+  "name": "marketing-playbook",
+  "version": "0.1.0-draft",
+  "provenance": "alirezarezvani/claude-skills :: marketing-skill (derivative, prompt-only)",
+  "pinned": "711ae3108832a98a0539101b46280de23bc0a1d4",
+  "status": "IN-VETTING",
+  "registered": false,
+  "source": "https://github.com/alirezarezvani/claude-skills/tree/711ae3108832a98a0539101b46280de23bc0a1d4/marketing-skill",
+  "entrypoint": "loader:load",
+  "capabilities": ["content-strategy", "demand-generation", "product-marketing", "positioning", "buyer-psychology"],
+  "loads_on": "run needs go-to-market craft (progressive disclosure)",
+  "prompt_only": true,
+  "network": false,
+  "filesystem": false,
+  "exec": false,
+  "stripped": ["~59 bundled per-skill Python scripts (brand_voice_analyzer.py, seo_optimizer.py, calculate_cac.py, schema_generator.py, ...)", "upstream CLAUDE.md run-scripts directive"],
+  "notes": "Prompt-only. No upstream code vendored or executed. Adds our hard anti-fabrication + anti-dark-pattern guardrail over the upstream psychology material. Not usable until docs/skills/registry.md carries its row; loader is DORMANT."
+}
