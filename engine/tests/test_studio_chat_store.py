@@ -43,8 +43,9 @@ def test_rejects_unknown_role() -> None:
     # P2 shipped (operator, host); P3.1 added the labeled brainstorm role cells;
     # P3.x added the wired traced-run roles surfaced from a run_campaign, plus the
     # 'thinking' role that persists the Host's REAL extended-thinking trace. P1 (tattoo
-    # pivot) added the per-lead 'analyst' (customer-psychology) role.
+    # pivot) added the per-lead 'analyst' (customer-psychology) role. P1.5 added the
+    # plan-first 'planner' role (the executable CampaignBlueprint + replan).
     assert set(VALID_ROLES) == {
         "operator", "host", "funnel_architect", "copywriter", "critic", "jury",
-        "researcher", "strategist", "draft", "thinking", "analyst",
+        "researcher", "strategist", "draft", "thinking", "analyst", "planner",
     }

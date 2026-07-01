@@ -530,17 +530,11 @@ def build_progress_context(tenant_id: str, plan: CampaignPlan, dsn: str | None) 
     # run status + the per-agent node spans). But a studio run materializes its runs
     # row only at the END, so an in-flight run shows up in ``actions`` first — if the
     # newest action points at a run that has NO runs row yet, surface that in-flight
-    # run instead of the previous (already-materialized) one.
-    record = runs[0] if runs else None
-    run_id = getattr(record, "run_id", None) if record is not None else None
-    latest_action_rid = next((a.run_id for a in actions_all if getattr(a, "run_id", None)), None)
-    if (
-        latest_action_rid
-        and latest_action_rid != run_id
-        and not any(getattr(r, "run_id", None) == latest_action_rid for r in runs)
-    ):
-        run_id = latest_action_rid
-        record = None  # in-flight: the runs row is not materialized yet
+    # run instead. Factored into ``progress_board.resolve_active_run`` so the durable
+    # board and this textual view share ONE run-resolution implementation.
+    from studio.progress_board import resolve_active_run
+
+    run_id, record = resolve_active_run(runs, actions_all)
 
     if not run_id:
         return (
@@ -1188,6 +1182,49 @@ def _execute_provided_leads_sync(
         m = getattr(cell, "model", None)
         return m if isinstance(m, str) else str(m)
 
+    # 1a) PLANNER — plan-first (P1.5 blueprint #1). BEFORE any drafting, decompose the
+    # interview INTENT into an EXECUTABLE blueprint (targets / per-channel quota / scope
+    # rules / offer-logic grounded in the real offers doc / research questions /
+    # compliance / stop-conditions). Routed to the BEST tier (Opus) for the angle
+    # refinement; the deterministic core needs no model. Recorded as the FIRST agent_run
+    # (so the war-room shows the plan step first) and PERSISTED, so the per-lead loop and
+    # the UI execute AGAINST it. Best-effort: a planner hiccup never breaks the run.
+    from studio import blueprint_store
+    from studio.campaign_blueprint import build_blueprint, offer_rule_for
+    from studio.progress_board import (
+        compute_board,
+        detect_contradiction,
+        dominant_measured_objection,
+    )
+    from studio.progress_board_store import upsert_board
+
+    blueprint = build_blueprint(
+        plan, tenant_id, dsn, run_id=run_id, campaign_id=campaign_id, session_id=session_id,
+    )
+    _rec(
+        "planner", blueprint.planner_model,
+        {"goal": blueprint.goal, "target_category": blueprint.targets.category,
+         "scope": blueprint.targets.scope, "channels": list(plan.channels or [])},
+        {
+            "targets": blueprint.targets.model_dump(),
+            "per_channel_quota": blueprint.per_channel_quota,
+            "offer_logic": [r.model_dump() for r in blueprint.offer_logic],
+            "assumed_dominant_objection": blueprint.assumed_dominant_objection,
+            "research_questions": blueprint.research_questions,
+            "stop_conditions": blueprint.stop_conditions.model_dump(),
+            "compliance_constraints": blueprint.compliance_constraints,
+            "angle": blueprint.angle,
+            "rationale": blueprint.planner_rationale,
+        },
+    )
+    try:
+        blueprint_store.upsert_blueprint(
+            run_id, blueprint.model_dump(), campaign_id=campaign_id, tenant_id=tenant_id,
+            session_id=session_id, planner_model=blueprint.planner_model, dsn=dsn,
+        )
+    except Exception:
+        pass
+
     # 1b) STRATEGIST runs ONCE for the campaign — the REAL strategy cell sets the angle
     # the per-lead drafts lead with, recorded as a real agent_run (so the Strategist
     # lane reads `done` with real lineage, not skipped). A cell hiccup records an honest
@@ -1222,7 +1259,13 @@ def _execute_provided_leads_sync(
     draft_goal = goal if not campaign_angle else f"{goal}. Lead with this campaign angle: {campaign_angle}"
 
     # 2) Per-lead: real DB history + research ABOUT this lead + brand-voiced draft.
+    # The blueprint's stop_conditions CAP the fan-out: draft at most the planned quota
+    # (0/unset = no cap, draft every resolved lead). This makes the plan load-bearing —
+    # the executor stops when the plan says stop, not on an ad-hoc constant.
+    quota_cap = blueprint.stop_conditions.total_quota or len(leads)
     for facts in leads:
+        if len(pending) >= quota_cap:
+            break  # stop_condition: per-run quota met (blueprint.stop_conditions)
         cust_id = facts["customer_id"]
         research = research_studio(facts, enabled=deep)  # real Firecrawl about THIS studio
         th = facts.get("tattoo_history", []) or []
@@ -1293,12 +1336,18 @@ def _execute_provided_leads_sync(
                 {"status": "failed", "error": f"{type(exc).__name__}: {exc}"},
             )
 
-        # Offer selection through the SUBSTANTIATION GATE: pick a real objection-matching
-        # offer, then substantiate its code before it can reach the draft. None -> the
-        # draft references NO discount (honest fallback), never an invented one.
-        chosen_offer = select_offer(offers, objection=objection_val, interest=interest_hint)
-        if chosen_offer is not None:
-            chosen_offer = substantiate(offers, chosen_offer.code)
+        # Offer selection DRIVEN BY the blueprint's offer_logic: the plan decides whether
+        # an offer is PERMITTED for this objection (each rule was grounded in the real
+        # offers doc at plan time). Only when the rule carries a real code do we
+        # interest-match the concrete offer and pass it through the SUBSTANTIATION GATE.
+        # No rule / no real offer -> the draft references NO discount, never an invented
+        # one. This makes the blueprint load-bearing (not a decorative artifact).
+        rule = offer_rule_for(blueprint, objection_val)
+        chosen_offer = None
+        if rule is not None and rule.offer_code:
+            chosen_offer = select_offer(offers, objection=objection_val, interest=interest_hint)
+            if chosen_offer is not None:
+                chosen_offer = substantiate(offers, chosen_offer.code)
 
         draft = build_outreach_draft(
             facts, goal=draft_goal, plan_channels=plan.channels or None,
@@ -1394,6 +1443,57 @@ def _execute_provided_leads_sync(
         except Exception:
             pass
 
+    # 2b) PROGRESS-AWARE REPLAN (P1.5 blueprint #3, limited-commitment — NOT reflect-every-
+    # step). After the loop has accumulated real evidence, compare the analyst's measured
+    # dominant objection against the blueprint's ASSUMPTION. Record a planner `replan`
+    # agent_run ONLY on a real, measured contradiction (majority of analyzed leads), never
+    # a decorative note. Already-staged HELD drafts are NOT re-drafted (exactly-once); the
+    # adjustment shifts the PERSISTED blueprint's assumption/angle for a next batch.
+    contradiction = detect_contradiction(blueprint, agent_runs)
+    contradictions: list[str] = []
+    if contradiction:
+        contradictions.append(contradiction)
+        measured = dominant_measured_objection(agent_runs)
+        _rec(
+            "planner", blueprint.planner_model,
+            {"phase": "replan", "assumed_dominant_objection": blueprint.assumed_dominant_objection},
+            {"replan": {
+                "contradiction": contradiction,
+                "measured_dominant_objection": measured,
+                "adjustment": (
+                    f"shift assumed dominant objection '{blueprint.assumed_dominant_objection}'"
+                    f" -> measured '{measured}' for the next batch; already-staged drafts"
+                    " unchanged (approve-first, exactly-once)"
+                ),
+            }},
+        )
+        if measured:
+            blueprint.assumed_dominant_objection = measured
+        try:
+            blueprint_store.upsert_blueprint(
+                run_id, blueprint.model_dump(), campaign_id=campaign_id, tenant_id=tenant_id,
+                session_id=session_id, planner_model=blueprint.planner_model, dsn=dsn,
+            )
+        except Exception:
+            pass
+
+    # 2c) Persist the durable PROGRESS BOARD snapshot (structured run-state the UI renders
+    # + the replan reads). Computed from the SAME real rows; a store hiccup never breaks
+    # the run.
+    try:
+        from actions.store import list_actions_for_run
+
+        run_actions_rows = list_actions_for_run(run_id, dsn=dsn)
+    except Exception:
+        run_actions_rows = []
+    board = compute_board(
+        run_id, None, agent_runs, run_actions_rows, plan, contradictions=contradictions,
+    )
+    try:
+        upsert_board(run_id, board.model_dump(), tenant_id=tenant_id, dsn=dsn)
+    except Exception:
+        pass
+
     # 3) A final jury summary over the per-lead drafts (offline aggregate, HELD).
     _rec(
         "jury", JURY_MODEL,
@@ -1442,7 +1542,13 @@ def _execute_provided_leads_sync(
         "n_pending": len(pending),
         "n_queued": len(pending),
         "channels": channels,
+        "blueprint": blueprint.model_dump(),
+        "board": board.model_dump(),
         "step_notes": [
+            f"planner built the executable blueprint first (target '{blueprint.targets.category}', "
+            f"quota {blueprint.stop_conditions.total_quota or 'uncapped'}, "
+            f"{sum(1 for r in blueprint.offer_logic if r.offer_code)} objection(s) with a real offer) "
+            f"[{blueprint.planner_model}]",
             f"lead_source=provided: targeting ONLY the operator's leads — {source_note}",
             f"analyst psych-analyzed {n_analysts} lead(s) per-lead (category + grounded objection, no fabrication)",
             f"strategist set the campaign angle once ({campaign_angle or 'recorded'})",
@@ -2148,6 +2254,28 @@ def mount_studio_agui(app) -> None:
                     if runs_status in ("completed", "success")
                     else ("running" if steps else "unknown")
                 )
+            # P1.5: the executable blueprint (the plan) + the durable progress board for
+            # this run, so the FE renders the planner step + live board. Both honest-null
+            # when a run predates P1.5 or the stores are unavailable (never fabricated).
+            blueprint = None
+            board = None
+            try:
+                from studio.blueprint_store import get_blueprint
+
+                bp = get_blueprint(run_id, dsn=dsn)
+                if bp:
+                    blueprint = bp.get("state")
+            except Exception:
+                blueprint = None
+            try:
+                from studio.progress_board_store import get_board
+
+                bd = get_board(run_id, dsn=dsn)
+                if bd:
+                    board = bd.get("state")
+            except Exception:
+                board = None
+
             return {
                 "status": status,
                 "steps": steps,
@@ -2156,6 +2284,8 @@ def mount_studio_agui(app) -> None:
                 "nPending": n_pending,
                 "pending": pending_actions,
                 "archetype": archetype,
+                "blueprint": blueprint,
+                "board": board,
                 "error": reg.get("error") if reg else None,
             }
 
