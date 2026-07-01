@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field
 
-from autonomy.decision import JudgeVote
+from autonomy.decision import DIMENSIONS, JudgeVote
 from autonomy.rubric import (
     EXPECTED_CATALOG_VERSION,
     HardFailCatalog,
@@ -179,7 +179,15 @@ def _to_vote(spec: JudgeSpec, score: JudgeScore, catalog: HardFailCatalog) -> tu
     """Map a judge's typed score to a vote, folding the resolved rubric CODES into
     per-dimension hard-fail floors and soft-cap score caps. Returns ``(vote,
     fail_safe, reason)`` — ``fail_safe`` (unknown code / version drift) forces REVIEW.
-    Per-dimension bools the judge set directly are OR'd with the code-derived ones."""
+    Per-dimension bools the judge set directly are OR'd with the code-derived ones.
+
+    **Fail CLOSED on a non-canonical hard-fail dimension.** A ``JudgeVote`` can only
+    carry the three CANONICAL hard-fail dimensions (``DIMENSIONS`` — voice/safety/appr).
+    A hard-fail the catalog resolves onto ANY other dimension (an unknown/non-canonical
+    rubric dim, e.g. a future ``compliance`` dim) has no field to land on, so honoring
+    it via the vote alone would silently DROP it — a fail-OPEN hole. Such a hard-fail is
+    escalated via the same ``fail_safe`` path as catalog drift (→ REVIEW), never ignored.
+    """
     res = resolve_codes(score.hard_fail_codes, catalog=catalog, judge_catalog_version=score.catalog_version)
     scores = {"voice": score.voice, "safety": score.safety, "appr": score.appr}
     for dim, cap in res.soft_cap.items():  # soft-cap caps the dimension's score
@@ -197,7 +205,18 @@ def _to_vote(spec: JudgeSpec, score: JudgeScore, catalog: HardFailCatalog) -> tu
         reliability_weight=DEFAULT_WEIGHT,
         judge_rationale=score.rationale,
     )
-    return vote, res.fail_safe, res.reason
+    # Any hard-fail dim that is NOT one the vote can carry must still force-escalate —
+    # driven off the resolved hard-fail set, not a hardcoded name allowlist, so a new
+    # hard-fail dim fails CLOSED (to REVIEW) instead of being dropped.
+    fail_safe, reason = res.fail_safe, res.reason
+    unmapped_hard_fail = res.hard_fail_dims - frozenset(DIMENSIONS)
+    if unmapped_hard_fail and not fail_safe:
+        fail_safe = True
+        reason = (
+            f"non-canonical hard-fail dimension(s) {sorted(unmapped_hard_fail)} "
+            "not representable on the vote — fail closed to REVIEW"
+        )
+    return vote, fail_safe, reason
 
 
 @dataclass(frozen=True)
