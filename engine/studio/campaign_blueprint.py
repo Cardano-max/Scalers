@@ -177,10 +177,27 @@ class _BlueprintEnrichment(BaseModel):
 # --------------------------------------------------------------------------- #
 # Deterministic decomposition helpers (pure — no model, no network).
 # --------------------------------------------------------------------------- #
+# Recognized outreach channels. The blueprint plans quota ONLY for these, so a
+# non-channel value (e.g. an offer/CTA that leaked into ``plan.channels``) can never
+# become a ``per_channel_quota`` key — the backstop to the interview's channel
+# validation, and the guard for older persisted plans built before that validation.
+_REAL_CHANNELS: frozenset[str] = frozenset({
+    "email", "gmail", "instagram", "ig", "facebook", "fb", "messenger", "sms", "text",
+})
+
+
 def _default_channels(plan_channels: list[str] | None) -> list[str]:
-    """The channels to plan quota for — the operator's chosen channels, else empty
-    (honest: a plan with no channel has no quota, and the summary says so)."""
-    return [c.strip() for c in (plan_channels or []) if c and c.strip()]
+    """The REAL channels to plan quota for. Keeps ONLY recognized outreach channels — so
+    a non-channel value (an offer/CTA leaked into ``plan.channels``) never becomes a
+    quota key and the team never drafts for a channel that does not exist — and defaults
+    to ``email`` when the operator named no real channel, so a plan ALWAYS drafts for a
+    real channel rather than a bogus one (the "0 drafts" fix)."""
+    real: list[str] = []
+    for c in (plan_channels or []):
+        s = (c or "").strip().lower()
+        if s and s in _REAL_CHANNELS and s not in real:
+            real.append(s)
+    return real or ["email"]
 
 
 def _distribute_quota(total: int, channels: list[str]) -> dict[str, int]:
@@ -325,6 +342,20 @@ def build_blueprint(
     total_quota = int(
         getattr(plan, "output_count", 0) or getattr(plan, "lead_count", 0) or 0
     )
+    # PROVIDED-LEADS: the uploaded list IS the cohort — the run drafts one message per
+    # uploaded lead. Size the quota to the REAL uploaded row count so the per-lead fan-out
+    # covers the whole list, never a smaller stated ``output_count`` that would clip it to
+    # a stale whole-studio guess (e.g. 3-of-10). Compose / no-upload runs keep output_count.
+    lead_source = (getattr(plan, "lead_source", "") or "").strip().lower()
+    if lead_source != "source_new":
+        try:
+            from studio.interview import real_lead_count
+
+            uploaded = real_lead_count(plan)
+        except Exception:
+            uploaded = 0
+        if uploaded:
+            total_quota = uploaded
     per_channel = _distribute_quota(total_quota, channels)
 
     targets = TargetCohort(

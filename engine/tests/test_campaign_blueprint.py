@@ -122,3 +122,35 @@ def test_blueprint_scope_rules_reflect_plan_scope(monkeypatch) -> None:
     assert any("exactly-once" in c.lower() for c in bp.compliance_constraints)
     # No channels quota when output_count is unset -> honest empty quota.
     assert bp.per_channel_quota == {}
+
+
+def test_offer_text_never_becomes_a_channel_quota_key(monkeypatch) -> None:
+    """The zero-drafts root cause: an offer/CTA leaked into ``plan.channels`` must NEVER
+    become a ``per_channel_quota`` key (the team then drafts for a bogus channel and makes
+    nothing). The planner keeps ONLY real channels and defaults to email when none remain,
+    so a plan always drafts for a real channel — and the offer/CTA stays out of channels."""
+    monkeypatch.setattr(offers_mod, "get_offers", lambda tid, dsn=None: [])
+    plan = CampaignPlan(
+        goal="win back", channels=["reply to book your session"], output_count=3,
+        offer="reply to book your session",
+    )
+    bp = build_blueprint(plan, "t", None, use_llm=False)
+    assert "reply to book your session" not in bp.per_channel_quota
+    assert bp.per_channel_quota == {"email": 3}
+    assert all(k in ("email", "instagram", "facebook", "sms", "gmail")
+               for k in bp.per_channel_quota)
+
+
+def test_provided_leads_quota_covers_whole_uploaded_list(monkeypatch) -> None:
+    """A provided-leads run drafts one message per uploaded lead: the blueprint quota is
+    sized to the REAL uploaded row count, never a smaller stated output_count that would
+    clip the fan-out to a stale whole-studio guess (the 3-of-10 bug)."""
+    monkeypatch.setattr(offers_mod, "get_offers", lambda tid, dsn=None: [])
+    plan = CampaignPlan(
+        goal="g", lead_source="provided", channels=["email"], output_count=3,
+        customers={"rows": 10, "customer_ids": [f"c{i}" for i in range(10)]},
+    )
+    bp = build_blueprint(plan, "t", None, use_llm=False)
+    assert bp.stop_conditions.total_quota == 10
+    assert bp.targets.estimated_size == 10
+    assert bp.per_channel_quota == {"email": 10}
