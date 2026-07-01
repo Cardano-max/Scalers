@@ -1,0 +1,18 @@
+{
+  "name": "research-ops",
+  "version": "0.1.0-draft",
+  "provenance": "alirezarezvani/claude-skills :: research-ops (derivative, prompt-only)",
+  "pinned": "a088c8ba778319fea026c8a25e9e98b15754f379",
+  "status": "IN-VETTING",
+  "registered": false,
+  "source": "https://github.com/alirezarezvani/claude-skills/tree/a088c8ba778319fea026c8a25e9e98b15754f379/research-ops",
+  "entrypoint": "loader:load",
+  "capabilities": ["market-sizing", "segmentation", "sample-size-planning", "product-research-synthesis"],
+  "loads_on": "run needs disciplined market/product research (progressive disclosure)",
+  "prompt_only": true,
+  "network": false,
+  "filesystem": false,
+  "exec": false,
+  "stripped": ["market_sizer.py", "sample_size_planner.py", "segmentation_scorer.py", "onboard.py", "config_loader.py", "ar_evaluator.py", "autoresearch bridge (opt-in)"],
+  "notes": "Prompt-only. No upstream code vendored or executed. Upstream anti-fabrication governance is strong and restated verbatim in intent. Not usable until docs/skills/registry.md carries its row; loader is DORMANT."
+}

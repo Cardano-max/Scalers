@@ -1,0 +1,18 @@
+{
+  "name": "growth-marketing-patterns",
+  "version": "0.1.0-draft",
+  "provenance": "coreyhaines31/marketingskills :: skills/ prompt content (derivative, prompt-only)",
+  "pinned": "8bfcdffb655f16e713940cd04fb08891899c47db",
+  "status": "IN-VETTING",
+  "registered": false,
+  "source": "https://github.com/coreyhaines31/marketingskills/tree/8bfcdffb655f16e713940cd04fb08891899c47db/skills",
+  "entrypoint": "loader:load",
+  "capabilities": ["cro", "pricing", "positioning", "copy-editing", "seo-structure", "retention"],
+  "loads_on": "run needs a growth/marketing pattern reference (progressive disclosure)",
+  "prompt_only": true,
+  "network": false,
+  "filesystem": false,
+  "exec": false,
+  "stripped": ["tools/ — 67 Node CLIs (env API tokens, data brokers apollo/zoominfo/hunter, real email send) — REJECTED", "ads/ad-creative google-ads.js (direct ad-account WRITE) — REJECTED", "validate-skills.sh", "validate-skills-official.sh", ".claude-plugin install tooling"],
+  "notes": "Prompt-only. Parent repo executables are REJECTED (standing sec verdict, not overturned). Only safe prose frameworks adopted. Not usable until docs/skills/registry.md carries its row; loader is DORMANT."
+}
