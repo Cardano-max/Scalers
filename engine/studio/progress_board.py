@@ -52,6 +52,12 @@ class ProgressBoard(BaseModel):
     objections_addressed: list[str] = Field(default_factory=list)
     contradictions: list[str] = Field(default_factory=list)
     channels_complete: list[str] = Field(default_factory=list)
+    # Output-count reconciliation (P2-D): expected vs drafted + a per-row skip ledger, so the
+    # UI can say "8 of 10 — rows 3,7 skipped: no email". Populated from the run's ledger
+    # (passed live) or derived from the jury agent_run's ``output_ledger`` (on-demand).
+    expected: int = 0
+    drafted: int = 0
+    skip_ledger: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class PlanDelta(BaseModel):
@@ -139,6 +145,7 @@ def compute_board(
     plan: Any,
     *,
     contradictions: list[str] | None = None,
+    ledger: dict[str, Any] | None = None,
 ) -> ProgressBoard:
     """Pure counting → a :class:`ProgressBoard`. No DB. Every field from a real row."""
     if not run_id:
@@ -216,6 +223,18 @@ def compute_board(
     if expected and leads_done < expected:
         missing.append(f"{expected - leads_done} draft(s) remaining to meet the quota.")
 
+    ledger = ledger or {}
+    expected_out = int(ledger.get("expected") or expected or leads_done)
+    skip_ledger = list(ledger.get("skipped") or [])
+    drafted_out = int(ledger.get("drafted") if ledger.get("drafted") is not None else leads_done)
+    if skip_ledger:
+        _rows = ", ".join(str(s["row"]) for s in skip_ledger if s.get("row"))
+        _reasons = "; ".join(sorted({str(s.get("reason")) for s in skip_ledger}))
+        missing.append(
+            f"{drafted_out} of {expected_out} drafted"
+            + (f"; rows {_rows}" if _rows else "") + f" skipped: {_reasons}"
+        )
+
     return ProgressBoard(
         run_id=run_id,
         run_status=_run_status(record),
@@ -226,6 +245,9 @@ def compute_board(
         objections_addressed=objections_addressed,
         contradictions=list(contradictions or []),
         channels_complete=channels_complete,
+        expected=expected_out,
+        drafted=drafted_out,
+        skip_ledger=skip_ledger,
     )
 
 
@@ -260,18 +282,35 @@ def compute_progress_board(tenant_id: str, plan: Any, dsn: str | None) -> Progre
     return compute_board(
         run_id, record, agent_runs, run_actions, plan,
         contradictions=_persisted_contradictions(agent_runs),
+        ledger=_persisted_ledger(agent_runs),
     )
+
+
+def _persisted_ledger(agent_runs: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The output-count ledger read back from the jury agent_run's ``output_ledger`` (a real
+    row) — so the on-demand board derives the ledger from the same durable source, never a
+    second store. ``None`` when no jury ledger was recorded (honest empty)."""
+    for ar in agent_runs:
+        if ar.get("role") != "jury":
+            continue
+        output = ar.get("output")
+        if isinstance(output, dict) and isinstance(output.get("output_ledger"), dict):
+            return output["output_ledger"]
+    return None
 
 
 def board_for_run(
     run_id: str, record: Any, agent_runs: list[dict[str, Any]], run_actions: list[Any],
-    plan: Any,
+    plan: Any, *, ledger: dict[str, Any] | None = None,
 ) -> ProgressBoard:
     """Compute a board for a SPECIFIC run from already-read rows (the run endpoint path,
-    which already loaded this run's agent_runs) — reuses the pure counting core."""
+    which already loaded this run's agent_runs) — reuses the pure counting core. ``ledger``
+    is passed live during a run (before the jury row exists); on-demand it is derived from
+    the jury agent_run instead."""
     return compute_board(
         run_id, record, agent_runs, run_actions, plan,
         contradictions=_persisted_contradictions(agent_runs),
+        ledger=ledger if ledger is not None else _persisted_ledger(agent_runs),
     )
 
 

@@ -1237,11 +1237,14 @@ def _execute_provided_leads_sync(
     Records per-lead ``researcher`` + ``draft`` ``agent_runs`` plus a final ``jury``
     summary and materializes a ``runs`` row, so the agency war-room renders it like any
     run and each staged draft deep-links to its exact Review-Queue row. NOTHING sends."""
+    import json as _json
     import uuid as _uuid
 
     from actions.store import ensure_schema, record_pending_action
     from memory import MemoryStore
     from studio.adapters.message_source import DbConversationSource
+    from studio.dossier import build_dossier
+    from studio.skill_select import select_skill
     from studio.campaign_runner import _materialize_runs_row, _summarize_output
     from studio.customer_research import (
         _research_enabled,
@@ -1288,13 +1291,33 @@ def _execute_provided_leads_sync(
     # 1) Resolve ONLY the operator's leads — uploaded CSV ids first, else DB cohort. The
     # cust-id list is capped to ``effective_cap`` BEFORE the DB lookup so a huge CSV never
     # fans out; the cohort limit is likewise bounded by the cap.
-    cust_ids = list((plan.customers or {}).get("customer_ids") or [])
+    # OUTPUT-COUNT RECONCILIATION (P2-D, 65w.8): every requested row is accounted for as
+    # either a staged draft or a SKIP with a concrete row-level reason — no silent
+    # undercount. ``skipped`` accrues {row, lead, reason}; ``expected`` is what the operator
+    # asked for; the ledger is reconciled + surfaced at the end.
+    skipped: list[dict[str, Any]] = []
+    requested_ids = list((plan.customers or {}).get("customer_ids") or [])
+    cust_ids = requested_ids
     if cust_ids:
         n_requested = len(cust_ids)
+        # Provided path: the operator handed us N leads and expects one draft per lead
+        # (AC: "10 leads = 10 drafts"). ``output_count`` is a cohort-sizing knob, not the
+        # provided-row count, so expected == the rows supplied — every row reconciles.
+        expected = int(n_requested)
+        # Rows beyond the hard cap are SKIPPED with a reason (not silently dropped).
+        for idx, cid in enumerate(cust_ids[effective_cap:], start=effective_cap + 1):
+            skipped.append({"row": idx, "lead": cid,
+                            "reason": f"beyond output cap of {effective_cap}"})
         cust_ids = cust_ids[:effective_cap]
         leads = lookup_leads(
             tenant_id, [{"customer_id": i} for i in cust_ids], dsn=dsn, memory_store=store
         )
+        # Requested rows that did not resolve to a real customer are SKIPPED with a reason.
+        resolved_ids = {f.get("customer_id") for f in leads}
+        for idx, cid in enumerate(cust_ids, start=1):
+            if cid not in resolved_ids:
+                skipped.append({"row": idx, "lead": cid,
+                                "reason": "not found in database (row did not match a customer)"})
         capped_note = f", capped to {effective_cap}" if n_requested > effective_cap else ""
         source_note = (
             f"uploaded CSV ({len(leads)} of {n_requested} rows resolved in DB{capped_note})"
@@ -1311,6 +1334,17 @@ def _execute_provided_leads_sync(
         else:
             leads = churn_risk_leads(tenant_id, limit=limit, dsn=dsn, memory_store=store)
             source_note = f"existing-database win-back / lapsing cohort ({len(leads)})"
+
+    # Cohort path: expected = the operator's count; a cohort short of that is an honest
+    # single skip row (never a silent undercount).
+    if not requested_ids:
+        expected = int(plan.output_count or plan.lead_count or len(leads))
+        if len(leads) < expected:
+            skipped.append({
+                "row": None, "lead": "cohort",
+                "reason": (f"cohort had only {len(leads)} lead(s) with signal; "
+                           f"{expected - len(leads)} short of requested {expected}"),
+            })
 
     goal = plan.goal or "win back lapsed clients"
     deep = _research_enabled(plan.deep_research)
@@ -1497,11 +1531,50 @@ def _execute_provided_leads_sync(
             if chosen_offer is not None:
                 chosen_offer = substantiate(offers, chosen_offer.code)
 
-        draft = build_outreach_draft(
-            facts, goal=draft_goal, plan_channels=plan.channels or None,
-            deep_research=plan.deep_research, research=research,
-            profile=profile, offer=chosen_offer,
+        _row = (requested_ids.index(cust_id) + 1) if cust_id in requested_ids else None
+        # NO-CONTACT skip (P2-D): a truly unreachable / empty row — no email, phone, social
+        # handle, OR even a name — cannot be drafted for, so skip it with a concrete reason
+        # rather than staging an undeliverable draft. (A lead with a name but no email still
+        # drafts: the existing path downgrades the channel and targets the handle/name — that
+        # is NOT an undercount, so it is not skipped here.)
+        if not (facts.get("email") or facts.get("phone") or facts.get("ig_handle")
+                or facts.get("name")):
+            skipped.append({"row": _row, "lead": cust_id,
+                            "reason": "no contact method (no email, phone, handle, or name)"})
+            continue
+
+        try:
+            draft = build_outreach_draft(
+                facts, goal=draft_goal, plan_channels=plan.channels or None,
+                deep_research=plan.deep_research, research=research,
+                profile=profile, offer=chosen_offer,
+            )
+        except Exception as exc:  # honest per-row skip; never a crash or a fake draft
+            skipped.append({"row": _row, "lead": facts.get("name") or cust_id,
+                            "reason": f"draft generation failed: {type(exc).__name__}"})
+            continue
+
+        # First-class per-lead DOSSIER (P2-C, 65w.7): assemble the evidence-linked record
+        # from the REAL facts already gathered (identity/contact, persona, the grounded
+        # objection, the chosen angle, the resolved CTA). Pure — no fabrication.
+        _cta_kind = ("booking-link" if any(g == "cta=booking-link"
+                     for g in draft.get("grounding", []))
+                     else "reply-based" if draft["channel"] in ("gmail", "email") else None)
+        dossier = build_dossier(
+            facts,
+            profile=profile,
+            angle={"label": draft.get("angle"), "key": draft.get("angle_key"),
+                   "generic": draft.get("generic"), "inferred": draft.get("inferred")},
+            offer=chosen_offer, research=research, channel=draft["channel"],
+            cta_kind=_cta_kind, evidence_used=draft.get("grounding", []), run_id=run_id,
         )
+        # SKILL SELECTION per lead (P2-B, 65w.6): route the dossier to the right first-party
+        # marketing play (objection-recovery / re-engagement / loyalty / warm-intro ...).
+        # Deterministic. The aligned skillpack IS registered but its eval-gate is PENDING and
+        # its loader is DORMANT, so NO pack is loaded/executed and NO pack prose is injected —
+        # only the first-party play is used. Recorded as ``skill_used`` evidence.
+        selection = select_skill(dossier)
+
         # TRUTHFUL model provenance: the real model the copy was written with, read from
         # the cell that ran (build_outreach_draft returns it) — never a hardcoded literal
         # that could drift from the copywriter cell's actual pin.
@@ -1518,6 +1591,13 @@ def _execute_provided_leads_sync(
                 "angle": draft.get("angle"), "angle_key": draft.get("angle_key"),
                 "why_different": draft.get("why_different"),
                 "generic": draft.get("generic"), "inferred": draft.get("inferred"),
+                # P2-B: the selected marketing skill/play + why (evidence, not a pack load).
+                "skill_used": selection.skill_id, "skill_why": selection.why,
+                "skill_tone": selection.tone, "skill_aligned_pack": selection.aligned_pack,
+                "skill_pack_status": selection.pack_status,
+                # P2-C: the full evidence-linked dossier this draft was written from.
+                "dossier": dossier.model_dump(),
+                "limited_personalization": dossier.limited_personalization,
             },
         )
 
@@ -1568,10 +1648,21 @@ def _execute_provided_leads_sync(
         # varying confidence (a generic draft the critic flags scores lower than a
         # well-grounded, approved one); None stays honest-unknown.
         draft_conf = _draft_quality_conf(crit_verdict, crit_confidence)
+        # LINK the staged draft to its dossier + selected skill (P2-B/-C): the Review-Queue
+        # row carries the evidence-linked dossier in ``context`` so the UI can deep-link from
+        # the draft to exactly what we knew about this lead and which play was chosen.
+        _context = _json.dumps({
+            "skill_used": selection.skill_id, "skill_why": selection.why,
+            "aligned_pack": selection.aligned_pack, "pack_status": selection.pack_status,
+            "limited_personalization": dossier.limited_personalization,
+            "personalization_note": dossier.personalization_note,
+            "dossier": dossier.model_dump(),
+        })
         action_id = record_pending_action(
             tenant_id=tenant_id, decision_id=None, type="outreach",
             channel=draft["channel"], worker="studio_provided_leads",
             target=draft["target"], draft=draft["draft"], subject=draft.get("subject"),
+            context=_context,
             conf=draft_conf, threshold=None, esc_kind="approval_required",
             esc_label="Provided-lead outreach — operator approval required",
             idempotency_key=f"{run_id}:{cust_id}", run_id=run_id, dsn=dsn,
@@ -1648,16 +1739,40 @@ def _execute_provided_leads_sync(
         run_actions_rows = list_actions_for_run(run_id, dsn=dsn)
     except Exception:
         run_actions_rows = []
-    board = board_for_run(run_id, None, agent_runs, run_actions_rows, plan)
+    # OUTPUT-COUNT LEDGER (P2-D, 65w.8): reconcile drafted vs expected with a per-row skip
+    # ledger — "8 of 10 — rows 3,7 skipped: no email address". Reconciled = every expected
+    # row is either drafted or has a concrete skip reason (no silent undercount).
+    try:
+        expected_n = int(expected)
+    except (NameError, TypeError, ValueError):
+        expected_n = len(pending) + len(skipped)
+    output_ledger = {
+        "expected": expected_n,
+        "drafted": len(pending),
+        "skipped": skipped,
+        "reconciled": (len(pending) + len(skipped)) >= expected_n,
+    }
 
-    # 3) A final jury summary over the per-lead drafts (offline aggregate, HELD).
+    board = board_for_run(
+        run_id, None, agent_runs, run_actions_rows, plan, ledger=output_ledger
+    )
+
+    # 3) A final jury summary over the per-lead drafts (offline aggregate, HELD). Carries
+    # the output-count ledger so the on-demand board can derive it from this real row too.
+    _skip_phrase = ""
+    if skipped:
+        _rows = ", ".join(str(s["row"]) for s in skipped if s.get("row"))
+        _reasons = "; ".join(sorted({str(s["reason"]) for s in skipped}))
+        _skip_phrase = (f"; {len(skipped)} skipped"
+                        + (f" (rows {_rows})" if _rows else "") + f": {_reasons}")
     _rec(
         "jury", JURY_MODEL,
         {"n_leads": len(leads), "lead_source": "provided"},
         {
             "aggregate": 1.0 if pending else 0.0, "decision": "review",
-            "note": (f"{len(pending)} per-lead draft(s) staged HELD from {source_note}; "
-                     "approve-first — nothing sent"),
+            "output_ledger": output_ledger,
+            "note": (f"{len(pending)} of {expected_n} per-lead draft(s) staged HELD from "
+                     f"{source_note}{_skip_phrase}; approve-first — nothing sent"),
         },
     )
 
@@ -1697,6 +1812,9 @@ def _execute_provided_leads_sync(
         "agent_runs": agent_runs,
         "n_pending": len(pending),
         "n_queued": len(pending),
+        # P2-D: the output-count reconciliation ledger (expected vs drafted + row-level
+        # skip reasons) so the UI can say "8 of 10 — rows 3,7 skipped: no email address".
+        "output_ledger": output_ledger,
         "channels": channels,
         "blueprint": blueprint.model_dump(),
         "board": board.model_dump(),
@@ -1712,6 +1830,9 @@ def _execute_provided_leads_sync(
             f"staged {len(pending)} brand-voiced draft(s) HELD (approve-first); nothing sent"
             + (f"; {n_offers} referenced a REAL substantiated offer" if n_offers else ""),
             f"critic ran {n_critics} independent pass(es) over the staged draft(s)",
+            f"output count: {len(pending)} of {expected_n} drafted" + (
+                _skip_phrase.replace("; ", "", 1) if _skip_phrase else " (all rows accounted for)"
+            ),
         ],
         "runs_row": runs_row,
     }
