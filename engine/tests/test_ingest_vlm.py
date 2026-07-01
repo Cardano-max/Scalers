@@ -68,8 +68,8 @@ def test_char_location_fact_is_grounded_with_span():
             [_char("warm, encouraging, unhurried tone", 40, 73, "playbook.md")],
         )
     ]
-    facts, dropped = facts_from_blocks(blocks, source_doc_id="vlmdoc_t_pb")
-    assert dropped == 0
+    facts, dropped, unverified = facts_from_blocks(blocks, source_doc_id="vlmdoc_t_pb")
+    assert dropped == 0 and unverified == 0
     assert len(facts) == 1
     f = facts[0]
     assert f.field == "brand_voice"
@@ -89,7 +89,7 @@ def test_tag_and_cited_span_may_be_split_across_blocks():
         _text("[audience] ", None),
         _text("Clients are women aged 24 to 45.\n", [_char("women aged 24 to 45", 90, 109)]),
     ]
-    facts, dropped = facts_from_blocks(blocks, source_doc_id="doc")
+    facts, dropped, _ = facts_from_blocks(blocks, source_doc_id="doc")
     assert dropped == 0
     assert [f.field for f in facts] == ["audience"]
     assert facts[0].citation.locus == "chars 90-109"
@@ -102,20 +102,59 @@ def test_uncited_claim_is_dropped_never_fabricated():
         _text("[claim] We are the best studio in the whole city.\n", None),
         _text("[offer] One free touch-up within six months.\n", [_char("free touch-up", 200, 213)]),
     ]
-    facts, dropped = facts_from_blocks(blocks, source_doc_id="doc")
+    facts, dropped, _ = facts_from_blocks(blocks, source_doc_id="doc")
     assert dropped == 1  # the uncited [claim] line
     assert [f.field for f in facts] == ["offer"]  # only the cited fact survives
 
 
 def test_none_marker_yields_no_facts_and_no_drops():
-    facts, dropped = facts_from_blocks([_text("NONE", None)], source_doc_id="doc")
-    assert facts == [] and dropped == 0
+    facts, dropped, unverified = facts_from_blocks([_text("NONE", None)], source_doc_id="doc")
+    assert facts == [] and dropped == 0 and unverified == 0
 
 
 def test_untagged_cited_line_defaults_to_fact_field():
     blocks = [_text("Single-needle botanical linework.\n", [_char("single-needle", 5, 18)])]
-    facts, _ = facts_from_blocks(blocks, source_doc_id="doc")
+    facts, *_ = facts_from_blocks(blocks, source_doc_id="doc")
     assert len(facts) == 1 and facts[0].field == "fact"
+
+
+# --------------------------------------------------------------------------- #
+# Belt-and-suspenders literal-match gate (only where we hold the source text).
+# --------------------------------------------------------------------------- #
+def test_cited_span_is_verified_literally_against_source():
+    source = "Our house style is delicate fine-line and floral blackwork."
+    blocks = [
+        _text(
+            "[visual_style] The style is fine-line floral blackwork.\n",
+            [_char("fine-line and floral blackwork", 27, 57)],
+        )
+    ]
+    facts, dropped, unverified = facts_from_blocks(blocks, source_doc_id="doc", source_text=source)
+    # cited_text is literally present in the source (normalized) -> kept.
+    assert unverified == 0 and dropped == 0
+    assert len(facts) == 1 and facts[0].field == "visual_style"
+
+
+def test_cited_span_absent_from_source_is_dropped_not_kept():
+    # The API attached a citation, but the cited_text is NOT in the source we sent.
+    # The belt-and-suspenders gate drops it rather than trusting the span blindly.
+    source = "Our house style is delicate fine-line and floral blackwork."
+    blocks = [
+        _text(
+            "[claim] The studio was founded in 1889 by royalty.\n",
+            [_char("founded in 1889 by royalty", 0, 26)],
+        )
+    ]
+    facts, dropped, unverified = facts_from_blocks(blocks, source_doc_id="doc", source_text=source)
+    assert facts == []  # not kept
+    assert unverified == 1 and dropped == 0
+
+
+def test_literal_match_gate_is_skipped_when_source_absent():
+    # PDF path: we don't hold the source text, so only the API grounding applies.
+    blocks = [_text("[claim] Anything the api cited.\n", [_char("anything", 0, 8)])]
+    facts, dropped, unverified = facts_from_blocks(blocks, source_doc_id="doc")
+    assert len(facts) == 1 and unverified == 0
 
 
 # --------------------------------------------------------------------------- #
@@ -123,14 +162,14 @@ def test_untagged_cited_line_defaults_to_fact_field():
 # --------------------------------------------------------------------------- #
 def test_page_location_single_page_locus():
     blocks = [_text("[service] Fine-line botanical work.\n", [_page("botanical", 3, 4)])]
-    facts, _ = facts_from_blocks(blocks, source_doc_id="doc")
+    facts, *_ = facts_from_blocks(blocks, source_doc_id="doc")
     assert facts[0].citation.kind == "page"
     assert facts[0].citation.locus == "p.3"  # end is exclusive -> single page 3
 
 
 def test_page_location_multi_page_locus():
     blocks = [_text("[positioning] Premium fine-line studio.\n", [_page("premium", 2, 4)])]
-    facts, _ = facts_from_blocks(blocks, source_doc_id="doc")
+    facts, *_ = facts_from_blocks(blocks, source_doc_id="doc")
     assert facts[0].citation.locus == "pp.2-3"
 
 
@@ -157,13 +196,18 @@ def test_media_type_detection():
     assert guess_media_type("a.bin") is None
 
 
-def test_unsupported_office_format_degrades_honestly():
+def test_unsupported_office_format_names_the_missing_converter():
+    # The degradation message must NAME the missing converter so the fast-follow is
+    # obvious (operator sends real offers docs as word/pdf/docx).
     with pytest.raises(NotConfiguredError) as ei:
         ingest_bytes("ladies8391", "artist_deck.pptx", b"PK\x03\x04fake")
-    assert "PowerPoint" in str(ei.value)
+    assert "PPTX unsupported" in str(ei.value) and "PPTX->pdf/text converter" in str(ei.value)
     with pytest.raises(NotConfiguredError) as ei2:
+        ingest_bytes("ladies8391", "offers.docx", b"PK\x03\x04fake")
+    assert "DOCX unsupported" in str(ei2.value) and "DOCX->pdf/text converter" in str(ei2.value)
+    with pytest.raises(NotConfiguredError) as ei3:
         ingest_bytes("ladies8391", "sheet.xlsx", b"PK\x03\x04fake")
-    assert "Excel" in str(ei2.value)
+    assert "XLSX unsupported" in str(ei3.value)
 
 
 def test_missing_key_degrades_before_any_network(monkeypatch):
@@ -192,6 +236,8 @@ def test_live_ingest_real_playbook_has_traceable_citations():
     result = ingest_vlm.ingest_file("ladies8391", PLAYBOOK)
 
     assert result.facts, "expected at least one grounded fact from the real playbook"
+    # Belt-and-suspenders literal-match gate passed for every kept fact.
+    assert result.dropped_unverified == 0
     for f in result.facts:
         assert f.signal == "cited"
         assert f.citation.kind == "char"

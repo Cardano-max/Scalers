@@ -18,6 +18,13 @@ locus — the locus comes from the API's own indexing of the source, not a numbe
 the model typed. This is the exact analogue of the offers substantiation gate
 (:mod:`studio.offers`): cited-or-it-does-not-exist.
 
+BELT-AND-SUSPENDERS on the text/markdown path (where we still hold the source we
+sent), a SECOND gate re-verifies each cited span is LITERALLY present in the source
+(normalized substring — the same evidence discipline as :mod:`studio.psych_profile`).
+A cited fact whose span can't be found in the source is DROPPED and counted in
+``dropped_unverified``, never kept. (PDF text lives server-side, so this gate is not
+applied there; the API citation is the sole grounding for the PDF path.)
+
 HONEST DEGRADATION
 ------------------
 If neither a model key nor a supported parser is available this module raises
@@ -190,6 +197,7 @@ class IngestResult:
     model: str
     facts: list[ExtractedFact] = field(default_factory=list)
     dropped_uncited: int = 0
+    dropped_unverified: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -199,6 +207,7 @@ class IngestResult:
             "model": self.model,
             "fact_count": len(self.facts),
             "dropped_uncited": self.dropped_uncited,
+            "dropped_unverified": self.dropped_unverified,
             "facts": [f.as_dict() for f in self.facts],
         }
 
@@ -314,6 +323,28 @@ def _is_none_marker(text: str) -> bool:
     return text.strip().upper() in _NONE_MARKERS
 
 
+# Evidence-match normalization, identical to studio.psych_profile._norm: lowercase +
+# collapse every non-alphanumeric run (punctuation/whitespace) to a single space, then
+# strip. Applied to BOTH the source and the cited span so a real quote survives trivial
+# formatting differences, but a quote that is genuinely absent still fails the substring
+# check — always erring toward DROP over a fabricated fact.
+_NORM_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _norm(text: str) -> str:
+    return _NORM_RE.sub(" ", (text or "").lower()).strip()
+
+
+def _cited_in_source(cited_text: str, source_text: str) -> bool:
+    """Belt-and-suspenders literal-match gate (same discipline as psych_profile's
+    evidence check): the normalized cited span must be a substring of the normalized
+    source. An empty cited span cannot be verified, so it fails closed."""
+    needle = _norm(cited_text)
+    if not needle:
+        return False
+    return needle in _norm(source_text)
+
+
 def _citation_from(cit: Any, source_doc_id: str, document_title: str | None) -> Citation:
     """Build a :class:`Citation` from an Anthropic citation object/dict.
 
@@ -343,16 +374,26 @@ def facts_from_blocks(
     *,
     source_doc_id: str,
     document_title: str | None = None,
-) -> tuple[list[ExtractedFact], int]:
+    source_text: str | None = None,
+) -> tuple[list[ExtractedFact], int, int]:
     """PURE core: turn Anthropic response content blocks into grounded facts.
 
     A fact is emitted for a line ONLY when a real citation span overlaps that line
     (cited-or-it-does-not-exist). Robust to how the API chunks text into cited and
     connective blocks: the text is reconstructed by concatenation, citations are
     mapped to their char span in that concatenation, and lines are matched against
-    overlapping citation spans. Returns ``(facts, dropped_uncited)`` where
-    ``dropped_uncited`` counts substantive claim lines that had NO citation and were
-    therefore dropped."""
+    overlapping citation spans.
+
+    When ``source_text`` is supplied (the text/markdown path — we hold the source we
+    sent), a SECOND gate applies on top of the API grounding: the cited span must be
+    literally present in the source (normalized substring, :func:`_cited_in_source`).
+    A cited fact whose span can't be verified against the source is DROPPED, not kept
+    — belt-and-suspenders over the API's own citation, matching the evidence discipline
+    in :mod:`studio.psych_profile`.
+
+    Returns ``(facts, dropped_uncited, dropped_unverified)``: ``dropped_uncited``
+    counts substantive claim lines that had NO citation; ``dropped_unverified`` counts
+    cited lines whose span failed the literal-match gate."""
     # 1. Reconstruct the full text and remember each text segment's char span +
     #    its citations, so a citation can be located within the concatenated text.
     full = ""
@@ -367,7 +408,8 @@ def facts_from_blocks(
         seg_spans.append((start, start + len(t), list(cites)))
 
     facts: list[ExtractedFact] = []
-    dropped = 0
+    dropped_uncited = 0
+    dropped_unverified = 0
 
     # 2. Walk logical lines; attach citations whose segment overlaps the line.
     pos = 0
@@ -385,13 +427,19 @@ def facts_from_blocks(
 
         tag, rest = _split_tag(stripped)
         value = rest.strip()
-        if line_cites:
-            cit = _citation_from(line_cites[0], source_doc_id, document_title)
-            facts.append(ExtractedFact(field=tag or "fact", value=value or stripped, citation=cit))
-        elif tag or len(stripped) > 8:
-            # A substantive claim with no citation span — dropped, never emitted.
-            dropped += 1
-    return facts, dropped
+        if not line_cites:
+            if tag or len(stripped) > 8:
+                # A substantive claim with no citation span — dropped, never emitted.
+                dropped_uncited += 1
+            continue
+
+        cit = _citation_from(line_cites[0], source_doc_id, document_title)
+        # Belt-and-suspenders literal-match gate (only where we hold the source text).
+        if source_text is not None and not _cited_in_source(cit.cited_text, source_text):
+            dropped_unverified += 1
+            continue
+        facts.append(ExtractedFact(field=tag or "fact", value=value or stripped, citation=cit))
+    return facts, dropped_uncited, dropped_unverified
 
 
 def facts_from_image_blocks(blocks: Any, *, source_doc_id: str) -> list[ExtractedFact]:
@@ -497,11 +545,14 @@ def ingest_bytes(
         ext = Path(name or "").suffix.lower()
         family = _NEEDS_CONVERTER.get(ext)
         if family:
+            fmt = ext.lstrip(".").upper()  # e.g. DOCX
             raise NotConfiguredError(
-                f"{name!r} is a {family} file; no converter is configured, so it "
-                "cannot be parsed natively. Convert it to PDF or plain text first "
+                f"{fmt} unsupported: no {fmt}->pdf/text converter is configured "
+                f"(file {name!r}, {family}). Convert it to PDF or plain text first "
                 "(tabular data belongs in the CSV path of studio.documents). "
-                "Extraction is never fabricated from an unparsed format."
+                "Extraction is never fabricated from an unparsed format. "
+                "FOLLOW-UP: operator sends real offers docs as word/pdf/docx — a "
+                f"{fmt}->text converter is a fast-follow, not part of this slice."
             )
         raise NotConfiguredError(
             f"no parser configured for {name!r} (media_type={media_type!r}). "
@@ -522,18 +573,29 @@ def ingest_bytes(
     )
     blocks = _attr(message, "content", []) or []
 
+    dropped_uncited = 0
+    dropped_unverified = 0
     if source_kind == "image":
         facts = facts_from_image_blocks(blocks, source_doc_id=doc_id)
-        dropped = 0
     else:
-        facts, dropped = facts_from_blocks(blocks, source_doc_id=doc_id, document_title=name)
+        # We hold the source text only for the text/markdown path — pass it so the
+        # literal-match gate runs there; PDF text lives server-side, so source_text=None.
+        source_text = (
+            data.decode("utf-8")
+            if source_kind == "text" and isinstance(data, (bytes, bytearray))
+            else (str(data) if source_kind == "text" else None)
+        )
+        facts, dropped_uncited, dropped_unverified = facts_from_blocks(
+            blocks, source_doc_id=doc_id, document_title=name, source_text=source_text
+        )
     return IngestResult(
         tenant_id=tenant_id,
         source_doc_id=doc_id,
         source_kind=source_kind,
         model=model,
         facts=facts,
-        dropped_uncited=dropped,
+        dropped_uncited=dropped_uncited,
+        dropped_unverified=dropped_unverified,
     )
 
 
