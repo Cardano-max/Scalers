@@ -113,6 +113,10 @@ def _wire(monkeypatch, *, strat_exc=None, crit_exc=None):
             "subject": "We miss you", "draft": "Come back for a fresh piece.",
             "grounding": ["name=" + facts["name"], "copy=copywriter_email_cell"],
             "customer_id": facts["customer_id"],
+            # The REAL model the cell wrote with — the run must record THIS verbatim,
+            # never a hardcoded literal. Deliberately Opus here to catch a stale
+            # 'sonnet' literal (model-TRUTH regression).
+            "copy_model": "anthropic:claude-opus-4-8",
         }
 
     monkeypatch.setattr(cr, "build_outreach_draft", _fake_draft)
@@ -155,6 +159,93 @@ def test_provided_leads_records_strategist_once_and_critic_per_draft(monkeypatch
     assert "queued" not in statuses.values()
     for role in ("strategist", "draft", "critic", "jury"):
         assert statuses[role] == AGENT_STATUS_DONE, role
+
+
+def test_huge_csv_is_capped_never_fans_out(monkeypatch):
+    # BLOCKER 2: a 5000-row uploaded CSV must NOT fan out 5000×(analyst+draft+critic).
+    # The blueprint's hard cap bounds it: at most _OUTPUT_HARD_CAP staged actions.
+    from archetypes.compose import _OUTPUT_HARD_CAP
+
+    _wire(monkeypatch)
+    plan = CampaignPlan(
+        lead_source="provided", goal="win back lapsed clients", channels=["gmail"],
+        customers={"customer_ids": [f"c{i}" for i in range(5000)], "rows": 5000},
+    )
+    summary = _execute_provided_leads_sync(plan, "sess1", "ladies8391", None, None)
+    roles = _roles(summary)
+    assert roles.count("draft") <= _OUTPUT_HARD_CAP
+    assert roles.count("analyst") <= _OUTPUT_HARD_CAP
+    assert summary["n_pending"] <= _OUTPUT_HARD_CAP
+    # The plan step is still the FIRST recorded agent_run.
+    assert roles[0] == "planner"
+
+
+def test_planner_is_recorded_first_with_the_full_blueprint(monkeypatch):
+    # HIGH 7: the planner lane — a role='planner' agent_run BEFORE any other role, whose
+    # output carries the full executable blueprint (the durable source of truth).
+    _wire(monkeypatch)
+    summary = _execute_provided_leads_sync(_plan(), "sess1", "ladies8391", None, None)
+    ars = summary["agent_runs"]
+    assert ars[0]["role"] == "planner"
+    assert ars[0]["output"]["blueprint"]["goal"]
+    # No analyst/draft/critic precedes the planner.
+    first_non_planner = next(i for i, ar in enumerate(ars) if ar["role"] != "planner")
+    assert all(ars[i]["role"] == "planner" for i in range(first_non_planner))
+
+
+def _fake_profile(objection: str):
+    from types import SimpleNamespace as NS
+
+    def field(v, s):
+        return NS(value=v, signal=s, evidence="the customer said so", evidence_source="conversation")
+
+    return NS(
+        primary_objection=field(objection, "stated"),
+        umbrella_category=field("past-customer-reactivation", "inferred"),
+        readiness_stage=field("preference", "inferred"),
+        source="deterministic", had_conversation=True,
+        where_customer_sits="considering", best_reengagement_angle="warm win-back",
+        grounded_fields=3, insufficient_fields=1,
+    )
+
+
+def test_measured_contradiction_records_a_deterministic_replan_and_flips_the_assumption(monkeypatch):
+    # B: the reactivation cohort ASSUMES 'price', but every analyst measures 'trust' ->
+    # maybe_replan fires ONCE, recorded as a planner replan agent_run with a DETERMINISTIC
+    # id, and the in-memory blueprint's assumption flips. No decorative note.
+    import studio.psych_profile as psych
+
+    _wire(monkeypatch)
+    monkeypatch.setattr(psych, "analyze_customer", lambda facts, thread=None, **k: _fake_profile("trust"))
+    plan = CampaignPlan(
+        lead_source="provided", goal="win back lapsed clients", channels=["gmail"],
+        target_category="past-customer-reactivation",
+        customers={"customer_ids": ["c1", "c2"], "rows": 2},
+    )
+    summary = _execute_provided_leads_sync(plan, "sess1", "ladies8391", None, None)
+
+    replans = [
+        ar for ar in summary["agent_runs"]
+        if ar["role"] == "planner" and isinstance(ar["output"], dict) and ar["output"].get("replan")
+    ]
+    assert len(replans) == 1
+    rp = replans[0]["output"]["replan"]
+    assert rp["from_objection"] == "price" and rp["to_objection"] == "trust"
+    # The plan the summary returns has the flipped assumption + the board shows it.
+    assert summary["blueprint"]["assumed_dominant_objection"] == "trust"
+    assert summary["board"]["contradictions"]  # non-empty (the measured contradiction)
+
+
+def test_draft_agent_run_records_the_cells_real_model_not_a_literal(monkeypatch):
+    # model-TRUTH: the draft agent_run.model must be the model the cell actually wrote
+    # with (build_outreach_draft returns copy_model), never a hardcoded literal. The fake
+    # cell writes with Opus; a stale 'sonnet' literal would fail this.
+    _wire(monkeypatch)
+    summary = _execute_provided_leads_sync(_plan(), "sess1", "ladies8391", None, None)
+    drafts = [ar for ar in summary["agent_runs"] if ar["role"] == "draft"]
+    assert drafts, "no draft recorded"
+    for d in drafts:
+        assert d["model"] == "anthropic:claude-opus-4-8", d["model"]
 
 
 def test_strategist_angle_is_threaded_into_the_draft_goal(monkeypatch):

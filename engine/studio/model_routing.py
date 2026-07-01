@@ -92,12 +92,42 @@ def tier_of(model: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Prompt caching seam — REAL Anthropic cache_control markers, never faked.
+# Prompt caching seam — REAL Anthropic cache_control markers, never faked, and never
+# NET-NEGATIVE: a cache WRITE costs ~1.25× so a prefix must clear the model's minimum
+# cacheable size to be worth it. We cache ONLY when (a) the model is an anthropic model
+# and (b) the STABLE prefix estimated tokens ≥ that model's minimum.
 # --------------------------------------------------------------------------- #
+# Anthropic minimum cacheable prompt size (tokens) by tier — below this the API will not
+# cache the block, so a marker there is pure overhead. Haiku's floor is higher.
+_MIN_CACHE_TOKENS_DEFAULT = 1024   # Sonnet / Opus
+_MIN_CACHE_TOKENS_HAIKU = 4096     # Haiku 4.5
+
+
+def _is_anthropic(model: str | None) -> bool:
+    return bool(model) and str(model).startswith(_PREFIX)
+
+
+def _min_cache_tokens(model: str | None) -> int:
+    return _MIN_CACHE_TOKENS_HAIKU if (model and "haiku" in str(model)) else _MIN_CACHE_TOKENS_DEFAULT
+
+
+def _estimate_tokens(text: str) -> int:
+    """Cheap token estimate (~4 chars/token) — good enough to gate whether a prefix clears
+    the cache minimum without importing a tokenizer."""
+    return len(text or "") // 4
+
+
+def should_cache(stable_context: str, model: str | None) -> bool:
+    """True iff caching the stable prefix is worth it: an anthropic model AND a prefix that
+    clears the model's minimum cacheable size. Prevents net-negative caching of small
+    blocks and leaves non-anthropic (ollama/openai) routes untouched."""
+    return _is_anthropic(model) and _estimate_tokens(stable_context) >= _min_cache_tokens(model)
+
+
 def cache_point() -> Any:
-    """A pydantic-ai :class:`~pydantic_ai.messages.CachePoint` breakpoint, or ``None``
-    if pydantic-ai is unavailable. Placed AFTER a stable context block so everything
-    before it is cached by Anthropic. Returning ``None`` degrades cleanly to no cache."""
+    """A pydantic-ai :class:`~pydantic_ai.messages.CachePoint` breakpoint, or ``None`` if
+    pydantic-ai is unavailable. Placed AFTER a stable context block so everything before it
+    is cached by Anthropic."""
     try:
         from pydantic_ai.messages import CachePoint
 
@@ -106,37 +136,38 @@ def cache_point() -> Any:
         return None
 
 
-def build_cached_prompt(stable_context: str, volatile: str) -> Any:
-    """Assemble a prompt whose STABLE prefix (brand/offers/taxonomy/tool schemas) is
-    marked for Anthropic prompt caching.
-
-    Returns a list ``[stable_context, CachePoint(), volatile]`` — the cache breakpoint
-    sits between the reusable prefix and the per-run volatile tail, so the prefix is
-    billed once and re-served from cache on subsequent turns. If the ``CachePoint``
-    primitive is unavailable it returns the plain concatenated string (still a valid
-    prompt, just un-cached) rather than failing the call."""
+def build_cached_prompt(stable_context: str, volatile: str, model: str | None = None) -> Any:
+    """Assemble a prompt whose STABLE prefix (brand/offers/taxonomy) is marked for Anthropic
+    prompt caching — but ONLY when :func:`should_cache` holds (anthropic model + prefix over
+    the minimum). Returns ``[stable_context, CachePoint(), volatile]`` when caching, else the
+    plain concatenated string (a valid, un-cached prompt). Never net-negative, never faked."""
+    if not should_cache(stable_context, model):
+        return "\n\n".join(p for p in (stable_context, volatile) if p)
     cp = cache_point()
     if cp is None:
         return "\n\n".join(p for p in (stable_context, volatile) if p)
-    parts: list[Any] = []
-    if stable_context:
-        parts.append(stable_context)
-        parts.append(cp)  # everything up to here is the cached prefix
+    parts: list[Any] = [stable_context, cp]  # everything up to CachePoint is the cached prefix
     if volatile:
         parts.append(volatile)
     return parts
 
 
-def cached_anthropic_settings(temperature: float = 0.0) -> Any:
-    """Anthropic model settings that cache the STABLE instruction + tool-schema prefix.
-
-    Sets ``anthropic_cache_instructions`` and ``anthropic_cache_tool_definitions`` (both
-    real pydantic-ai settings that add ``cache_control`` to the system prompt + tool
-    defs). Returns a plain dict fallback carrying only ``temperature`` when the anthropic
-    settings type is unavailable — the call still runs, just without instruction caching."""
+def cached_anthropic_settings(
+    temperature: float = 0.0, *, model: str | None = None, stable_context: str | None = None
+) -> Any:
+    """Anthropic model settings that cache the STABLE instruction + tool-schema prefix — the
+    cache flags are set ONLY for an anthropic model whose stable prefix clears the minimum
+    (when ``stable_context`` is given; otherwise the flags are set for any anthropic model,
+    letting the API cache the system/tool blocks when they are large enough). Returns plain
+    ``{temperature}`` for a non-anthropic model (no anthropic cache_control on other providers)."""
+    want_cache = _is_anthropic(model) if model is not None else True
+    if want_cache and stable_context is not None:
+        want_cache = should_cache(stable_context, model or TIER_MID)
     try:
         from pydantic_ai.models.anthropic import AnthropicModelSettings
 
+        if not want_cache:
+            return AnthropicModelSettings(temperature=temperature)
         return AnthropicModelSettings(
             temperature=temperature,
             anthropic_cache_instructions=True,

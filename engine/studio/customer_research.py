@@ -258,14 +258,19 @@ def choose_channel(facts: dict[str, Any], plan_channels: list[str] | None) -> st
     candidates += [str(c) for c in (plan_channels or [])]
     candidates.append("instagram")
 
+    # The consent gate is routed through the first-class ``entities.Consent`` (one typed
+    # representation with provenance): email/SMS require the opt-in; a below-consent SMS
+    # falls through to instagram — never overriding withheld consent.
+    from studio.entities import channel_consented
+
     for ch in candidates:
         ch = ch.strip().lower()
         if ch in ("email", "gmail"):
-            if facts.get("email_opt_in"):
+            if channel_consented(facts, "gmail"):
                 return "gmail"
             continue
         if ch == "sms":
-            if facts.get("sms_opt_in"):
+            if channel_consented(facts, "sms"):
                 return "sms"
             continue
         if ch in ("instagram", "ig"):
@@ -1179,6 +1184,10 @@ def build_outreach_draft(
 
     subject: str | None = None
     body: str | None = None
+    # The REAL model the copy was written with — captured from the actual cell so the
+    # caller records a TRUTHFUL agent_run.model (never a hardcoded literal that could
+    # silently drift from the cell's pin). None until a path sets it.
+    copy_model: str | None = None
 
     # --- REAL copywriter path (gated email cell, brand voice, verified research) -- #
     if ch in ("gmail", "email") and _llm_copy_enabled():
@@ -1193,6 +1202,9 @@ def build_outreach_draft(
                 brand_voice_context=brand_voice_context,
                 approved_claims=approved_claims,
             )
+            # Truthful model provenance: read the id off the cell that actually ran.
+            _cm = getattr(cell, "model", None)
+            copy_model = _cm if isinstance(_cm, str) else str(_cm)
             copy = cell.run_sync(
                 _build_email_prompt(facts, goal=goal, research=research, angle=angle,
                                     offer=offer, profile=profile)
@@ -1205,6 +1217,7 @@ def build_outreach_draft(
             grounding.append("copy=copywriter_email_cell")
         except Exception as exc:  # any cell/network failure -> honest deterministic
             subject = body = None
+            copy_model = None  # the cell did not produce the copy; not its model
             grounding.append(f"copy=deterministic_fallback({type(exc).__name__})")
 
     # --- deterministic fallback (no key / non-email channel / cell failed) ------- #
@@ -1212,6 +1225,8 @@ def build_outreach_draft(
         subject, body = _template_outreach(facts, goal=goal, ch=ch, angle=angle, offer=offer)
         if not any(g.startswith("copy=") for g in grounding):
             grounding.append("copy=deterministic_template")
+        # Truthful provenance: a template wrote this, not a model.
+        copy_model = copy_model or "deterministic_template"
 
     # Resolve the opt-out token + guarantee a clear CTA BEFORE staging, so a queued
     # draft never carries a raw {{unsubscribe}} token (or a weak/no CTA) into a real
@@ -1237,6 +1252,9 @@ def build_outreach_draft(
         "draft": body,
         "grounding": grounding,
         "customer_id": facts.get("customer_id"),
+        # The REAL model that wrote this copy (a cell pin, or a deterministic marker) —
+        # the caller records it verbatim as the draft agent_run.model (no literal).
+        "copy_model": copy_model,
         # Per-lead personalization proof: the distinct angle this draft leads with, the
         # honest "why it differs from the others" rationale, and whether it is honestly
         # generic (thin data) vs grounded. Surfaced so the operator can SEE it is real.

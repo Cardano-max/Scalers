@@ -43,25 +43,28 @@ def test_blueprint_is_deterministic_and_grounds_offers(monkeypatch) -> None:
     # Reactivation cohort -> the plan ASSUMES price dominates (the replan hook checks it).
     assert bp.assumed_dominant_objection == "price"
 
-    # offer_logic is grounded: price -> a REAL discount code; payment -> the REAL payment
-    # offer; an objection with no matching real offer maps to None (never invented).
+    # offer_logic is REAL-ONLY: price -> a REAL discount code; payment -> the REAL payment
+    # offer; an objection with no matching real offer is simply ABSENT (never a None-rule,
+    # never invented).
     price = offer_rule_for(bp, "price")
     payment = offer_rule_for(bp, "payment")
-    trust = offer_rule_for(bp, "trust")
     assert price is not None and price.offer_code == "FLOWER15" and price.substantiated is True
     assert payment is not None and payment.offer_code == "SPLIT3"
-    assert trust is not None and trust.offer_code is None and trust.substantiated is False
+    assert offer_rule_for(bp, "trust") is None  # no real trust offer -> absent
+    assert all(r.substantiated and r.offer_code for r in bp.offer_logic)
 
 
 def test_blueprint_never_invents_an_offer_when_none_exist(monkeypatch) -> None:
-    # No offers doc -> every objection maps to None (honest no-discount), never fabricated.
+    # No offers doc -> offer_logic is EMPTY (no None-rules, no invented codes); a lead can
+    # never reference a discount.
     monkeypatch.setattr(offers_mod, "get_offers", lambda tid, dsn=None: [])
     bp = build_blueprint(
         CampaignPlan(goal="g", target_category="all", channels=["email"], output_count=3),
         "ladies8391", None, use_llm=False,
     )
-    assert all(rule.offer_code is None for rule in bp.offer_logic)
-    assert all(rule.substantiated is False for rule in bp.offer_logic)
+    assert bp.offer_logic == []
+    from studio.campaign_blueprint import offer_rule_for
+    assert offer_rule_for(bp, "price") is None
     # Single channel gets the whole quota.
     assert bp.per_channel_quota == {"email": 3}
 

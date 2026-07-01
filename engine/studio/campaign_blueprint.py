@@ -65,6 +65,33 @@ _CATEGORY_ASSUMED_OBJECTION: dict[str, str] = {
     "recurring": "recurring",
 }
 
+# campaign_type → assumed dominant objection (fallback when target_category is unset).
+_CAMPAIGN_TYPE_ASSUMED_OBJECTION: dict[str, str] = {
+    "winback": "price",
+    "win-back": "price",
+    "reactivation": "price",
+    "flash": "timing",
+    "payment": "payment",
+    "loyalty": "recurring",
+    "retention": "recurring",
+}
+
+
+def resolve_assumed_objection(plan: Any) -> str | None:
+    """The objection the plan ASSUMES dominates the cohort, resolved (in priority order)
+    from an explicit ``plan.assumed_objection``, then ``target_category``, then
+    ``campaign_type``. ``None`` when nothing implies one — the replan then cannot fire
+    (no recorded assumption to contradict). Pure; used by both the planner and the plan
+    write-back."""
+    explicit = (getattr(plan, "assumed_objection", "") or "").strip().lower()
+    if explicit:
+        return explicit
+    category = (getattr(plan, "target_category", "") or "").strip().lower()
+    if category in _CATEGORY_ASSUMED_OBJECTION:
+        return _CATEGORY_ASSUMED_OBJECTION[category]
+    ctype = (getattr(plan, "campaign_type", "") or "").strip().lower()
+    return _CAMPAIGN_TYPE_ASSUMED_OBJECTION.get(ctype)
+
 
 class TargetCohort(BaseModel):
     """Which leads this campaign targets — the cohort the executor pulls from."""
@@ -186,43 +213,39 @@ def _target_description(category: str, scope: str) -> str:
 
 
 def _build_offer_logic(tenant_id: str, dsn: str | None) -> list[OfferRule]:
-    """Objection → REAL substantiated offer, for every objection in the taxonomy.
+    """Objection → REAL substantiated offer, for the objections that HAVE one.
 
-    Grounded ONLY in :func:`studio.offers.get_offers`; each chosen code is re-checked by
-    :func:`studio.offers.substantiate` before it lands. An objection with no real
-    matching offer maps to ``offer_code=None`` with an honest note — NEVER an invented
-    code. Best-effort: a store hiccup yields all-None rules, never a fabricated offer."""
+    Built ONLY from :func:`studio.offers.get_offers`; each chosen code is re-checked by
+    :func:`studio.offers.substantiate` (the fail-closed gate) at PLAN time. The list holds
+    ONLY objections with a real substantiated offer — an objection with no real offer is
+    simply ABSENT (``offer_rule_for`` then returns None → the draft references NO discount).
+    ``get_offers() == []`` ⇒ ``offer_logic == []`` (no staged action can reference a code).
+    A store hiccup yields ``[]`` — never a fabricated offer."""
     from studio.offers import get_offers, select_offer, substantiate
 
     try:
         offers = get_offers(tenant_id, dsn=dsn)
     except Exception:
         offers = []
+    if not offers:
+        return []
 
     rules: list[OfferRule] = []
     for objection in _OBJECTION_TAXONOMY:
         chosen = select_offer(offers, objection=objection, interest=None)
         if chosen is not None:
-            chosen = substantiate(offers, chosen.code)
+            chosen = substantiate(offers, chosen.code)  # fail-closed gate at plan time
         if chosen is None:
-            rules.append(
-                OfferRule(
-                    objection=objection,
-                    offer_code=None,
-                    substantiated=False,
-                    note="no substantiated offer for this objection — draft references NO discount",
-                )
+            continue  # no real offer for this objection -> not in the plan (never invented)
+        rules.append(
+            OfferRule(
+                objection=objection,
+                offer_code=chosen.code,
+                offer_kind=chosen.kind,
+                substantiated=True,
+                note=chosen.as_evidence(),
             )
-        else:
-            rules.append(
-                OfferRule(
-                    objection=objection,
-                    offer_code=chosen.code,
-                    offer_kind=chosen.kind,
-                    substantiated=True,
-                    note=chosen.as_evidence(),
-                )
-            )
+        )
     return rules
 
 
@@ -296,7 +319,7 @@ def build_blueprint(
         description=_target_description(category, scope),
         estimated_size=(total_quota or None),
     )
-    assumed = _CATEGORY_ASSUMED_OBJECTION.get(category.lower())
+    assumed = resolve_assumed_objection(plan)
 
     stop = StopConditions(
         total_quota=total_quota,
@@ -404,13 +427,18 @@ def _enrich_with_planner_llm(blueprint: CampaignBlueprint, plan: Any) -> None:
             "this cohort. Do not add or remove a question; do not name an offer that is "
             "NONE above."
         )
+        stable = _stable_context(blueprint)
         agent: Agent = Agent(
             PLANNER_MODEL,
             output_type=_BlueprintEnrichment,
-            model_settings=cached_anthropic_settings(temperature=0.0),
+            model_settings=cached_anthropic_settings(
+                temperature=0.0, model=PLANNER_MODEL, stable_context=stable
+            ),
             defer_model_check=True,
         )
-        prompt = build_cached_prompt(_stable_context(blueprint), volatile)
+        # Caching is applied ONLY when the stable prefix clears the model minimum (the seam
+        # guards against net-negative caching of a small planner prefix).
+        prompt = build_cached_prompt(stable, volatile, PLANNER_MODEL)
         result = agent.run_sync(prompt)
         out = result.output
         if out.angle.strip():

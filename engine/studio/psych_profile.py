@@ -613,6 +613,14 @@ class PsychLLMOut(_Camel):
     emotional_tone: PsychField | None = None
 
 
+def psych_llm_model() -> str:
+    """The REAL model id the LLM-enriched analyst runs at, read from the actual cell —
+    so a caller records a TRUTHFUL ``agent_run.model`` for an LLM read instead of a
+    hardcoded literal that could drift from the cell's pin."""
+    m = getattr(_build_psych_cell(), "model", None)
+    return m if isinstance(m, str) else str(m)
+
+
 def _build_psych_cell():
     from cells.base import Cell
     from cells.validators import ValidatorBank

@@ -32,20 +32,39 @@ def test_tier_of_labels_models() -> None:
     assert mr.tier_of("anthropic:some-other-model") == "other"
 
 
-def test_build_cached_prompt_marks_a_real_cache_point_after_the_stable_prefix() -> None:
+def test_caching_gates_on_provider_and_prefix_size_never_net_negative() -> None:
     from pydantic_ai.messages import CachePoint
 
-    prompt = mr.build_cached_prompt("STABLE brand/offers/taxonomy", "VOLATILE per-run")
-    # A list: [stable, CachePoint, volatile] — the breakpoint sits AFTER the stable prefix.
+    big = "x " * 3000  # ~1500 tokens, clears the Sonnet/Opus 1024 minimum
+    small = "brand/offers"  # ~a few tokens — below the minimum
+
+    # Anthropic + big prefix -> a REAL CachePoint after the stable prefix.
+    prompt = mr.build_cached_prompt(big, "VOLATILE per-lead", mr.TIER_BEST)
     assert isinstance(prompt, list)
-    assert prompt[0] == "STABLE brand/offers/taxonomy"
-    assert isinstance(prompt[1], CachePoint)
-    assert prompt[2] == "VOLATILE per-run"
+    assert prompt[0] == big and isinstance(prompt[1], CachePoint) and prompt[2] == "VOLATILE per-lead"
+    assert mr.should_cache(big, mr.TIER_BEST) is True
+
+    # A small prefix is NOT cached (a cache write would be net-negative) -> plain string.
+    assert mr.should_cache(small, mr.TIER_BEST) is False
+    assert isinstance(mr.build_cached_prompt(small, "v", mr.TIER_BEST), str)
+
+    # A non-anthropic model is never anthropic-cached (leaves ollama/openai untouched).
+    assert mr.should_cache(big, "ollama:llama3") is False
+    assert isinstance(mr.build_cached_prompt(big, "v", "ollama:llama3"), str)
+
+    # Haiku's minimum is higher (4096) — the same 1500-token prefix does NOT clear it.
+    assert mr.should_cache(big, mr.TIER_CHEAP) is False
 
 
-def test_cached_anthropic_settings_sets_real_cache_flags() -> None:
-    settings = mr.cached_anthropic_settings(temperature=0.0)
-    # A real AnthropicModelSettings mapping carrying the cache_control markers.
+def test_cached_anthropic_settings_sets_real_cache_flags_when_worth_it() -> None:
+    big = "x " * 3000
+    settings = mr.cached_anthropic_settings(temperature=0.0, model=mr.TIER_BEST, stable_context=big)
     assert settings.get("anthropic_cache_instructions") is True
     assert settings.get("anthropic_cache_tool_definitions") is True
     assert settings.get("temperature") == 0.0
+    # A small prefix -> no cache flags (never net-negative).
+    small = mr.cached_anthropic_settings(temperature=0.0, model=mr.TIER_BEST, stable_context="tiny")
+    assert small.get("anthropic_cache_instructions") is None
+    # A non-anthropic model -> plain settings, no anthropic cache_control.
+    other = mr.cached_anthropic_settings(temperature=0.0, model="ollama:llama3", stable_context=big)
+    assert other.get("anthropic_cache_instructions") is None
