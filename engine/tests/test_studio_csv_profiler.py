@@ -124,6 +124,21 @@ def test_real_repo_shape_reports_absent_dimensions_without_fabrication() -> None
     assert "Every one has an email address" in summary
 
 
+def test_cold_lead_is_not_miscounted_as_warm() -> None:
+    # REGRESSION (senior-QA catch): "cold lead" contains the token "lead" and must NOT
+    # classify as warm. Precedence: specific buckets before warm; bare "lead" is not a
+    # warm signal. Ground truth here: warm:6, cold:2, past:1, recurring:1.
+    cols = ["name", "status"]
+    data = [
+        ["A", "warm lead"], ["B", "warm"], ["C", "warm lead"], ["D", "warm"],
+        ["E", "warm lead"], ["F", "warm"],
+        ["G", "past customer"], ["H", "recurring regular"],
+        ["I", "cold lead"], ["J", "cold"],
+    ]
+    profile = build_profile(cols, _rows(cols, data))
+    assert profile.segments == {"warm": 6, "cold": 2, "past": 1, "recurring": 1}
+
+
 def test_empty_rows_summary_is_honest() -> None:
     profile = build_profile(["name"], [])
     assert profile.total_leads == 0

@@ -72,15 +72,20 @@ _BARE_HANDLE_RE = re.compile(r"^@[A-Za-z0-9_.]{2,}$")
 # Value -> canonical customer segment. Substring match on a lowercased cell value.
 # NOTE: "cold" and "past" are DISTINCT buckets (cold = brand-new/never-engaged;
 # past = lapsed/former customer) to match the interview's cold/warm/past/recurring set.
+#
+# PRECEDENCE MATTERS. The SPECIFIC buckets (unpaid/recurring/past/cold/converted) are
+# checked BEFORE "warm", and a bare "lead" is NOT a warm signal — otherwise "cold lead"
+# (which contains "lead") would misclassify as warm. Only "warm"/"warm lead" -> warm;
+# "cold"/"cold lead" -> cold. First match in THIS order wins.
 _SEGMENT_SIGNALS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("unpaid", ("unpaid", "deposit pending", "owes", "balance due", "payment pending")),
     ("recurring", ("recurring", "repeat", "regular", "loyal", "returning")),
-    ("converted", ("converted", "booked", "paid customer", "won")),
-    ("warm", ("warm", "hot", "engaged", "inquired", "enquired", "interested", "lead")),
-    ("cold", ("cold", "brand new", "brand-new", "new prospect", "prospect",
-              "never booked", "unqualified")),
     ("past", ("past", "lapsed", "inactive", "dormant", "reactivation", "former",
               "old client", "won-back", "win-back")),
+    ("cold", ("cold", "brand new", "brand-new", "new prospect", "prospect",
+              "never booked", "unqualified")),
+    ("converted", ("converted", "booked", "paid customer", "won")),
+    ("warm", ("warm", "hot", "engaged", "inquired", "enquired", "interested")),
 )
 
 # Objection keyword phrases -> canonical objection type. Used both on a dedicated
@@ -135,6 +140,8 @@ class CsvProfile:
             "objections": dict(self.objections),
             "objections_source": self.objections_source,
             "social_present": self.social_present,
+            # alias: the social count under the plain key too (some callers look for "social")
+            "social": self.social_present,
             "social_source": self.social_source,
             "summary": self.summary_text,
         }
