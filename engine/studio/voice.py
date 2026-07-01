@@ -156,6 +156,15 @@ VOICE_INSTRUCTIONS = (
     "server refuses, tell the operator what is still needed and keep interviewing.\n"
     "ORCHESTRATE: after a successful launch, narrate each agent's result as the run "
     "progresses. Make clear everything is HELD for approval and nothing was sent.\n\n"
+    "REAL STATE ONLY — never guess about the run. When the operator asks how many "
+    "drafts exist, which agent is working, whether the strategist / researcher / critic "
+    "/ jury ran, what draft #1 (or #N) says and WHO it is to, or why it was written, "
+    "answer ONLY from the real run-state briefing you are given (the STATE section / the "
+    "run-state surface). NEVER invent a lead name, a count, or a status. Draft #1 is the "
+    "FIRST lead in that ordered list — say that exact name so it matches what the "
+    "operator sees on screen. If a required step (e.g. the strategist or critic) is "
+    "reported as failed, say so honestly — do not claim the run finished cleanly. If you "
+    "do not have the state yet, say you are pulling it up rather than guessing.\n\n"
     "Never claim to have sent, posted, emailed, or published anything — you cannot."
 )
 
@@ -203,6 +212,42 @@ def voice_instructions_with_docs(
         "documents."
     )
     return "\n".join(lines)
+
+
+def voice_state_briefing(run_id: str, *, dsn: str | None = None) -> str:
+    """A spoken, TRUTHFUL real-state briefing for the voice supervisor to narrate — the
+    draft count, which agents ran (incl. an honest 'failed'), and draft #1 (the REAL
+    first lead, matching the frontend). Credit-INDEPENDENT: reads the DB only, no model /
+    ANTHROPIC key. This is what the supervisor answers 'how many drafts / did the
+    strategist run / what is draft #1' from, instead of guessing."""
+    from studio.campaign_state import campaign_state, describe_draft, describe_state
+
+    state = campaign_state(run_id, dsn=dsn)
+    lines = [describe_state(state)]
+    if state.get("draft_1"):
+        lines.append(describe_draft(state, 1))
+    return " ".join(lines)
+
+
+def voice_instructions_with_state(
+    tenant_id: str, run_id: str | None, *, dsn: str | None = None
+) -> str:
+    """Voice instructions (with docs) PLUS the current run's real-state briefing injected,
+    so the supervisor narrates the run from real rows. With no active run it degrades to
+    the docs-aware instructions (no fabricated state). Read-only: adds NO tool — the voice
+    agent stays send-incapable (exactly two tools)."""
+    base = voice_instructions_with_docs(tenant_id, dsn=dsn)
+    if not run_id:
+        return base
+    try:
+        briefing = voice_state_briefing(run_id, dsn=dsn)
+    except Exception:
+        return base
+    return (
+        f"{base}\n\nSTATE — the REAL, current state of the running campaign (answer every "
+        f"question about drafts / agents / counts from THIS, never from memory or a guess):"
+        f"\n{briefing}"
+    )
 
 
 def build_session_config(
