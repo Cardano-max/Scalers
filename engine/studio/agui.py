@@ -1570,8 +1570,9 @@ def _execute_provided_leads_sync(
         )
         # SKILL SELECTION per lead (P2-B, 65w.6): route the dossier to the right first-party
         # marketing play (objection-recovery / re-engagement / loyalty / warm-intro ...).
-        # Deterministic; NO skill pack is loaded/executed (registry-gated). Recorded as
-        # ``skill_used`` evidence on the draft agent_run.
+        # Deterministic. The aligned skillpack IS registered but its eval-gate is PENDING and
+        # its loader is DORMANT, so NO pack is loaded/executed and NO pack prose is injected —
+        # only the first-party play is used. Recorded as ``skill_used`` evidence.
         selection = select_skill(dossier)
 
         # TRUTHFUL model provenance: the real model the copy was written with, read from

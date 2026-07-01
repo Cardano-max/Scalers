@@ -1,6 +1,7 @@
 """Per-lead SKILL selection (P2-B, CustomerAcq-65w.6): the dossier routes to the RIGHT
-first-party marketing play, deterministically, with an honest reason. No skill pack is
-loaded/executed (registry-gated) — ``aligned_pack`` is a labeled pointer only."""
+first-party marketing play, deterministically, with an honest reason. The aligned pack is
+REGISTERED but eval-pending + loader-dormant, so no pack prose is injected — ``aligned_pack``
+is a labeled pointer only."""
 
 from __future__ import annotations
 
@@ -34,7 +35,7 @@ def test_price_objection_routes_to_objection_recovery():
     assert sel.skill_id == "objection-recovery"
     assert "price" in sel.why
     assert sel.aligned_pack == "marketing_playbook"
-    assert "not loaded" in sel.pack_status
+    assert "eval-pending" in sel.pack_status and "not injected" in sel.pack_status.lower()
 
 
 def test_payment_objection_also_routes_to_objection_recovery():
