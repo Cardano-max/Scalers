@@ -35,6 +35,36 @@ def _connect(dsn: str | None = None):
     return psycopg.connect(_dsn(dsn), autocommit=True, row_factory=dict_row)
 
 
+# The extended, adapter-normalized tattoo-lead columns (ADR §4.6). Added to the
+# infra-provisioned ``customers`` table as nullable columns so the extended shape is
+# reproducible without owning that table's DDL, and so the long-standing ``notes`` bug
+# (read in five places, never populated) is fixed at the source. ``ADD COLUMN IF NOT
+# EXISTS`` is idempotent + a no-op after the first run.
+_LEAD_EXT_COLUMNS: tuple[str, ...] = (
+    "notes", "artist", "shop", "lead_stage", "customer_type", "payment_status",
+)
+_columns_ensured: set[str] = set()
+
+
+def ensure_lead_columns(dsn: str | None = None) -> None:
+    """Idempotently add the extended tattoo-lead columns to ``customers`` (best-effort).
+
+    Memoized per-DSN per-process so a batch of lookups runs the ALTER at most once. A
+    fresh DB with no ``customers`` table (tests mock this away entirely) fails silently —
+    the read/write then simply proceeds without the extended columns."""
+    key = _dsn(dsn)
+    if key in _columns_ensured:
+        return
+    try:
+        with _connect(dsn) as conn:
+            for col in _LEAD_EXT_COLUMNS:
+                conn.execute(f"ALTER TABLE customers ADD COLUMN IF NOT EXISTS {col} TEXT")
+        _columns_ensured.add(key)
+    except Exception:
+        # Do not cache on failure (the table may appear later); reads/writes degrade.
+        pass
+
+
 def _flatten_traits(traits: dict[str, Any] | None) -> dict[str, Any]:
     """Flatten the persona JSONB ``{"traits": {key: {value, basis, inferred}}}`` to
     ``{key: value}``. Tolerates a flat ``{key: value}`` shape too. Honest: returns
@@ -80,11 +110,13 @@ def lookup_lead(
     else:
         raise ValueError("lookup_lead requires customer_id, email, or name")
 
+    ensure_lead_columns(dsn)
     with _connect(dsn) as conn:
         cust = conn.execute(
             "SELECT id, tenant_id, name, email, phone, ig_handle, linkedin_handle, "
             "dob, city, state, interests, preferred_channels, email_opt_in, "
-            "sms_opt_in, source FROM customers WHERE " + " AND ".join(clauses)
+            "sms_opt_in, source, notes, artist, shop, lead_stage, customer_type, "
+            "payment_status FROM customers WHERE " + " AND ".join(clauses)
             + " LIMIT 1",
             params,
         ).fetchone()
@@ -126,6 +158,14 @@ def lookup_lead(
         "sms_opt_in": cust["sms_opt_in"],
         "persona_synthetic": bool(persona["synthetic"]) if persona else None,
         "persona_traits": traits,
+        # Extended, adapter-normalized tattoo-lead fields (ADR §4.6). Honest-empty when
+        # absent; ``notes`` here fixes the long-standing dead ``csv-note`` angle.
+        "notes": cust.get("notes"),
+        "artist": cust.get("artist"),
+        "shop": cust.get("shop"),
+        "lead_stage": cust.get("lead_stage"),
+        "customer_type": cust.get("customer_type"),
+        "payment_status": cust.get("payment_status"),
         "tattoo_history": [
             {
                 "style": t["style"],
@@ -405,8 +445,89 @@ def _first_research_signal(
     return None
 
 
+# --------------------------------------------------------------------------- #
+# Category + objection branching — the psych-profile-driven angle (P1 #3).
+#
+# When a grounded :class:`~studio.psych_profile.PsychProfile` is available, the WHY a
+# warm lead did not convert (their objection) is the most lead-specific angle there is,
+# so it leads. Each objection maps to an honest response; a price/payment angle may only
+# reference a REAL substantiated offer (passed in), never an invented discount.
+# --------------------------------------------------------------------------- #
+def _pf(profile: Any, field: str) -> tuple[str, str, str]:
+    """Read ``(value, signal, evidence)`` from a PsychProfile field, tolerating either a
+    pydantic object or a plain dict. Returns empties when absent."""
+    f = getattr(profile, field, None)
+    if f is None and isinstance(profile, dict):
+        f = profile.get(field)
+    if f is None:
+        return "", "", ""
+    if isinstance(f, dict):
+        return str(f.get("value") or ""), str(f.get("signal") or ""), str(f.get("evidence") or "")
+    return (str(getattr(f, "value", "") or ""), str(getattr(f, "signal", "") or ""),
+            str(getattr(f, "evidence", "") or ""))
+
+
+# (objection -> (angle key, human label, one-line honest guidance)).
+_OBJECTION_ANGLES: dict[str, tuple[str, str, str]] = {
+    "price": ("addressing-price", "their price hesitation",
+              "acknowledge the budget and offer a real lower-commitment option"),
+    "payment": ("payment-flexibility", "a flexible payment path",
+                "offer a real deposit / payment-split path"),
+    "timing": ("flexible-timing", "their timing hesitation",
+               "keep it low-pressure and flexible for whenever they're ready"),
+    "trust": ("proof-and-portfolio", "building trust with real proof",
+              "reassure with real healed work / first-timer care, no hype"),
+    "uncertainty": ("low-pressure-consult", "a no-pressure way to decide",
+                    "offer a relaxed consult to help them decide, no push"),
+}
+# (category -> angle) for the non-objection lifecycle branches.
+_CATEGORY_ANGLES: dict[str, tuple[str, str]] = {
+    "recurring-customer": ("loyalty-touchup", "a loyalty / touch-up invite"),
+    "converted-but-unpaid": ("completion-nudge", "a gentle nudge to finish the booking"),
+    "past-customer-reactivation": ("win-back", "a warm win-back note"),
+}
+
+
+def _objection_angle(profile: Any, offer: Any) -> dict[str, Any] | None:
+    """The objection/category-driven angle from a GROUNDED profile, or None when the
+    profile carries no actionable grounded signal (caller then uses the base ranking).
+
+    The angle's ``basis`` is a REAL span: the objection's evidence quote, plus the real
+    offer's terms when one was substantiated. Never invents a discount — if ``offer`` is
+    None the angle addresses the objection without a code."""
+    if profile is None:
+        return None
+    obj_val, obj_sig, obj_ev = _pf(profile, "primary_objection")
+    grounded_obj = obj_val and obj_val != "none-found" and obj_sig in ("stated", "inferred")
+
+    if grounded_obj and obj_val in _OBJECTION_ANGLES:
+        key, label, _guide = _OBJECTION_ANGLES[obj_val]
+        if offer is not None and obj_val in ("price", "payment"):
+            label = f"their {obj_val} hesitation + a real offer ({offer.code})"
+            basis = f'objection "{obj_ev[:110]}" -> offer {offer.as_evidence()}'
+            key = "offer-" + ("discount" if obj_val == "price" else "payment")
+        else:
+            basis = f'their stated {obj_val} hesitation: "{obj_ev[:130]}"'
+        return {"key": key, "label": label, "basis": basis,
+                "inferred": obj_sig == "inferred", "generic": False}
+
+    # No objection -> a lifecycle/category angle when the category is actionable.
+    cat_val, cat_sig, cat_ev = _pf(profile, "umbrella_category")
+    if cat_val in _CATEGORY_ANGLES and cat_sig in ("stated", "inferred"):
+        key, label = _CATEGORY_ANGLES[cat_val]
+        basis = cat_ev or f"category={cat_val}"
+        if offer is not None and cat_val in ("recurring-customer", "past-customer-reactivation"):
+            label += f" + a real offer ({offer.code})"
+            basis = f"{basis} -> offer {offer.as_evidence()}"
+            key = "offer-" + key
+        return {"key": key, "label": label, "basis": basis,
+                "inferred": cat_sig == "inferred", "generic": False}
+    return None
+
+
 def _choose_angle(
-    facts: dict[str, Any], research: list[dict[str, Any]] | None
+    facts: dict[str, Any], research: list[dict[str, Any]] | None,
+    *, profile: Any = None, offer: Any = None,
 ) -> dict[str, Any]:
     """Pick ONE distinct outreach angle for this lead from REAL differentiators only.
 
@@ -417,7 +538,17 @@ def _choose_angle(
     ``basis`` is the verbatim real fact the angle stands on, ``inferred`` flags a
     persona-derived (not hard) signal, and ``generic`` is True ONLY when the lead has
     NO distinguishing data — in which case we say so honestly rather than fake
-    personalization. NEVER invents a differentiator."""
+    personalization. NEVER invents a differentiator.
+
+    When a grounded psych ``profile`` is supplied (the warm-lead path), the lead's
+    OBJECTION / lifecycle category is the most lead-specific angle and LEADS — before the
+    base research/history ranking below. A price/payment angle references the passed
+    ``offer`` ONLY when it is a real substantiated offer; otherwise it addresses the
+    objection without inventing a discount."""
+    objection_angle = _objection_angle(profile, offer)
+    if objection_angle is not None:
+        return objection_angle
+
     name = (facts.get("name") or "this studio").strip()
     traits = facts.get("persona_traits", {}) or {}
     interests = facts.get("interests", []) or []
@@ -532,16 +663,51 @@ def _angle_rationale(
     return msg
 
 
+def _offer_prompt_block(offer: Any, objection: str) -> list[str]:
+    """The REAL-offer block for the copywriter prompt (or the no-fabrication guard when
+    there is no offer). An offer is quoted EXACTLY; a price/payment objection with no real
+    offer is answered honestly, never with an invented discount."""
+    if offer is not None:
+        terms = ", ".join(
+            x for x in [
+                offer.discount, (f"applies to {', '.join(offer.applies_to)}" if offer.applies_to else ""),
+                (f"valid until {offer.valid_until}" if offer.valid_until else ""),
+            ] if x
+        )
+        return [
+            "# REAL OFFER YOU MAY REFERENCE (exactly ONE, quote it EXACTLY — do NOT change "
+            "the code, percentage, or terms, and do NOT invent any other discount):",
+            f"- Code {offer.code}: {offer.description}" + (f" ({terms})" if terms else ""),
+        ]
+    if objection in ("price", "payment"):
+        return [
+            "# OFFER GUARD: there is NO real discount/code on file for this lead. Do NOT "
+            "invent a discount, code, percentage, or payment plan. Acknowledge the "
+            "budget/payment honestly and offer a genuine low-commitment next step (a "
+            "smaller/flash piece, or simply a reply to talk options) — no fabricated number.",
+        ]
+    return []
+
+
 def _build_email_prompt(
     facts: dict[str, Any], *, goal: str, research: list[dict[str, Any]],
-    angle: dict[str, Any],
+    angle: dict[str, Any], offer: Any = None, profile: Any = None,
 ) -> str:
     """Assemble the copywriter run prompt. It exposes the lead's REAL grounded facts
     (name / city / CSV note / first-party interests + past work from our records /
     cite-only research), threads in the DISTINCT per-lead angle to lead with, and
     hard-forbids asserting anything the system cannot substantiate about a REAL
     business. Persona-inferred signals are passed as clearly-marked soft impressions,
-    never as hard facts."""
+    never as hard facts.
+
+    When a grounded ``profile`` is present (the warm-lead path) the recipient is reframed
+    as a WARM LEAD / past customer of the studio (not a peer studio), the objection they
+    voiced is surfaced as context, and any REAL ``offer`` is the ONLY discount that may be
+    mentioned. Personalization stays ethical — never 'I looked at your Instagram'."""
+    warm = profile is not None
+    objection = ""
+    if warm:
+        objection, _sig, _ = _pf(profile, "primary_objection")
     name = (facts.get("name") or "the studio").strip()
     city = (facts.get("city") or "").strip()
     notes = (facts.get("notes") or "").strip()
@@ -608,29 +774,64 @@ def _build_email_prompt(
             "to THIS recipient. Stay strictly within the facts/signals above.",
         ]
 
+    if warm:
+        intro = (
+            "You are writing ONE short, warm, PERSONAL re-engagement message, in the "
+            "BRAND VOICE above, to a WARM LEAD / past customer of YOUR OWN studio — "
+            "someone who previously enquired or visited. Write it as a genuine, human "
+            "follow-up that could only have been written to THIS person; never a template."
+        )
+    else:
+        intro = (
+            "You are writing ONE short, warm cold-outreach EMAIL, in the BRAND VOICE "
+            "above, to a REAL tattoo studio (the recipient). Treat this as a genuine first "
+            "introduction (purpose = intro), and make it UNMISTAKABLY for this specific "
+            "recipient — not a template with the name swapped."
+        )
+
+    # Warm-lead context: the objection they voiced + where they sit + the honest angle,
+    # so the copy addresses the real reason they didn't book (grounded, never invented).
+    objection_block: list[str] = []
+    if warm:
+        where = getattr(profile, "where_customer_sits", "") if not isinstance(profile, dict) else profile.get("where_customer_sits", "")
+        _obj_val, _obj_sig, obj_ev = _pf(profile, "primary_objection")
+        obj_bits = []
+        if where:
+            obj_bits.append(f"- Where this customer sits: {where}.")
+        if objection and objection != "none-found" and obj_ev:
+            obj_bits.append(f'- Their hesitation ({objection}), in their own words: "{obj_ev[:160]}".')
+            obj_bits.append("- Address that hesitation directly and warmly. Do NOT restate "
+                            "their private words back verbatim, and NEVER imply you inspected "
+                            "their social media — write naturally.")
+        if obj_bits:
+            objection_block = ["", "# WHY THEY DIDN'T BOOK (real, grounded — speak to this):", *obj_bits]
+
+    offer_block = _offer_prompt_block(offer, objection)
+    offer_block = (["", *offer_block] if offer_block else [])
+
+    recipient_word = "customer" if warm else "recipient"
     return "\n".join([
-        "You are writing ONE short, warm cold-outreach EMAIL, in the BRAND VOICE "
-        "above, to a REAL tattoo studio (the recipient). Treat this as a genuine first "
-        "introduction (purpose = intro), and make it UNMISTAKABLY for this specific "
-        "recipient — not a template with the name swapped.",
+        intro,
         "",
-        "# WHAT YOU ACTUALLY KNOW ABOUT THE RECIPIENT",
-        "# (hard facts you may state about them):",
+        f"# WHAT YOU ACTUALLY KNOW ABOUT THE {recipient_word.upper()}",
+        f"# (hard facts you may state about them):",
         *known,
         *inferred_block,
+        *objection_block,
+        *offer_block,
         "",
-        "# RESEARCH (verbatim web snippets about the recipient — cite-only context):",
+        f"# RESEARCH (verbatim web snippets about the {recipient_word} — cite-only context):",
         research_lines,
         "",
         *angle_block,
         "",
-        "# HARD GROUNDING RULES — no fabrication about a REAL business:",
-        "- You may reference ONLY the hard facts above, the SOFT signals (marked as "
-        "impressions, never as fact), and a research snippet ONLY when it is "
-        "unmistakably about THIS studio and you state nothing beyond what it literally says.",
-        "- Do NOT invent or imply anything NOT listed above about the recipient's "
-        "style, artists, awards, reputation, clientele, or history. If a specific is "
-        "missing, stay general and honest rather than guessing.",
+        "# HARD GROUNDING RULES — no fabrication:",
+        f"- You may reference ONLY the hard facts above, the SOFT signals (marked as "
+        "impressions, never as fact), the REAL offer above if one is listed, and a "
+        "research snippet ONLY when it is unmistakably about them.",
+        f"- Do NOT invent or imply anything NOT listed above about the {recipient_word}'s "
+        "style, artists, awards, reputation, clientele, discounts, or history. If a "
+        "specific is missing, stay general and honest rather than guessing.",
         "- Everything you say about YOURSELF (the sender) must come from the brand "
         "voice's approved claims above — nothing else.",
         f"- Reason for reaching out / goal: {goal_line}.",
@@ -647,15 +848,26 @@ def _build_email_prompt(
     ])
 
 
+def _offer_phrase(offer: Any) -> str:
+    """A short, honest phrase mentioning a REAL offer's code + terms (deterministic path).
+    Empty when there is no offer — never invents a discount."""
+    if offer is None:
+        return ""
+    disc = f" ({offer.discount})" if offer.discount else ""
+    return f" We've got a small offer that might help — {offer.description}{disc}, code {offer.code}."
+
+
 def _template_outreach(
-    facts: dict[str, Any], *, goal: str, ch: str, angle: dict[str, Any],
+    facts: dict[str, Any], *, goal: str, ch: str, angle: dict[str, Any], offer: Any = None,
 ) -> tuple[str | None, str]:
     """Deterministic fallback copy (no model): honest, grounded only in real facts,
     and SHAPED BY THE PER-LEAD ANGLE so two leads do not collapse to one template.
 
     Used when LLM copy is disabled (no Anthropic key) or the cell fails. Still never
     invents a recipient detail — opener, detail, and subject are keyed off the angle
-    chosen from this lead's real differentiators (and honestly generic when thin)."""
+    chosen from this lead's real differentiators (and honestly generic when thin). An
+    objection angle references the REAL ``offer`` (code + terms) ONLY when one was passed;
+    with no offer it stays a genuine low-commitment nudge, never a fabricated discount."""
     name = (facts.get("name") or "there").strip()
     first = name.split()[0] if name else "there"
     traits = facts.get("persona_traits", {}) or {}
@@ -670,10 +882,43 @@ def _template_outreach(
     city_phrase = f" over in {city}" if city else ""
     goal_line = (goal or "open a genuine conversation").strip()
     key = angle["key"]
+    offer_phrase = _offer_phrase(offer)
+    # A warm-lead objection/category angle writes to a CUSTOMER, not a peer studio; the
+    # closing "I run a small studio…" line is suppressed for these.
+    warm_key = key in (
+        "addressing-price", "offer-discount", "payment-flexibility", "offer-payment",
+        "flexible-timing", "proof-and-portfolio", "low-pressure-consult",
+        "loyalty-touchup", "offer-loyalty-touchup", "completion-nudge",
+        "win-back", "offer-win-back",
+    )
 
     # Opener + detail are keyed off the distinct angle so the deterministic path also
     # differentiates per lead (never a single swapped-name template).
-    if key == "past-work" and last_style:
+    if key in ("addressing-price", "offer-discount"):
+        opener = f"Hi {first}, still thinking about that piece?"
+        detail = f" Totally understand budget matters.{offer_phrase or ' We can find something that fits.'}"
+    elif key in ("payment-flexibility", "offer-payment"):
+        opener = f"Hi {first}, wanted to follow up about your piece."
+        detail = f"{offer_phrase or ' We can split it into smaller payments so it is easier to manage.'}"
+    elif key == "flexible-timing":
+        opener = f"Hi {first}, no rush at all — just keeping the door open."
+        detail = " Whenever the timing feels right, we'll be here."
+    elif key == "proof-and-portfolio":
+        opener = f"Hi {first}, totally normal to want to see more before booking."
+        detail = " Happy to share healed work and answer anything about the process."
+    elif key == "low-pressure-consult":
+        opener = f"Hi {first}, no pressure either way."
+        detail = " If it helps, we can hop on a quick chat to figure out what you want."
+    elif key in ("loyalty-touchup", "offer-loyalty-touchup"):
+        opener = f"Hi {first}, hope your last piece is healing well."
+        detail = f" We'd love to have you back.{offer_phrase}"
+    elif key == "completion-nudge":
+        opener = f"Hi {first}, just a gentle nudge on the booking you started."
+        detail = " Happy to finish it whenever you're ready."
+    elif key in ("win-back", "offer-win-back"):
+        opener = f"Hi {first}, it's been a while and we've been thinking about you."
+        detail = f"{offer_phrase}"
+    elif key == "past-work" and last_style:
         opener = f"Hi {first}, your last {last_style} piece stuck with me."
         detail = " It's the kind of work we love to see."
     elif key == "shared-craft" and top_interest:
@@ -697,15 +942,30 @@ def _template_outreach(
 
     # The CTA + opt-out line are added by _finalize_outreach_body so there is ONE
     # place that guarantees a clear next step and a resolved (never raw-token) opt-out.
-    body = (
-        f"{opener}{detail} I run a small studio{city_phrase} and wanted to say hello "
-        f"and {goal_line}."
-    )
+    if warm_key:
+        body = f"{opener}{detail}"
+    else:
+        body = (
+            f"{opener}{detail} I run a small studio{city_phrase} and wanted to say hello "
+            f"and {goal_line}."
+        )
     body = " ".join(body.split())
 
     subject = None
     if ch in ("gmail", "email"):
         subj_by_key = {
+            "addressing-price": f"{first}, about your piece",
+            "offer-discount": f"{first}, a little something for your piece",
+            "payment-flexibility": f"{first}, an easier way to book",
+            "offer-payment": f"{first}, an easier way to book",
+            "flexible-timing": f"{first}, whenever you're ready",
+            "proof-and-portfolio": f"{first}, a bit more about our work",
+            "low-pressure-consult": f"{first}, no-pressure chat?",
+            "loyalty-touchup": f"{first}, come back and see us",
+            "offer-loyalty-touchup": f"{first}, come back and see us",
+            "completion-nudge": f"{first}, finishing your booking",
+            "win-back": f"{first}, it's been too long",
+            "offer-win-back": f"{first}, it's been too long",
             "their-positioning": f"Reaching out to {name}",
             "past-work": f"{first}, about your last piece",
             "shared-craft": f"{first}, kindred {top_interest or 'studio'} folks",
@@ -822,9 +1082,16 @@ def build_outreach_draft(
     tenant_id: str | None = None,
     deep_research: bool | None = None,
     research: list[dict[str, Any]] | None = None,
+    profile: Any = None,
+    offer: Any = None,
 ) -> dict[str, Any]:
     """Build ONE personalized outreach draft for a lead — REAL copywriter-written,
     brand-voiced, and grounded only in facts the system can substantiate.
+
+    ``profile`` (a grounded :class:`~studio.psych_profile.PsychProfile`) and ``offer`` (a
+    REAL substantiated :class:`~studio.offers.Offer`, or None) drive the category/objection
+    branching: a price/timing/trust objection leads the angle, and a discount is mentioned
+    ONLY when ``offer`` is a real substantiated offer — never invented.
 
     The copy is produced by the gated **copywriter email cell** (``cells.copywriter``)
     in the SENDER's resolved **brand voice** (``resolve_brand_voice``), from a prompt
@@ -888,9 +1155,21 @@ def build_outreach_draft(
     # positioning (its strongest differentiator) when one exists.
     if research is None and ch in ("gmail", "email") and _llm_copy_enabled():
         research = research_studio(facts, enabled=_research_enabled(deep_research))
-    angle = _choose_angle(facts, research)
+    angle = _choose_angle(facts, research, profile=profile, offer=offer)
     why_different = _angle_rationale(angle, facts, research, name)
     grounding.append(f"angle={angle['key']}")
+    # Record the grounded objection + any REAL substantiated offer the angle stands on,
+    # so the evidence panel can show WHY this lead is being re-engaged this way. The offer
+    # is only ever the real code/terms (build passes the substantiated Offer, or None).
+    if profile is not None:
+        obj_val, obj_sig, _ = _pf(profile, "primary_objection")
+        if obj_val and obj_val != "none-found" and obj_sig in ("stated", "inferred"):
+            grounding.append(f"objection={obj_val}")
+        cat_val, _, _ = _pf(profile, "umbrella_category")
+        if cat_val:
+            grounding.append(f"category={cat_val}")
+    if offer is not None:
+        grounding.append(f"offer={offer.code}")
     if angle["generic"]:
         grounding.append("personalization=generic-honest")
     elif angle["inferred"]:
@@ -915,7 +1194,8 @@ def build_outreach_draft(
                 approved_claims=approved_claims,
             )
             copy = cell.run_sync(
-                _build_email_prompt(facts, goal=goal, research=research, angle=angle)
+                _build_email_prompt(facts, goal=goal, research=research, angle=angle,
+                                    offer=offer, profile=profile)
             )
             subject, body = copy.subject, copy.body
             if brand_voice_context:
@@ -929,7 +1209,7 @@ def build_outreach_draft(
 
     # --- deterministic fallback (no key / non-email channel / cell failed) ------- #
     if body is None:
-        subject, body = _template_outreach(facts, goal=goal, ch=ch, angle=angle)
+        subject, body = _template_outreach(facts, goal=goal, ch=ch, angle=angle, offer=offer)
         if not any(g.startswith("copy=") for g in grounding):
             grounding.append("copy=deterministic_template")
 
@@ -1001,7 +1281,11 @@ def upsert_lead(
     interests_raw = row.get("interests") or ""
     interests = [s.strip() for s in interests_raw.replace(",", ";").split(";") if s.strip()]
     linkedin = (row.get("linkedin") or "").strip() or None
+    # Extended, adapter-normalized fields (ADR §4.6) — persisted so the ``notes`` angle
+    # and the category/objection branching read real values, not a dropped column.
+    ext = {c: ((row.get(c) or "").strip() or None) for c in _LEAD_EXT_COLUMNS}
 
+    ensure_lead_columns(dsn)
     with _connect(dsn) as conn:
         existing = None
         if email:
@@ -1010,7 +1294,9 @@ def upsert_lead(
                 (tenant_id, email),
             ).fetchone()
         if existing is not None:
-            # Backfill only NULL/empty columns; never clobber seeded ground truth.
+            # Backfill only NULL/empty columns; never clobber seeded ground truth. The
+            # extended columns backfill the same way (COALESCE) so an uploaded note/artist
+            # fills a gap but never overwrites a real seeded value.
             conn.execute(
                 """
                 UPDATE customers SET
@@ -1019,10 +1305,18 @@ def upsert_lead(
                     state = COALESCE(state, %s),
                     linkedin_handle = COALESCE(linkedin_handle, %s),
                     interests = CASE WHEN interests IS NULL OR cardinality(interests) = 0
-                                     THEN %s ELSE interests END
+                                     THEN %s ELSE interests END,
+                    notes = COALESCE(notes, %s),
+                    artist = COALESCE(artist, %s),
+                    shop = COALESCE(shop, %s),
+                    lead_stage = COALESCE(lead_stage, %s),
+                    customer_type = COALESCE(customer_type, %s),
+                    payment_status = COALESCE(payment_status, %s)
                 WHERE id = %s
                 """,
-                (name, city, state, linkedin, interests, existing["id"]),
+                (name, city, state, linkedin, interests,
+                 ext["notes"], ext["artist"], ext["shop"], ext["lead_stage"],
+                 ext["customer_type"], ext["payment_status"], existing["id"]),
             )
             return {"customer_id": existing["id"], "created": False}
 
@@ -1031,12 +1325,16 @@ def upsert_lead(
             """
             INSERT INTO customers
                 (id, tenant_id, name, email, linkedin_handle, city, state,
-                 interests, preferred_channels, email_opt_in, sms_opt_in, source)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 interests, preferred_channels, email_opt_in, sms_opt_in, source,
+                 notes, artist, shop, lead_stage, customer_type, payment_status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s)
             """,
             (
                 cust_id, tenant_id, name, email, linkedin, city, state,
                 interests, [], bool(email), False, "studio_upload",
+                ext["notes"], ext["artist"], ext["shop"], ext["lead_stage"],
+                ext["customer_type"], ext["payment_status"],
             ),
         )
         return {"customer_id": cust_id, "created": True}
