@@ -140,6 +140,12 @@ const REVIEW_QUEUE: Action[] = [
     threshold: 0.85,
     escalation: { kind: 'CONFIDENCE', label: 'Below threshold' },
     idempotencyKey: 'nw:outreach:bayside-pg:c8821',
+    // Campaign lineage (newest campaign): every staged draft carries the campaign it
+    // came from + its run, so the Review queue can group + label it (no orphans).
+    createdAt: '2026-06-29T13:40:00Z',
+    campaignId: 'nw-summer-tuneup',
+    runId: 'team-nw-summer-a1b2',
+    agentRole: 'OUTREACH',
   }),
   action({
     id: 'act_3c7b9',
@@ -153,6 +159,11 @@ const REVIEW_QUEUE: Action[] = [
     threshold: 0.9,
     escalation: { kind: 'SPLIT', label: 'Jury split' },
     idempotencyKey: 'nw:comment:ig:coastal-eats:r41',
+    // Same campaign as act_8f2a1 (grouped together, newest campaign on top).
+    createdAt: '2026-06-29T13:38:00Z',
+    campaignId: 'nw-summer-tuneup',
+    runId: 'team-nw-summer-a1b2',
+    agentRole: 'RESPONDER',
   }),
   action({
     id: 'act_5d1e4',
@@ -165,6 +176,11 @@ const REVIEW_QUEUE: Action[] = [
     threshold: 0.88,
     escalation: { kind: 'SAFETY', label: 'Safety veto' },
     idempotencyKey: 'nw:post:fb:ac-myths:w26',
+    // A DIFFERENT, older campaign — renders as its own group BELOW the newer one.
+    createdAt: '2026-06-29T11:05:00Z',
+    campaignId: 'nw-beat-the-heat',
+    runId: 'team-nw-beatheat-c3d4',
+    agentRole: 'PUBLISHER',
     gates: [
       { label: 'Suppression', ok: true },
       { label: 'Rate cap', ok: true },
