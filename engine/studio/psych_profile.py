@@ -613,6 +613,14 @@ class PsychLLMOut(_Camel):
     emotional_tone: PsychField | None = None
 
 
+def psych_llm_model() -> str:
+    """The REAL model id the LLM-enriched analyst runs at, read from the actual cell —
+    so a caller records a TRUTHFUL ``agent_run.model`` for an LLM read instead of a
+    hardcoded literal that could drift from the cell's pin."""
+    m = getattr(_build_psych_cell(), "model", None)
+    return m if isinstance(m, str) else str(m)
+
+
 def _build_psych_cell():
     from cells.base import Cell
     from cells.validators import ValidatorBank
@@ -688,9 +696,15 @@ def analyze_customer(
     through the SAME corpus-validation gate — no read survives that the customer's own
     data does not evidence. Returns the profile; every field is tagged stated/inferred/
     insufficient-signal and carries its evidence span. NEVER fabricates."""
-    # Normalize the conversation input to a list of turns.
+    # Normalize the conversation input to a list of turns. Accepts a list of
+    # ``{speaker,text}`` turns, the ``get_conversation`` dict (``{turns,...}``), OR a
+    # message-source ``ConversationThread`` (has a ``.turns`` attribute) — the adapter's
+    # own contract, so the analyst and the message-source adapters compose without the
+    # caller having to unwrap. ``None`` / empty stays honestly empty.
     if isinstance(conversation, dict):
         turns = conversation.get("turns") or []
+    elif conversation is not None and not isinstance(conversation, (list, tuple)) and hasattr(conversation, "turns"):
+        turns = getattr(conversation, "turns") or []
     else:
         turns = conversation or []
 

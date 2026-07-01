@@ -18,6 +18,7 @@ import { useConsole } from '@/state/console-store';
 import { useSharedStudio } from '@/lib/studio/StudioRunProvider';
 import { AgencyCanvas } from './AgencyCanvas';
 import { AgencyInterview } from './AgencyInterview';
+import { BlueprintBoardPanel } from './BlueprintBoardPanel';
 import { RunNarration } from './RunNarration';
 import {
   deriveInterview,
@@ -108,6 +109,13 @@ export function AgencyScreen() {
           <>
             {/* Live host narration of the run, derived from REAL recorded steps (#11). */}
             <RunNarration runState={studio.runState} running={studio.runningCampaign} />
+            {/* P1.5: the planner's executable blueprint + the durable progress board —
+                the plan-first surface, rendered BEFORE the war-room lanes so the planner
+                step reads as the first step. Real backend data only. */}
+            <BlueprintBoardPanel
+              blueprint={studio.runState?.blueprint}
+              board={studio.runState?.board}
+            />
             <AgencyCanvas
               runState={studio.runState}
               running={studio.runningCampaign}

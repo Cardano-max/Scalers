@@ -11,6 +11,8 @@
  * run produces HELD/PENDING rows only.
  */
 
+import type { CampaignBlueprint, ProgressBoard } from './blueprint';
+
 export type RunStatus = 'running' | 'completed' | 'error' | 'unknown';
 
 /** One per-agent trace step (a row of agent_runs). */
@@ -56,6 +58,10 @@ export interface RunState {
   /** The real HELD draft rows for this run (empty until drafts stage). */
   pending: PendingAction[];
   archetype: string | null;
+  /** P1.5: the planner's executable plan for this run (null on a pre-P1.5 run). */
+  blueprint?: CampaignBlueprint | null;
+  /** P1.5: the durable structured progress board for this run (null when none). */
+  board?: ProgressBoard | null;
   error: string | null;
 }
 
@@ -103,6 +109,8 @@ export async function fetchRunState(
     nPending?: number | null;
     pending?: PendingAction[];
     archetype?: string | null;
+    blueprint?: CampaignBlueprint | null;
+    board?: ProgressBoard | null;
     error?: string | null;
   };
   return {
@@ -113,6 +121,8 @@ export async function fetchRunState(
     nPending: d.nPending ?? null,
     pending: Array.isArray(d.pending) ? d.pending : [],
     archetype: d.archetype ?? null,
+    blueprint: d.blueprint ?? null,
+    board: d.board ?? null,
     error: d.error ?? null,
   };
 }

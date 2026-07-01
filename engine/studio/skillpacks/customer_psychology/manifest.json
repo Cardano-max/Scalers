@@ -1,0 +1,16 @@
+{
+  "name": "customer-psychology",
+  "version": "0.1.0-draft",
+  "provenance": "ORIGINAL",
+  "pinned": "ORIGINAL",
+  "status": "IN-VETTING",
+  "registered": false,
+  "wraps": "engine/studio/psych_profile.py::analyze_customer",
+  "entrypoint": "loader:load",
+  "capabilities": ["lead-classification", "objection-detection", "readiness-staging"],
+  "loads_on": "run performs lead classification (progressive disclosure)",
+  "network": false,
+  "filesystem": false,
+  "exec": false,
+  "notes": "First-party wrapper only. No third-party code vendored. Live path imports psych_profile.py directly; this pack is not usable until sec records a REGISTERED row."
+}

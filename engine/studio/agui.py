@@ -135,6 +135,11 @@ class CampaignPlan(BaseModel):
     scope: str = ""
     use_conversation_history: bool | None = None
     attach_artwork: bool | None = None
+    # P1.5: the objection the plan ASSUMES dominates this cohort — the recorded assumption
+    # the progress-aware replan (progress_board.maybe_replan) tests against the analyst's
+    # MEASURED dominant objection. Populated by the planner (plan_campaign) from
+    # target_category / campaign_type; empty = no assumption (replan then cannot fire).
+    assumed_objection: str = ""
     # Uploaded customer list — a REAL parse of the operator's CSV ({filename, rows,
     # columns, sample, ingested}). Persisted with the plan and surfaced to the
     # supervisor on every turn (see `_customers_context`) so it can truthfully say
@@ -530,17 +535,11 @@ def build_progress_context(tenant_id: str, plan: CampaignPlan, dsn: str | None) 
     # run status + the per-agent node spans). But a studio run materializes its runs
     # row only at the END, so an in-flight run shows up in ``actions`` first — if the
     # newest action points at a run that has NO runs row yet, surface that in-flight
-    # run instead of the previous (already-materialized) one.
-    record = runs[0] if runs else None
-    run_id = getattr(record, "run_id", None) if record is not None else None
-    latest_action_rid = next((a.run_id for a in actions_all if getattr(a, "run_id", None)), None)
-    if (
-        latest_action_rid
-        and latest_action_rid != run_id
-        and not any(getattr(r, "run_id", None) == latest_action_rid for r in runs)
-    ):
-        run_id = latest_action_rid
-        record = None  # in-flight: the runs row is not materialized yet
+    # run instead. Factored into ``progress_board.resolve_active_run`` so the durable
+    # board and this textual view share ONE run-resolution implementation.
+    from studio.progress_board import resolve_active_run
+
+    run_id, record = resolve_active_run(runs, actions_all)
 
     if not run_id:
         return (
@@ -1057,6 +1056,65 @@ def _use_provided_leads(plan: CampaignPlan) -> bool:
     return (plan.lead_source or "").strip().lower() == LEAD_SOURCE_PROVIDED
 
 
+def plan_campaign(plan: CampaignPlan, tenant_id: str, dsn: str | None) -> Any:
+    """THE PLANNER step (plan-first, P1.5 blueprint #1). Build the executable
+    :class:`~studio.campaign_blueprint.CampaignBlueprint` from the interview intent and
+    write the RESOLVED assumed objection back onto the plan (so the progress-aware replan
+    has a recorded assumption to test). Runs ONCE, in the DISPATCHER, BEFORE the lead-
+    source branch — so ONE blueprint fronts BOTH the provided-leads path and the compose
+    spine, never buried in a decorative compose node."""
+    from studio.campaign_blueprint import build_blueprint, resolve_assumed_objection
+
+    blueprint = build_blueprint(plan, tenant_id, dsn)
+    assumed = resolve_assumed_objection(plan)
+    if assumed and not (getattr(plan, "assumed_objection", "") or "").strip():
+        plan.assumed_objection = assumed
+    return blueprint
+
+
+def _planner_run_output(blueprint: Any) -> dict[str, Any]:
+    """The planner ``agent_run.output`` — carries the FULL blueprint (so the UI reads the
+    plan from the durable agent_run, with no separate table) plus flattened highlights."""
+    return {
+        "targets": blueprint.targets.model_dump(),
+        "per_channel_quota": blueprint.per_channel_quota,
+        "offer_logic": [r.model_dump() for r in blueprint.offer_logic],
+        "assumed_dominant_objection": blueprint.assumed_dominant_objection,
+        "research_questions": blueprint.research_questions,
+        "stop_conditions": blueprint.stop_conditions.model_dump(),
+        "compliance_constraints": blueprint.compliance_constraints,
+        "review_rules": blueprint.review_rules,
+        "artist_shop_rules": blueprint.artist_shop_rules,
+        "angle": blueprint.angle,
+        "rationale": blueprint.planner_rationale,
+        # The full plan lives here — the durable source of truth (no blueprint table).
+        "blueprint": blueprint.model_dump(),
+    }
+
+
+def _record_planner_run(
+    dsn: str | None, run_id: str, campaign_id: str, tenant_id: str, blueprint: Any
+) -> None:
+    """Record the planner as a real ``agent_run(role='planner')`` into ``run_id`` (used for
+    the compose path; the provided-leads path records it INLINE as its first step so it
+    orders before the per-lead rows). Best-effort — never breaks a real run."""
+    try:
+        import uuid as _uuid
+
+        from team.store import TeamStore
+
+        ts = TeamStore(dsn)
+        ts.setup()
+        ts.record_agent_run(
+            id=f"ar_planner_{_uuid.uuid4().hex[:16]}", campaign_id=campaign_id, run_id=run_id,
+            role="planner", model=blueprint.planner_model,
+            input={"goal": blueprint.goal, "target_category": blueprint.targets.category},
+            output=_planner_run_output(blueprint),
+        )
+    except Exception:
+        pass
+
+
 def _execute_campaign_sync(
     plan: CampaignPlan, session_id: str, tenant_id: str, dsn: str | None,
     run_id: str | None = None,
@@ -1067,11 +1125,16 @@ def _execute_campaign_sync(
     plan. ``run_id`` lets the async endpoint poll the per-role ``agent_runs`` live.
     Returns the runner summary. NOTHING is sent (HELD/PENDING only).
 
-    Branches on the operator's LEAD-SOURCE choice: ``provided`` runs the per-lead
-    compliance path (target ONLY the operator's leads, research each one); otherwise
-    the web-sourcing Phase-A spine runs."""
+    PLAN-FIRST: the PLANNER runs here, in the dispatcher, BEFORE the lead-source branch,
+    so ONE blueprint fronts BOTH paths. Then it branches on the operator's LEAD-SOURCE
+    choice: ``provided`` runs the per-lead compliance path (target ONLY the operator's
+    leads, research each one); otherwise the web-sourcing Phase-A spine runs."""
+    blueprint = plan_campaign(plan, tenant_id, dsn)
+
     if _use_provided_leads(plan):
-        return _execute_provided_leads_sync(plan, session_id, tenant_id, dsn, run_id)
+        return _execute_provided_leads_sync(
+            plan, session_id, tenant_id, dsn, run_id, blueprint=blueprint
+        )
 
     from studio.campaign_runner import run_and_trace
 
@@ -1081,6 +1144,13 @@ def _execute_campaign_sync(
         output_count=plan.output_count or 0,
         campaign_type=plan.campaign_type or None,
     )
+    # Record the planner into the SAME compose run so the plan step is not decorative for
+    # the compose spine either (the provided path records it inline as its first step).
+    if summary.get("run_id"):
+        _record_planner_run(
+            dsn, str(summary["run_id"]), str(summary.get("campaign_id") or ""),
+            tenant_id, blueprint,
+        )
     for ar in summary.get("agent_runs", []):
         role = str(ar.get("role") or "host")
         role = role if role in VALID_ROLES else "host"
@@ -1100,7 +1170,7 @@ def _execute_campaign_sync(
 
 def _execute_provided_leads_sync(
     plan: CampaignPlan, session_id: str, tenant_id: str, dsn: str | None,
-    run_id: str | None = None,
+    run_id: str | None = None, blueprint: Any = None,
 ) -> dict[str, Any]:
     """SYNC: the LEAD-SOURCE=provided compliance run. Targets ONLY the operator's own
     leads — the uploaded CSV (its ingested ``customer_ids``) or, if none uploaded, the
@@ -1133,7 +1203,7 @@ def _execute_provided_leads_sync(
         research_studio,
     )
     from studio.offers import get_offers, select_offer, substantiate
-    from studio.psych_profile import analyze_customer
+    from studio.psych_profile import analyze_customer, psych_llm_model
 
     if not run_id:
         campaign_id = f"camp_{_uuid.uuid4().hex[:12]}"
@@ -1150,15 +1220,38 @@ def _execute_provided_leads_sync(
     ts = TeamStore(dsn)
     ts.setup()
 
-    # 1) Resolve ONLY the operator's leads — uploaded CSV ids first, else DB cohort.
+    # PLAN-FIRST: the executable blueprint — built by the dispatcher (``plan_campaign``)
+    # BEFORE the branch and passed in, or built here on a direct call. It BOUNDS the
+    # fan-out and GATES offer selection below, and is recorded as the FIRST agent_run.
+    if blueprint is None:
+        blueprint = plan_campaign(plan, tenant_id, dsn)
+    blueprint.run_id = run_id
+    blueprint.campaign_id = campaign_id
+    # HARD fan-out cap (P1.5 blueprint #2): never run analyst+draft+critic for more than
+    # the planned quota, ceilinged at the archetype hard cap — a 5000-row uploaded CSV
+    # stages AT MOST this many actions, never 5000×(analyst+draft+critic).
+    from archetypes.compose import _OUTPUT_HARD_CAP
+
+    effective_cap = min(
+        blueprint.stop_conditions.total_quota or _OUTPUT_HARD_CAP, _OUTPUT_HARD_CAP
+    )
+
+    # 1) Resolve ONLY the operator's leads — uploaded CSV ids first, else DB cohort. The
+    # cust-id list is capped to ``effective_cap`` BEFORE the DB lookup so a huge CSV never
+    # fans out; the cohort limit is likewise bounded by the cap.
     cust_ids = list((plan.customers or {}).get("customer_ids") or [])
     if cust_ids:
+        n_requested = len(cust_ids)
+        cust_ids = cust_ids[:effective_cap]
         leads = lookup_leads(
             tenant_id, [{"customer_id": i} for i in cust_ids], dsn=dsn, memory_store=store
         )
-        source_note = f"uploaded CSV ({len(leads)} of {len(cust_ids)} rows resolved in DB)"
+        capped_note = f", capped to {effective_cap}" if n_requested > effective_cap else ""
+        source_note = (
+            f"uploaded CSV ({len(leads)} of {n_requested} rows resolved in DB{capped_note})"
+        )
     else:
-        limit = plan.lead_count or plan.output_count or 10
+        limit = min(plan.lead_count or plan.output_count or 10, effective_cap)
         leads = churn_risk_leads(tenant_id, limit=limit, dsn=dsn, memory_store=store)
         source_note = f"existing-database win-back / lapsing cohort ({len(leads)})"
 
@@ -1188,6 +1281,26 @@ def _execute_provided_leads_sync(
         m = getattr(cell, "model", None)
         return m if isinstance(m, str) else str(m)
 
+    # 1a) PLANNER — plan-first (P1.5 blueprint #1). The blueprint is built by the DISPATCHER
+    # (``plan_campaign``) BEFORE the lead-source branch and passed in; on a direct/standalone
+    # call it is built here. It is recorded as the FIRST agent_run (role='planner', with the
+    # FULL blueprint in the output) so the war-room shows the plan step first AND the UI
+    # reads the plan from this durable agent_run — no separate blueprint table. The per-lead
+    # loop then executes AGAINST it (quota caps the fan-out, offer_logic gates offers).
+    from studio.campaign_blueprint import offer_rule_for
+    from studio.progress_board import (
+        board_for_run,
+        maybe_replan,
+        replan_event_id,
+    )
+
+    _rec(
+        "planner", blueprint.planner_model,
+        {"goal": blueprint.goal, "target_category": blueprint.targets.category,
+         "scope": blueprint.targets.scope, "channels": list(plan.channels or [])},
+        _planner_run_output(blueprint),
+    )
+
     # 1b) STRATEGIST runs ONCE for the campaign — the REAL strategy cell sets the angle
     # the per-lead drafts lead with, recorded as a real agent_run (so the Strategist
     # lane reads `done` with real lineage, not skipped). A cell hiccup records an honest
@@ -1195,19 +1308,22 @@ def _execute_provided_leads_sync(
     # never a fabricated angle.
     from cells.strategy import build_strategy_cell, build_strategy_prompt
 
+    # Build the strategist cell OUTSIDE the try so BOTH the success and the honest-failed
+    # run record its REAL model (never a hardcoded literal that could drift from the pin).
+    strat_cell = build_strategy_cell()
+    strat_model = _cell_model(strat_cell)
     campaign_angle: str | None = None
     try:
-        strat_cell = build_strategy_cell()
         strategy = strat_cell.run_sync(build_strategy_prompt(tenant_id, _brief_from_plan(plan)))
         campaign_angle = (strategy.target_angle or "").strip() or None
         _rec(
-            "strategist", _cell_model(strat_cell),
+            "strategist", strat_model,
             {"goal": goal, "n_leads": len(leads), "lead_source": "provided"},
             strategy.model_dump(),
         )
     except Exception as exc:  # honest failed run, never a fabricated strategy
         _rec(
-            "strategist", "anthropic:claude-sonnet-4-6",
+            "strategist", strat_model,
             {"goal": goal, "lead_source": "provided"},
             {"status": "failed", "error": f"{type(exc).__name__}: {exc}"},
         )
@@ -1222,7 +1338,12 @@ def _execute_provided_leads_sync(
     draft_goal = goal if not campaign_angle else f"{goal}. Lead with this campaign angle: {campaign_angle}"
 
     # 2) Per-lead: real DB history + research ABOUT this lead + brand-voiced draft.
+    # The blueprint's stop_conditions + the hard cap bound the fan-out: draft at most
+    # ``effective_cap`` leads. This makes the plan load-bearing — the executor stops when
+    # the plan says stop, never an unbounded 5000× fan-out.
     for facts in leads:
+        if len(pending) >= effective_cap:
+            break  # stop_condition: per-run quota / hard cap met
         cust_id = facts["customer_id"]
         research = research_studio(facts, enabled=deep)  # real Firecrawl about THIS studio
         th = facts.get("tattoo_history", []) or []
@@ -1269,7 +1390,7 @@ def _execute_provided_leads_sync(
             po = profile.primary_objection
             objection_val = po.value if po.signal in ("stated", "inferred") else ""
             _rec(
-                "analyst", ("anthropic:claude-sonnet-4-6" if profile.source.endswith("llm")
+                "analyst", (psych_llm_model() if profile.source.endswith("llm")
                             else "grounded_rules"),
                 {"customer_id": cust_id, "name": facts.get("name"),
                  "had_conversation": profile.had_conversation},
@@ -1293,23 +1414,28 @@ def _execute_provided_leads_sync(
                 {"status": "failed", "error": f"{type(exc).__name__}: {exc}"},
             )
 
-        # Offer selection through the SUBSTANTIATION GATE: pick a real objection-matching
-        # offer, then substantiate its code before it can reach the draft. None -> the
-        # draft references NO discount (honest fallback), never an invented one.
-        chosen_offer = select_offer(offers, objection=objection_val, interest=interest_hint)
-        if chosen_offer is not None:
-            chosen_offer = substantiate(offers, chosen_offer.code)
+        # Offer selection DRIVEN BY the blueprint's offer_logic: the plan decides whether
+        # an offer is PERMITTED for this objection (each rule was grounded in the real
+        # offers doc at plan time). Only when the rule carries a real code do we
+        # interest-match the concrete offer and pass it through the SUBSTANTIATION GATE.
+        # No rule / no real offer -> the draft references NO discount, never an invented
+        # one. This makes the blueprint load-bearing (not a decorative artifact).
+        rule = offer_rule_for(blueprint, objection_val)
+        chosen_offer = None
+        if rule is not None and rule.offer_code:
+            chosen_offer = select_offer(offers, objection=objection_val, interest=interest_hint)
+            if chosen_offer is not None:
+                chosen_offer = substantiate(offers, chosen_offer.code)
 
         draft = build_outreach_draft(
             facts, goal=draft_goal, plan_channels=plan.channels or None,
             deep_research=plan.deep_research, research=research,
             profile=profile, offer=chosen_offer,
         )
-        copy_model = (
-            "anthropic:claude-sonnet-4-6"
-            if any(g == "copy=copywriter_email_cell" for g in draft.get("grounding", []))
-            else "grounded_template"
-        )
+        # TRUTHFUL model provenance: the real model the copy was written with, read from
+        # the cell that ran (build_outreach_draft returns it) — never a hardcoded literal
+        # that could drift from the copywriter cell's actual pin.
+        copy_model = draft.get("copy_model") or "grounded_template"
         _rec(
             "draft", copy_model,
             {"customer_id": cust_id, "channel": draft["channel"]},
@@ -1394,6 +1520,64 @@ def _execute_provided_leads_sync(
         except Exception:
             pass
 
+    # 2b) PROGRESS-AWARE REPLAN (P1.5 blueprint #3, limited-commitment — NOT reflect-every-
+    # step). After the loop has accumulated real evidence, ``maybe_replan`` compares the
+    # analyst's MEASURED dominant objection against the blueprint's ASSUMPTION under HARD
+    # gates (sample ≥ MIN_SAMPLE, margin ≥ MIN_MARGIN, measured ≠ assumed, replans <
+    # REPLAN_CAP). It returns a CONCRETE PlanDelta (from ≠ to) or None — a decorative
+    # no-diff replan is impossible. The replan is recorded ONCE as a planner agent_run with
+    # a DETERMINISTIC id (exactly-once via ON CONFLICT DO NOTHING); already-staged HELD
+    # drafts are NOT re-drafted (exactly-once). The delta flips the blueprint's assumption/
+    # angle for a NEXT batch only.
+    contradictions: list[str] = []
+    delta = maybe_replan(blueprint, agent_runs, replans_so_far=0)
+    if delta is not None:
+        contradictions.append(delta.reason)
+        sample_n = sum(
+            1 for ar in agent_runs if ar["role"] == "analyst"
+            and (ar["output"].get("objection_signal") in ("stated", "inferred"))
+        )
+        replan_out = {
+            "phase": "replan",
+            "replan": {
+                "contradiction": delta.reason,
+                "from_objection": delta.from_objection,
+                "to_objection": delta.to_objection,
+                "new_offer_code": delta.new_offer_code,
+                "new_angle": delta.new_angle,
+            },
+        }
+        # Deterministic id → exactly-once (a re-run with the same measurement won't double-
+        # record). record_agent_run is ON CONFLICT DO NOTHING; mirror into agent_runs so the
+        # summary/board see the replan too.
+        rid = replan_event_id(run_id, delta.from_objection, delta.to_objection, sample_n)
+        ts.record_agent_run(
+            id=rid, campaign_id=campaign_id, run_id=run_id, role="planner",
+            model=blueprint.planner_model,
+            input={"phase": "replan", "assumed_dominant_objection": delta.from_objection},
+            output=replan_out,
+        )
+        agent_runs.append({
+            "role": "planner", "model": blueprint.planner_model,
+            "input": {"phase": "replan"}, "output": replan_out,
+            "output_summary": _summarize_output("planner", replan_out),
+        })
+        # Apply the delta to the in-memory blueprint (the plan the summary returns); the
+        # durable record is the replan agent_run above (no mutable blueprint table).
+        blueprint.assumed_dominant_objection = delta.to_objection
+        if delta.new_angle:
+            blueprint.angle = delta.new_angle
+
+    # 2c) Compute the durable PROGRESS BOARD ON DEMAND from the SAME real rows (no board
+    # table — the board is derived, never a second source of truth).
+    try:
+        from actions.store import list_actions_for_run
+
+        run_actions_rows = list_actions_for_run(run_id, dsn=dsn)
+    except Exception:
+        run_actions_rows = []
+    board = board_for_run(run_id, None, agent_runs, run_actions_rows, plan)
+
     # 3) A final jury summary over the per-lead drafts (offline aggregate, HELD).
     _rec(
         "jury", JURY_MODEL,
@@ -1442,7 +1626,13 @@ def _execute_provided_leads_sync(
         "n_pending": len(pending),
         "n_queued": len(pending),
         "channels": channels,
+        "blueprint": blueprint.model_dump(),
+        "board": board.model_dump(),
         "step_notes": [
+            f"planner built the executable blueprint first (target '{blueprint.targets.category}', "
+            f"quota {blueprint.stop_conditions.total_quota or 'uncapped'}, "
+            f"{sum(1 for r in blueprint.offer_logic if r.offer_code)} objection(s) with a real offer) "
+            f"[{blueprint.planner_model}]",
             f"lead_source=provided: targeting ONLY the operator's leads — {source_note}",
             f"analyst psych-analyzed {n_analysts} lead(s) per-lead (category + grounded objection, no fabrication)",
             f"strategist set the campaign angle once ({campaign_angle or 'recorded'})",
@@ -2148,6 +2338,32 @@ def mount_studio_agui(app) -> None:
                     if runs_status in ("completed", "success")
                     else ("running" if steps else "unknown")
                 )
+            # P1.5: read the executable plan from the planner agent_run.output (the durable
+            # source of truth — NO blueprint table) and compute the progress board ON DEMAND
+            # from the loaded rows (NO board table). Both honest-null on a pre-P1.5 run.
+            blueprint = None
+            for st in steps:
+                out = st.get("output")
+                if st.get("role") == "planner" and isinstance(out, dict) and out.get("blueprint"):
+                    blueprint = out["blueprint"]
+                    break
+            board = None
+            try:
+                from types import SimpleNamespace
+
+                from studio.progress_board import board_for_run
+
+                quota = ((blueprint or {}).get("stop_conditions") or {}).get("total_quota") or 0
+                chans = list(((blueprint or {}).get("per_channel_quota") or {}).keys())
+                plan_ctx = SimpleNamespace(output_count=quota, lead_count=0, channels=chans)
+                run_actions = [
+                    SimpleNamespace(run_id=run_id, status=p.get("status"))
+                    for p in pending_actions
+                ]
+                board = board_for_run(run_id, None, steps, run_actions, plan_ctx).model_dump()
+            except Exception:
+                board = None
+
             return {
                 "status": status,
                 "steps": steps,
@@ -2156,6 +2372,8 @@ def mount_studio_agui(app) -> None:
                 "nPending": n_pending,
                 "pending": pending_actions,
                 "archetype": archetype,
+                "blueprint": blueprint,
+                "board": board,
                 "error": reg.get("error") if reg else None,
             }
 

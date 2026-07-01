@@ -41,6 +41,11 @@ VALID_ROLES: tuple[str, ...] = (
     # WHERE each customer sits (category + objection) from their real conversation/facts.
     "analyst",
     "strategist",
+    # P1.5: the plan-first PLANNER — runs ONCE before the per-lead loop, decomposing the
+    # interview intent into an executable CampaignBlueprint (targets/quota/offer-logic/
+    # stop-conditions). Recorded as the FIRST agent_run; may also record a replan turn on
+    # a measured contradiction. Routed to the best tier; never an outreach send.
+    "planner",
     "draft",
     # P3.x: the Host's REAL extended-thinking trace (Anthropic ThinkingPart.content),
     # captured from the run result and persisted so a frontend thinking-view can show
