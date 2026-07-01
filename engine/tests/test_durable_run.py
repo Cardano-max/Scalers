@@ -16,7 +16,9 @@ HARN-04 exactly-once suite. Start it with: cd infra && docker compose up -d
 
 from __future__ import annotations
 
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 import psycopg
 import pytest
@@ -339,6 +341,63 @@ def test_double_resume_is_rejected(dsn, run_id):
 def test_load_missing_run_raises(dsn):
     with pytest.raises(RunNotFoundError):
         DurableRun.load("no-such-run-xyz", dsn=dsn)
+
+
+# --------------------------------------------------------------------------- #
+# 6b) ADVERSARIAL: concurrent resume of the SAME paused run. Two processes race
+#     to load()+resume() the same run (the exact double-fire a skeptic reaches
+#     for). The step ledger's atomic claim (INSERT ... ON CONFLICT DO NOTHING +
+#     effect committed in one tx) is serialized by the unique index, so each
+#     side-effect fires EXACTLY ONCE even though both drivers replay the body.
+# --------------------------------------------------------------------------- #
+
+
+def test_concurrent_resume_does_not_double_fire(dsn, run_id):
+    # Pause after leads 0,1.
+    DurableRun(run_id, "ladies8391", dsn=dsn).run(_make_body([]))
+    assert _sends(dsn, run_id) == ["lead0", "lead1"]
+
+    barrier = threading.Barrier(2)
+
+    def racer(_):
+        barrier.wait()  # release both threads at once to maximize the race
+        try:
+            return DurableRun.load(run_id, dsn=dsn).resume(
+                Command(resume="approved"), _make_body([])
+            ).status
+        except DurableResumeError:
+            # The loser may see the winner already flipped the run off 'interrupted'.
+            return "already-resumed"
+
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        outcomes = [f.result() for f in [ex.submit(racer, i) for i in range(2)]]
+
+    # No lead re-fired despite two concurrent drivers replaying the body.
+    all_sends = _sends(dsn, run_id)
+    assert all_sends == LEADS, f"double-fire under concurrent resume: {all_sends}"
+    assert len(set(all_sends)) == 4
+    # At least one resume drove the run to completion.
+    assert "completed" in outcomes
+    assert _row(dsn, run_id)["status"] == "completed"
+
+
+def test_concurrent_fresh_run_does_not_double_fire(dsn, run_id):
+    """Two racers starting the SAME fresh run_id -> each lead staged exactly once."""
+    barrier = threading.Barrier(2)
+
+    def racer(_):
+        barrier.wait()
+        try:
+            return DurableRun(run_id, "ladies8391", dsn=dsn).run(_make_body([])).status
+        except (DurableResumeError, RunAlreadyCompletedError):
+            return "guarded"
+
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        [f.result() for f in [ex.submit(racer, i) for i in range(2)]]
+
+    sends = _sends(dsn, run_id)
+    assert sends == LEADS[:PAUSE_BEFORE], f"double-fire under concurrent run: {sends}"
+    assert len(set(sends)) == PAUSE_BEFORE
 
 
 # --------------------------------------------------------------------------- #
