@@ -149,6 +149,9 @@ def lookup_lead(
         "customer_id": cust["id"],
         "name": cust["name"],
         "email": cust["email"],
+        # ``phone`` is already SELECTed above; surface it (honest-empty when null) so the
+        # SMS channel targets a real number and the per-lead Dossier carries real contact.
+        "phone": cust["phone"],
         "ig_handle": cust["ig_handle"],
         "city": cust["city"],
         "state": cust["state"],
