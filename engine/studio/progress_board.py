@@ -32,7 +32,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 # Replan gates — deliberately conservative so a single noisy read cannot thrash the plan.
-MIN_SAMPLE = 2   # need at least this many grounded-objection reads before replanning
+MIN_SAMPLE = 3   # need at least this many grounded-objection reads before replanning
 MIN_MARGIN = 1   # the measured winner must beat the runner-up by at least this many reads
 REPLAN_CAP = 1   # at most this many replans per run
 

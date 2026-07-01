@@ -86,14 +86,19 @@ def test_compute_board_honest_empty_when_no_run() -> None:
 
 
 def test_maybe_replan_only_on_a_gated_measured_mismatch_and_emits_a_concrete_delta() -> None:
+    from studio.progress_board import MIN_SAMPLE
+
+    assert MIN_SAMPLE >= 3  # a single noisy read must never flip the plan
     bp = build_blueprint(
-        CampaignPlan(goal="g", target_category="past-customer-reactivation", output_count=3),
+        CampaignPlan(goal="g", target_category="past-customer-reactivation", output_count=4),
         "t", None, use_llm=False,
     )
     assert bp.assumed_dominant_objection == "price"
 
-    # Trust beats the assumption (price) by margin 1 across >= MIN_SAMPLE reads -> a delta.
-    trust_majority = [_analyst("trust", "a"), _analyst("trust", "b"), _analyst("price", "c")]
+    # Trust beats the assumption (price) across >= MIN_SAMPLE reads with a clear margin -> a delta.
+    trust_majority = [
+        _analyst("trust", "a"), _analyst("trust", "b"), _analyst("trust", "c"), _analyst("price", "d")
+    ]
     delta = maybe_replan(bp, trust_majority, replans_so_far=0)
     assert isinstance(delta, PlanDelta)
     assert delta.from_objection == "price" and delta.to_objection == "trust"
@@ -101,10 +106,12 @@ def test_maybe_replan_only_on_a_gated_measured_mismatch_and_emits_a_concrete_del
     assert delta.reason and "trust" in delta.reason
     assert dominant_measured_objection(trust_majority) == "trust"
 
-    # No delta when the measured majority MATCHES the assumption.
-    assert maybe_replan(bp, [_analyst("price", "a"), _analyst("price", "b")]) is None
-    # No delta below MIN_SAMPLE (one grounded read).
+    # A SINGLE noisy analyst read must NOT flip the plan (below MIN_SAMPLE).
     assert maybe_replan(bp, [_analyst("trust", "a")]) is None
+    # Two reads is still below MIN_SAMPLE=3 -> no replan (even a unanimous 'trust').
+    assert maybe_replan(bp, [_analyst("trust", "a"), _analyst("trust", "b")]) is None
+    # No delta when the measured majority MATCHES the assumption.
+    assert maybe_replan(bp, [_analyst("price", "a"), _analyst("price", "b"), _analyst("price", "c")]) is None
     # No delta at/over the cap (no thrash).
     assert maybe_replan(bp, trust_majority, replans_so_far=REPLAN_CAP) is None
 

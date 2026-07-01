@@ -91,6 +91,12 @@ def pick_archetype(brief: str) -> str:
 # node (archetypes.router) that proves the role ran. The spine records role "draft"
 # for the "draft_one" worker, "jury" for the "route" node, etc.
 AGENT_ROLE_SEQUENCE: tuple[tuple[str, str], ...] = (
+    # The plan-first PLANNER (P1.5) — a DISTINCT node label ("plan_blueprint", NOT the
+    # compose graph's decorative "plan" node) that is in NO archetype's enabled path, so
+    # like the analyst it reads skipped-not-required in the content archetypes. It runs
+    # FIRST in the provided-leads path and lands a real agent_run, so its lane renders
+    # `done`. Listed first so the plan step orders before every executor lane.
+    ("planner", "plan_blueprint"),
     ("researcher", "research"),
     # The per-lead psychology analyst has no spine node (it runs only in the provided-
     # leads path); it is listed so its lane orders correctly there. In a content-campaign

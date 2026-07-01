@@ -220,7 +220,8 @@ def test_measured_contradiction_records_a_deterministic_replan_and_flips_the_ass
     plan = CampaignPlan(
         lead_source="provided", goal="win back lapsed clients", channels=["gmail"],
         target_category="past-customer-reactivation",
-        customers={"customer_ids": ["c1", "c2"], "rows": 2},
+        # >= MIN_SAMPLE (3) leads so the measured 'trust' clears the replan guard.
+        customers={"customer_ids": ["c1", "c2", "c3"], "rows": 3},
     )
     summary = _execute_provided_leads_sync(plan, "sess1", "ladies8391", None, None)
 

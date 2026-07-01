@@ -100,3 +100,16 @@ def test_blueprint_lives_in_planner_run_and_board_computes_on_demand_pg() -> Non
     planner = next(r for r in rows if r["role"] == "planner")
     assert planner["output"]["blueprint"]["assumed_dominant_objection"] == "price"
     assert planner["output"]["blueprint"]["per_channel_quota"] == {"sms": 1}
+
+    # And it also round-trips through the dedicated blueprint_store row (the authored plan).
+    from studio import blueprint_store
+
+    blueprint_store.upsert_blueprint(
+        run_id, blueprint.model_dump(), campaign_id=campaign_id, tenant_id=tenant,
+        planner_model=blueprint.planner_model, dsn=_DSN,
+    )
+    stored = blueprint_store.get_blueprint(run_id, dsn=_DSN)
+    assert stored is not None
+    assert stored["planner_model"] == blueprint.planner_model
+    assert stored["state"]["assumed_dominant_objection"] == "price"
+    assert stored["state"]["per_channel_quota"] == {"sms": 1}

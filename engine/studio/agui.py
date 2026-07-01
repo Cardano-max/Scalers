@@ -1111,6 +1111,12 @@ def _record_planner_run(
             input={"goal": blueprint.goal, "target_category": blueprint.targets.category},
             output=_planner_run_output(blueprint),
         )
+        from studio import blueprint_store
+
+        blueprint_store.upsert_blueprint(
+            run_id, blueprint.model_dump(), campaign_id=campaign_id, tenant_id=tenant_id,
+            planner_model=blueprint.planner_model, dsn=dsn,
+        )
     except Exception:
         pass
 
@@ -1284,9 +1290,11 @@ def _execute_provided_leads_sync(
     # 1a) PLANNER — plan-first (P1.5 blueprint #1). The blueprint is built by the DISPATCHER
     # (``plan_campaign``) BEFORE the lead-source branch and passed in; on a direct/standalone
     # call it is built here. It is recorded as the FIRST agent_run (role='planner', with the
-    # FULL blueprint in the output) so the war-room shows the plan step first AND the UI
-    # reads the plan from this durable agent_run — no separate blueprint table. The per-lead
-    # loop then executes AGAINST it (quota caps the fan-out, offer_logic gates offers).
+    # FULL blueprint in the output) so the war-room shows the plan step first, AND persisted
+    # to its dedicated ``campaign_blueprints`` row (the authored plan — distinct from the
+    # progress BOARD, which stays derived/on-demand with no table). The per-lead loop then
+    # executes AGAINST it (quota caps the fan-out, offer_logic gates offers).
+    from studio import blueprint_store
     from studio.campaign_blueprint import offer_rule_for
     from studio.progress_board import (
         board_for_run,
@@ -1300,6 +1308,17 @@ def _execute_provided_leads_sync(
          "scope": blueprint.targets.scope, "channels": list(plan.channels or [])},
         _planner_run_output(blueprint),
     )
+
+    def _persist_blueprint() -> None:
+        try:
+            blueprint_store.upsert_blueprint(
+                run_id, blueprint.model_dump(), campaign_id=campaign_id, tenant_id=tenant_id,
+                session_id=session_id, planner_model=blueprint.planner_model, dsn=dsn,
+            )
+        except Exception:
+            pass  # the blueprint row is a read convenience; never break a real run
+
+    _persist_blueprint()
 
     # 1b) STRATEGIST runs ONCE for the campaign — the REAL strategy cell sets the angle
     # the per-lead drafts lead with, recorded as a real agent_run (so the Strategist
@@ -1562,11 +1581,13 @@ def _execute_provided_leads_sync(
             "input": {"phase": "replan"}, "output": replan_out,
             "output_summary": _summarize_output("planner", replan_out),
         })
-        # Apply the delta to the in-memory blueprint (the plan the summary returns); the
-        # durable record is the replan agent_run above (no mutable blueprint table).
+        # Apply the delta to the in-memory blueprint (the plan the summary returns) and
+        # re-persist the authored plan row; the replan EVENT itself is the deterministic
+        # agent_run above.
         blueprint.assumed_dominant_objection = delta.to_objection
         if delta.new_angle:
             blueprint.angle = delta.new_angle
+        _persist_blueprint()
 
     # 2c) Compute the durable PROGRESS BOARD ON DEMAND from the SAME real rows (no board
     # table — the board is derived, never a second source of truth).
@@ -2338,15 +2359,25 @@ def mount_studio_agui(app) -> None:
                     if runs_status in ("completed", "success")
                     else ("running" if steps else "unknown")
                 )
-            # P1.5: read the executable plan from the planner agent_run.output (the durable
-            # source of truth — NO blueprint table) and compute the progress board ON DEMAND
-            # from the loaded rows (NO board table). Both honest-null on a pre-P1.5 run.
+            # P1.5: read the executable plan from its dedicated ``campaign_blueprints`` row
+            # (the authored plan), falling back to the planner agent_run.output; and compute
+            # the progress board ON DEMAND from the loaded rows (NO board table). Both
+            # honest-null on a pre-P1.5 run.
             blueprint = None
-            for st in steps:
-                out = st.get("output")
-                if st.get("role") == "planner" and isinstance(out, dict) and out.get("blueprint"):
-                    blueprint = out["blueprint"]
-                    break
+            try:
+                from studio.blueprint_store import get_blueprint
+
+                bp_row = get_blueprint(run_id, dsn=dsn)
+                if bp_row and bp_row.get("state"):
+                    blueprint = bp_row["state"]
+            except Exception:
+                blueprint = None
+            if blueprint is None:
+                for st in steps:
+                    out = st.get("output")
+                    if st.get("role") == "planner" and isinstance(out, dict) and out.get("blueprint"):
+                        blueprint = out["blueprint"]
+                        break
             board = None
             try:
                 from types import SimpleNamespace
