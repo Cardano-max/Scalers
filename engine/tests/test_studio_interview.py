@@ -13,6 +13,7 @@ from __future__ import annotations
 from studio.agui import CampaignPlan
 from studio.interview import (
     GATING_FIELDS,
+    OPTIONAL_FIELDS,
     apply_fields,
     coerce_field,
     field_present,
@@ -308,3 +309,149 @@ def test_unanswered_spec_fields_are_absent_from_summary() -> None:
     for absent in ("Segment", "Research depth", "Do NOT use", "Success looks like",
                    "Personalization rules", "Why they haven't booked", "Prior contact"):
         assert absent not in labels, absent
+
+
+# --------------------------------------------------------------------------- #
+# P1-C — ADAPTIVE follow-up sequencing (CustomerAcq-65w.3). The exec-discovery
+# follow-ups BRANCH on the last answer: skip the irrelevant, probe the thin, cap
+# the total — while the GATING run-gate stays deterministic (arms only on real
+# answers to the core questions).
+# --------------------------------------------------------------------------- #
+
+def _answer_for(field: str):
+    """A plausible, SPECIFIC answer for a given interview field so a drained interview
+    advances (never a vague goal, so the goal probe resolves after one clarification)."""
+    if field in ("output_count", "lead_count"):
+        return 10
+    if field in ("per_lead", "personalize", "deep_research", "drafts_only",
+                 "use_conversation_history", "attach_artwork"):
+        return "yes"
+    if field == "channels":
+        return "email"
+    if field == "goal":
+        return "win back lapsed clients from last spring"
+    if field == "lead_source":
+        return "provided"
+    if field == "segment":
+        return "warm"
+    return "a specific concrete answer"
+
+
+def _drain(plan, limit: int = 60):
+    """Walk the interview to completion, answering each question the way the operator
+    would, and return the list of ``(field, is_probe)`` asked in order."""
+    asked: list[tuple[str, bool]] = []
+    for _ in range(limit):
+        q = next_question(plan)
+        if q is None:
+            return asked
+        asked.append((q["field"], bool(q.get("probe"))))
+        apply_fields(plan, {q["field"]: _answer_for(q["field"])})
+    raise AssertionError("interview did not terminate — possible ask loop")
+
+
+def test_recurring_segment_skips_the_why_no_convert_branch() -> None:
+    # AC (a): answering "just my regulars" -> the cold-lead / why-didn't-they-convert
+    # probe ("Why do you think they haven't booked yet?") is IRRELEVANT and skipped.
+    plan = _full_plan()
+    apply_fields(plan, {"segment": "just my regulars"})
+    assert plan.segment == "recurring"
+    asked = dict(_drain(plan))  # {field: is_probe}
+    assert "no_convert_reason" not in asked
+    # control: a WARM cohort still gets the why-no-convert probe within budget.
+    warm = _full_plan()
+    apply_fields(warm, {"segment": "warm"})
+    assert "no_convert_reason" in dict(_drain(warm))
+
+
+def test_source_new_skips_prior_contact_and_conversation_history() -> None:
+    # Brand-new online prospects have no prior conversation with you — those follow-ups
+    # are skipped when the operator chose to SOURCE new leads.
+    plan = _full_plan()
+    plan.lead_source = "source_new"
+    asked = dict(_drain(plan))
+    assert "prior_contact" not in asked
+    assert "use_conversation_history" not in asked
+
+
+def test_vague_goal_triggers_one_clarifying_probe_then_resolves() -> None:
+    # AC (b): a thin goal ("more clients") gets exactly ONE clarifying probe; once the
+    # operator gives a concrete target the probe is gone (a single clarification ends it).
+    plan = _full_plan()
+    plan.goal = "more clients"
+    q = next_question(plan)
+    assert q["field"] == "goal"
+    assert q.get("probe") is True
+    # a vague goal is still a *present* answer -> the deterministic gate is not fooled.
+    assert is_armed(plan) is True
+    apply_fields(plan, {"goal": "win back lapsed clients from last spring"})
+    q2 = next_question(plan)
+    assert not (q2 and q2.get("probe")), "a clarified goal must not be re-probed"
+
+
+def test_specific_goal_is_not_probed() -> None:
+    # AC (c): a rich goal gets NO probe — the first thing asked is a normal follow-up.
+    plan = _full_plan()  # goal="win back lapsed clients" is specific
+    q = next_question(plan)
+    assert q is None or not q.get("probe")
+
+
+def test_is_vague_goal_word_set() -> None:
+    from studio.interview import _is_vague_goal
+    for vague in ("more clients", "grow the business", "increase sales",
+                  "more customers", "just more bookings", "get more people",
+                  "marketing", "growth"):
+        assert _is_vague_goal(vague) is True, vague
+    for specific in ("fill quiet Tuesdays", "win back lapsed clients",
+                     "promote the new flash sheet", "reach fine-line fans in Brooklyn",
+                     "book out my apprentice's chair"):
+        assert _is_vague_goal(specific) is False, specific
+
+
+def test_follow_up_questions_are_capped() -> None:
+    # AC (d): the exec-discovery follow-ups are capped so the interview never interrogates
+    # — it stops asking optionals well before exhausting the whole optional set.
+    from studio.interview import _MAX_FOLLOW_UPS
+    plan = _full_plan()  # gated, specific goal
+    asked = _drain(plan)
+    optionals_asked = [f for f, _probe in asked if f in OPTIONAL_FIELDS]
+    assert len(optionals_asked) <= _MAX_FOLLOW_UPS
+    assert len(optionals_asked) < len(OPTIONAL_FIELDS)  # the cap actually bit
+
+
+def test_should_skip_optional_branches() -> None:
+    from studio.interview import _should_skip_optional
+    regulars = _full_plan()
+    apply_fields(regulars, {"segment": "just my regulars"})
+    assert _should_skip_optional(regulars, "no_convert_reason") is True
+    warm = _full_plan()
+    apply_fields(warm, {"segment": "warm"})
+    assert _should_skip_optional(warm, "no_convert_reason") is False
+    src_new = _full_plan()
+    src_new.lead_source = "source_new"
+    assert _should_skip_optional(src_new, "prior_contact") is True
+    assert _should_skip_optional(src_new, "use_conversation_history") is True
+    no_personalize = _full_plan()
+    apply_fields(no_personalize, {"personalize": "no"})
+    assert _should_skip_optional(no_personalize, "personalization_rules") is True
+
+
+def test_adaptive_changes_do_not_relax_the_run_gate() -> None:
+    # AC (e) regression: the gate arms ONLY on the core GATING answers. Optionals and the
+    # goal-probe never arm or block it, and a vague-but-present goal is a real answer.
+    plan = CampaignPlan()
+    assert is_armed(plan) is False
+    # answer only OPTIONAL fields -> still not armed, and the next ask is a GATING field.
+    apply_fields(plan, {"segment": "warm", "offer_type": "booking",
+                        "brand_voice": "warm and plain-spoken"})
+    assert is_armed(plan) is False
+    assert next_question(plan)["field"] in GATING_FIELDS
+    # a full gating set arms even if the goal is vague (deterministic, not fooled).
+    full = _full_plan()
+    full.goal = "more clients"
+    assert is_armed(full) is True
+    # and removing any one gating field disarms it (adaptive layer changed nothing here).
+    for f in GATING_FIELDS:
+        p = _full_plan()
+        setattr(p, f, [] if f == "channels" else (0 if f == "output_count" else ""))
+        assert is_armed(p) is False, f
