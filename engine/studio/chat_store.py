@@ -37,6 +37,9 @@ VALID_ROLES: tuple[str, ...] = (
     "critic",
     "jury",
     "researcher",
+    # The customer-PSYCHOLOGY analyst (P1): runs per-lead before the draft, deciding
+    # WHERE each customer sits (category + objection) from their real conversation/facts.
+    "analyst",
     "strategist",
     "draft",
     # P3.x: the Host's REAL extended-thinking trace (Anthropic ThinkingPart.content),

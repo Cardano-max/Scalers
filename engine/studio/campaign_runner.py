@@ -92,6 +92,10 @@ def pick_archetype(brief: str) -> str:
 # for the "draft_one" worker, "jury" for the "route" node, etc.
 AGENT_ROLE_SEQUENCE: tuple[tuple[str, str], ...] = (
     ("researcher", "research"),
+    # The per-lead psychology analyst has no spine node (it runs only in the provided-
+    # leads path); it is listed so its lane orders correctly there. In a content-campaign
+    # archetype it is honestly skipped-not-required (no node in the path).
+    ("analyst", "analyze"),
     ("strategist", "strategy"),
     ("draft", "draft_one"),
     ("critic", "critique"),
@@ -224,6 +228,13 @@ def _summarize_output(role: str, output: Any) -> str:
         return str(output)[:240]
     if role == "researcher":
         return f"cited {output.get('cited', 0)} source(s); persisted {output.get('persisted', 0)}"
+    if role == "analyst":
+        if output.get("status") == "failed":
+            return f"analysis failed: {output.get('error', '')}"[:240]
+        cat = output.get("umbrella_category") or ""
+        obj = output.get("primary_objection") or "none-found"
+        sits = output.get("where_customer_sits") or ""
+        return f"{cat} · objection={obj}" + (f" · {sits}" if sits else "")[:240]
     if role == "strategist":
         ang = output.get("primary_angle") or output.get("angle") or output.get("big_idea") or ""
         conv = output.get("primary_conversion") or output.get("objective") or ""

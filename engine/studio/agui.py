@@ -1105,6 +1105,7 @@ def _execute_provided_leads_sync(
 
     from actions.store import ensure_schema, record_pending_action
     from memory import MemoryStore
+    from studio.adapters.message_source import DbConversationSource
     from studio.campaign_runner import _materialize_runs_row, _summarize_output
     from studio.customer_research import (
         _research_enabled,
@@ -1113,6 +1114,8 @@ def _execute_provided_leads_sync(
         lookup_leads,
         research_studio,
     )
+    from studio.offers import get_offers, select_offer, substantiate
+    from studio.psych_profile import analyze_customer
 
     if not run_id:
         campaign_id = f"camp_{_uuid.uuid4().hex[:12]}"
@@ -1145,6 +1148,13 @@ def _execute_provided_leads_sync(
     deep = _research_enabled(plan.deep_research)
     agent_runs: list[dict[str, Any]] = []
     pending: list[str] = []
+
+    # Real substantiated offers for the tenant (from the offers doc); [] when none, so a
+    # discount is referenced ONLY when a real offer exists — never invented. The lead's
+    # conversation (the psych analyst's primary evidence) comes from the DB conversation
+    # store via the message-source adapter.
+    offers = get_offers(tenant_id, dsn=dsn)
+    conv_source = DbConversationSource(tenant_id, dsn=dsn)
 
     def _rec(role: str, model: str, inp: dict[str, Any], out: dict[str, Any]) -> None:
         ts.record_agent_run(
@@ -1223,9 +1233,58 @@ def _execute_provided_leads_sync(
             },
         )
 
+        # ANALYST — the deep, evidence-grounded psychology read runs PER LEAD before the
+        # draft, recorded as a real `analyst` agent_run so its lane reads done/failed
+        # honestly. It grounds every read in this lead's real conversation/facts; a cell
+        # hiccup records an honest failed run and the draft proceeds on the base facts.
+        profile = None
+        objection_val = ""
+        interest_hint = (facts.get("interests") or [None])[0]
+        try:
+            thread = conv_source.thread_for(cust_id)
+        except Exception:
+            thread = None  # not-connected/stub source -> honest no conversation
+        try:
+            profile = analyze_customer(
+                facts, thread, known_artists=[facts["artist"]] if facts.get("artist") else None,
+            )
+            po = profile.primary_objection
+            objection_val = po.value if po.signal in ("stated", "inferred") else ""
+            _rec(
+                "analyst", ("anthropic:claude-sonnet-4-6" if profile.source.endswith("llm")
+                            else "grounded_rules"),
+                {"customer_id": cust_id, "had_conversation": profile.had_conversation},
+                {
+                    "umbrella_category": profile.umbrella_category.value,
+                    "primary_objection": (po.value if po.signal != "insufficient-signal" else "none-found"),
+                    "objection_signal": po.signal,
+                    "objection_evidence": po.evidence,
+                    "readiness_stage": profile.readiness_stage.value,
+                    "where_customer_sits": profile.where_customer_sits,
+                    "best_reengagement_angle": profile.best_reengagement_angle,
+                    "grounded_fields": profile.grounded_fields,
+                    "insufficient_fields": profile.insufficient_fields,
+                },
+            )
+        except Exception as exc:  # honest failed analyst run; never a fabricated profile
+            profile = None
+            _rec(
+                "analyst", "grounded_rules",
+                {"customer_id": cust_id},
+                {"status": "failed", "error": f"{type(exc).__name__}: {exc}"},
+            )
+
+        # Offer selection through the SUBSTANTIATION GATE: pick a real objection-matching
+        # offer, then substantiate its code before it can reach the draft. None -> the
+        # draft references NO discount (honest fallback), never an invented one.
+        chosen_offer = select_offer(offers, objection=objection_val, interest=interest_hint)
+        if chosen_offer is not None:
+            chosen_offer = substantiate(offers, chosen_offer.code)
+
         draft = build_outreach_draft(
             facts, goal=draft_goal, plan_channels=plan.channels or None,
             deep_research=plan.deep_research, research=research,
+            profile=profile, offer=chosen_offer,
         )
         copy_model = (
             "anthropic:claude-sonnet-4-6"
@@ -1339,7 +1398,11 @@ def _execute_provided_leads_sync(
 
     channels = sorted({str(ar["input"].get("channel")) for ar in agent_runs if ar["role"] == "draft" and ar["input"].get("channel")})
     n_critics = sum(1 for ar in agent_runs if ar["role"] == "critic")
+    n_analysts = sum(1 for ar in agent_runs if ar["role"] == "analyst")
+    n_offers = sum(1 for ar in agent_runs if ar["role"] == "draft"
+                   and any(str(g).startswith("offer=") for g in (ar["output"].get("grounding") or [])))
     plan.tasks_per_role = {
+        "analyst": [f"psych-analyzed {n_analysts} lead(s): category + grounded objection"],
         "strategist": [f"angle: {campaign_angle}" if campaign_angle else "campaign strategy step recorded"],
         "researcher": [f"researched {len(leads)} provided lead(s) from {source_note}"],
         "draft": [f"{len(pending)} per-lead brand-voiced draft(s) staged HELD"],
@@ -1362,9 +1425,11 @@ def _execute_provided_leads_sync(
         "channels": channels,
         "step_notes": [
             f"lead_source=provided: targeting ONLY the operator's leads — {source_note}",
+            f"analyst psych-analyzed {n_analysts} lead(s) per-lead (category + grounded objection, no fabrication)",
             f"strategist set the campaign angle once ({campaign_angle or 'recorded'})",
             f"researched {len(leads)} lead(s) per-lead (DB history + cited web research about each)",
-            f"staged {len(pending)} brand-voiced draft(s) HELD (approve-first); nothing sent",
+            f"staged {len(pending)} brand-voiced draft(s) HELD (approve-first); nothing sent"
+            + (f"; {n_offers} referenced a REAL substantiated offer" if n_offers else ""),
             f"critic ran {n_critics} independent pass(es) over the staged draft(s)",
         ],
         "runs_row": runs_row,
