@@ -258,3 +258,36 @@ def test_is_studio_lead_requires_exact_type_not_substring():
             angle={"key": "generic"},
         )
         assert "one studio to another" in body.lower(), studio_ct
+
+
+# ── ju1.3: anti-fake-personalization on the deterministic (history-less) path ──
+
+
+def test_historyless_customer_draft_makes_no_personalization_claim() -> None:
+    # A skindesign-shaped lead: name + contact only, no interests / history / social.
+    # The deterministic draft must ground-honest (generic) and trip ZERO personalization
+    # claims — the anti-theater guarantee, proven end-to-end through build_outreach_draft.
+    from cells.personalization_guard import personalization_violations
+
+    lead = _customer(
+        name="Sam Rivera", email="sam@example.com", city="", interests=[],
+        tattoo_history=[], persona_traits={}, customer_type="",
+    )
+    draft = build_outreach_draft(lead, goal=GOAL, plan_channels=["email"])
+    text = f"{draft.get('subject') or ''}\n{draft.get('draft') or ''}"
+    assert personalization_violations(text, lead) == []
+    # And it is still customer-safe (no goal leak / no B2B framing).
+    _assert_customer_safe(draft.get("subject"), draft.get("draft") or "")
+
+
+def test_historyless_sms_shaped_draft_has_no_history_or_social_claim() -> None:
+    from cells.personalization_guard import personalization_violations
+
+    lead = _customer(
+        name="Jo", email="", phone="+15551230000", city="", interests=[],
+        tattoo_history=[], ig_handle="", customer_type="",
+    )
+    draft = build_outreach_draft(lead, goal=GOAL, plan_channels=["sms"])
+    text = f"{draft.get('subject') or ''}\n{draft.get('draft') or ''}"
+    # No fabricated "your last tattoo" / "I saw your Instagram" for a contact-only lead.
+    assert personalization_violations(text, lead) == []

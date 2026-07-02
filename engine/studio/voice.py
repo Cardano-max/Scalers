@@ -183,19 +183,22 @@ def voice_instructions_with_docs(
     gains NO tool from this — it stays structurally send-incapable (exactly two tools).
 
     HONESTY: with no active docs it is told plainly to say none are uploaded; the store
-    being unreachable degrades to the base instructions, never a false claim."""
+    being unreachable degrades to the base instructions, never a false claim. The honest
+    DATA INVENTORY (ju1.3) is appended from the SAME shared builder the chat host uses, so
+    voice and chat state the identical real counts + missing-data sentence (no divergence)."""
+    inventory = _data_inventory_block(tenant_id, dsn=dsn)
     try:
         from studio.documents import active_docs_index
 
         docs = active_docs_index(tenant_id, dsn=dsn)
     except Exception:
-        return base
+        return base + inventory
     if not docs:
         return base + (
             "\n\nKNOWLEDGE: you currently have NO uploaded documents for this studio. "
             "If the operator asks whether you have their documents / brand playbook, say "
             "honestly that none are uploaded yet — never claim to have one you do not."
-        )
+        ) + inventory
     lines = [
         base,
         "",
@@ -211,7 +214,23 @@ def voice_instructions_with_docs(
         "You still cannot send or publish anything — but you DO have and use these "
         "documents."
     )
-    return "\n".join(lines)
+    return "\n".join(lines) + inventory
+
+
+def _data_inventory_block(tenant_id: str, *, dsn: str | None = None) -> str:
+    """The honest data-inventory readback (ju1.3) as a voice-instruction block, from the
+    ONE shared builder the chat host also calls — so both surfaces quote the identical
+    real DB counts + missing-data sentence. Best-effort: unreadable store adds nothing."""
+    try:
+        from studio.interview import campaign_interview_prompt
+        from studio.inventory import build_data_inventory
+
+        readback = build_data_inventory(tenant_id, dsn=dsn)
+    except Exception:
+        return ""
+    if not readback:
+        return ""
+    return "\n\n" + readback + "\n\n" + campaign_interview_prompt()
 
 
 def voice_state_briefing(run_id: str, *, dsn: str | None = None) -> str:

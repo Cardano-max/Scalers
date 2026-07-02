@@ -873,6 +873,11 @@ def _build_email_prompt(
         f"- Do NOT invent or imply anything NOT listed above about the {recipient_word}'s "
         "style, artists, awards, reputation, clientele, discounts, or history. If a "
         "specific is missing, stay general and honest rather than guessing.",
+        # ju1.3 anti-fake-personalization: never CLAIM a per-customer signal we don't have.
+        "- NEVER claim you saw their Instagram/social, know their tattoo interests, their "
+        "past bookings/last tattoo, their favourite artist, or their objection UNLESS that "
+        "exact fact is listed above for THIS person. With no such fact, do not reference "
+        "it at all — a deterministic guard rejects any draft that fakes this.",
         "- Everything you say about YOURSELF (the sender) must come from the brand "
         "voice's approved claims above — nothing else.",
         f"- Reason for reaching out / goal: {goal_line}.",
@@ -983,7 +988,14 @@ def _template_outreach(
         opener = f"Hi {first}, no pressure either way."
         detail = " If it helps, we can hop on a quick chat to figure out what you want."
     elif key in ("loyalty-touchup", "offer-loyalty-touchup"):
-        opener = f"Hi {first}, hope your last piece is healing well."
+        # HONEST BY CONSTRUCTION (ju1.3): only reference "your last piece" when a real
+        # tattoo_history is on file — otherwise it fabricates a past piece for a lead we
+        # have no history for (the anti-fake-personalization guard rejects that draft).
+        # With no history, a warm loyalty line grounded only in the recurring segment.
+        opener = (
+            f"Hi {first}, hope your last piece is healing well." if tattoos
+            else f"Hi {first}, it's been a while — we'd love to see you again."
+        )
         detail = f" We'd love to have you back.{offer_phrase}"
     elif key == "completion-nudge":
         opener = f"Hi {first}, just a gentle nudge on the booking you started."

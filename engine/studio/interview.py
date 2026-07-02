@@ -120,6 +120,17 @@ OPTIONAL: tuple[tuple[str, str], ...] = (
                                  "you to tailor the outreach? (yes/no)"),
     ("attach_artwork", "Want us to match and attach the right artist's artwork to each "
                        "message where it fits? (yes/no)"),
+    # --- ju1.3: skindesign campaign-creation refinements (which artist / location /
+    #     reference a past campaign's style / payment-plan wording / keep test mode on).
+    ("artist", "Which artist is this campaign for? (or say 'the whole studio' if it's "
+               "not about one artist)"),
+    ("location", "Which studio or location should this target — or all of them?"),
+    ("reference_campaign", "Want me to use one of your previous campaigns as a style "
+                           "reference so this sounds like your best past sends? (yes/no)"),
+    ("payment_plan", "How should we word the payment-plan option, if any? "
+                     "(for example: 'Klarna & Affirm available' — or 'none')"),
+    ("test_mode", "Test mode keeps every message held for your approval and blocks real "
+                  "sends — I'll keep it ON. That's good with you, right? (yes/no)"),
 )
 
 # Every field the interview is allowed to set on the plan.
@@ -127,6 +138,54 @@ INTERVIEW_FIELDS: tuple[str, ...] = tuple(f for f, _ in (*GATING, *OPTIONAL))
 
 GATING_FIELDS: tuple[str, ...] = tuple(f for f, _ in GATING)
 OPTIONAL_FIELDS: tuple[str, ...] = tuple(f for f, _ in OPTIONAL)
+
+# --------------------------------------------------------------------------- #
+# ju1.3 — the canonical structured campaign-creation interview the supervisor asks
+# AFTER the honest data-inventory readback. Ten questions, in ask order, each keyed to
+# a real CampaignPlan field so answers are captured (never decorative). Reuses the
+# existing fields where one already fits (segment / output_count / offer / attach_artwork
+# / drafts_only) and the ju1.3 additions for the rest. Surfaced to the chat + voice
+# supervisor and exposed here so the set is testable + can't silently drift.
+# --------------------------------------------------------------------------- #
+_Q: dict[str, str] = dict((*GATING, *OPTIONAL))
+CAMPAIGN_INTERVIEW_QUESTIONS: tuple[tuple[str, str], ...] = (
+    ("artist", _Q["artist"]),
+    ("location", _Q["location"]),
+    ("segment", _Q["segment"]),
+    ("output_count", _Q["output_count"]),
+    ("reference_campaign", _Q["reference_campaign"]),
+    ("offer", _Q["offer"]),
+    ("payment_plan", _Q["payment_plan"]),
+    ("attach_artwork", _Q["attach_artwork"]),
+    ("drafts_only", _Q["drafts_only"]),
+    ("test_mode", _Q["test_mode"]),
+)
+CAMPAIGN_INTERVIEW_FIELDS: tuple[str, ...] = tuple(f for f, _ in CAMPAIGN_INTERVIEW_QUESTIONS)
+
+
+def campaign_interview_questions() -> tuple[tuple[str, str], ...]:
+    """The canonical ordered 10-question campaign-creation interview (ju1.3). Every field
+    is a real CampaignPlan field; the supervisor asks these after the data readback."""
+    return CAMPAIGN_INTERVIEW_QUESTIONS
+
+
+def campaign_interview_prompt() -> str:
+    """The 10-question campaign-creation interview as a supervisor-instruction block
+    (ju1.3). Rendered identically for chat + voice so both ask the SAME questions after
+    the honest data-inventory readback. One question at a time, grounded in real data —
+    never assume an answer the operator hasn't given."""
+    lines = [
+        "CAMPAIGN INTERVIEW — after the data inventory above, walk the operator through "
+        "these questions (one at a time, conversationally, skipping any they've already "
+        "answered). Do NOT assume an answer; capture what they say onto the plan:",
+    ]
+    for i, (_field, question) in enumerate(CAMPAIGN_INTERVIEW_QUESTIONS, 1):
+        lines.append(f"  {i}. {question}")
+    lines.append(
+        "Keep TEST MODE on (every message is held in the Review Queue for approval; "
+        "nothing sends) — this is enforced server-side regardless of the answer."
+    )
+    return "\n".join(lines)
 
 # --------------------------------------------------------------------------- #
 # P1-C — adaptive follow-up sequencing. The follow-up (OPTIONAL) questions are
@@ -180,6 +239,8 @@ _BOOL_FIELDS = frozenset({
     "deep_research", "drafts_only", "personalize", "per_lead",
     # P1 tattoo-pivot yes/no refinements (optional; never gate).
     "use_conversation_history", "attach_artwork",
+    # ju1.3 skindesign refinements (yes/no).
+    "reference_campaign", "test_mode",
 })
 _INT_FIELDS = frozenset({"output_count", "lead_count"})
 _LIST_FIELDS = frozenset({"channels"})

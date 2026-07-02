@@ -159,6 +159,19 @@ class CampaignPlan(BaseModel):
     scope: str = ""
     use_conversation_history: bool | None = None
     attach_artwork: bool | None = None
+    # --- ju1.3 skindesign campaign-creation interview refinements (never gate a run) -- #
+    # artist: which artist this campaign fronts (matches the studio's real roster);
+    # location: which studio/location to target; reference_campaign: reuse a prior real
+    # campaign example's STYLE as the reference (grounded in ju1.2's example library);
+    # payment_plan: the operator's exact payment-plan wording (e.g. "Klarna & Affirm");
+    # test_mode: the operator's stated preference to KEEP the server-side TEST-MODE send
+    # gate on — DISPLAY ONLY. The authoritative gate is ju1.1's server-side tenant flag;
+    # this field never turns it off (the console cannot disable the send gate).
+    artist: str = ""
+    location: str = ""
+    reference_campaign: bool | None = None
+    payment_plan: str = ""
+    test_mode: bool | None = None
     # P1.5: the objection the plan ASSUMES dominates this cohort — the recorded assumption
     # the progress-aware replan (progress_board.maybe_replan) tests against the analyst's
     # MEASURED dominant objection. Populated by the planner (plan_campaign) from
@@ -294,6 +307,35 @@ def _plan_context(ctx: RunContext[StudioDeps]) -> str:
             "claim in these; do not contradict or invent beyond them):\n" + snippet
         )
     return base
+
+
+@studio_agent.instructions
+def _data_inventory_context(ctx: RunContext[StudioDeps]) -> str:
+    """Surface the HONEST data inventory (live DB counts + what's missing) on every turn
+    (ju1.3, anti-theater core). Before planning, the supervisor must state exactly what
+    real data it has and does NOT have — customers/artists/studios/examples counted live
+    from the DB (never hardcoded) plus the honest missing-data sentence. Built by the ONE
+    shared builder the voice supervisor also calls, so chat and voice cannot diverge.
+    Best-effort: an unreadable store yields the honest can't-read line, never a fake count."""
+    try:
+        from studio.inventory import build_data_inventory
+
+        return build_data_inventory(ctx.deps.tenant_id, dsn=ctx.deps.dsn)
+    except Exception:
+        return ""
+
+
+@studio_agent.instructions
+def _interview_checklist_context(ctx: RunContext[StudioDeps]) -> str:
+    """Surface the canonical 10-question campaign-creation interview (ju1.3) so the host
+    asks the right questions after the data readback. The SAME block the voice supervisor
+    renders, so both surfaces ask identical questions."""
+    try:
+        from studio.interview import campaign_interview_prompt
+
+        return campaign_interview_prompt()
+    except Exception:
+        return ""
 
 
 @studio_agent.instructions
@@ -1264,6 +1306,8 @@ def _execute_provided_leads_sync(
         research_studio,
     )
     from cells.offer_guard import offer_violations
+    from cells.personalization_guard import facts_view as personalization_facts_view
+    from cells.personalization_guard import personalization_violations
     from studio.offers import as_substantiated, get_offers, select_offer, substantiate
     from studio.psych_profile import analyze_customer, psych_llm_model
 
@@ -1575,6 +1619,21 @@ def _execute_provided_leads_sync(
         if _offer_viol:
             skipped.append({"row": _row, "lead": facts.get("name") or cust_id,
                             "reason": f"unsubstantiated offer language: {_offer_viol[0]}"})
+            continue
+
+        # ANTI-FAKE-PERSONALIZATION (ju1.3, the anti-theater core): every second-person
+        # claim about the customer (interest / objection / tattoo-history / social /
+        # artist-preference) must be grounded in a fact actually on file for this lead.
+        # Catches BOTH paths at one chokepoint — the deterministic path is already
+        # field-gated (a no-op here), so this net exists to stop the LLM path from
+        # hallucinating a claim the prompt forbade. Skip with a concrete reason; never
+        # stage a draft that fakes knowledge.
+        _pers_facts = personalization_facts_view(facts, objection=objection_val, profile=profile)
+        _pers_viol = personalization_violations(
+            f"{draft.get('subject') or ''}\n{draft.get('draft') or ''}", _pers_facts)
+        if _pers_viol:
+            skipped.append({"row": _row, "lead": facts.get("name") or cust_id,
+                            "reason": f"fake personalization: {_pers_viol[0]}"})
             continue
 
         # First-class per-lead DOSSIER (P2-C, 65w.7): assemble the evidence-linked record

@@ -455,3 +455,92 @@ def test_adaptive_changes_do_not_relax_the_run_gate() -> None:
         p = _full_plan()
         setattr(p, f, [] if f == "channels" else (0 if f == "output_count" else ""))
         assert is_armed(p) is False, f
+
+
+# ── ju1.3: the canonical structured campaign-creation interview (10 questions) ──
+
+
+def test_campaign_interview_has_the_ten_canonical_questions_in_order() -> None:
+    from studio.interview import (
+        CAMPAIGN_INTERVIEW_FIELDS,
+        campaign_interview_questions,
+    )
+
+    qs = campaign_interview_questions()
+    fields = [f for f, _ in qs]
+    # The bead's 10, in ask order, keyed to real plan fields.
+    assert fields == [
+        "artist", "location", "segment", "output_count", "reference_campaign",
+        "offer", "payment_plan", "attach_artwork", "drafts_only", "test_mode",
+    ]
+    assert fields == list(CAMPAIGN_INTERVIEW_FIELDS)
+    assert len(qs) == 10
+    # Every question has non-empty text, and every field is a settable plan field.
+    plan = CampaignPlan()
+    for f, text in qs:
+        assert text.strip()
+        assert hasattr(plan, f), f
+
+
+def test_ten_questions_map_to_real_interview_fields() -> None:
+    from studio.interview import CAMPAIGN_INTERVIEW_FIELDS, INTERVIEW_FIELDS
+
+    for f in CAMPAIGN_INTERVIEW_FIELDS:
+        assert f in INTERVIEW_FIELDS, f  # answerable via /studio/interview
+
+
+def test_new_ju13_fields_coerce_correctly() -> None:
+    # str fields pass through stripped; the two yes/no fields coerce to bool.
+    assert coerce_field("artist", "  Angel ") == "Angel"
+    assert coerce_field("location", "Spring Mountain") == "Spring Mountain"
+    assert coerce_field("payment_plan", "Klarna & Affirm") == "Klarna & Affirm"
+    assert coerce_field("reference_campaign", "yes") is True
+    assert coerce_field("test_mode", "no") is False
+    # an unrecognized yes/no stays unset (never guessed).
+    assert coerce_field("test_mode", "hmmmm") is None
+
+
+def test_answering_the_ten_populates_the_plan() -> None:
+    from studio.interview import campaign_interview_questions
+
+    plan = CampaignPlan()
+    answers = {
+        "artist": "Angel", "location": "Spring Mountain", "segment": "past",
+        "output_count": 200, "reference_campaign": "yes", "offer": "$1200 full-day special",
+        "payment_plan": "Klarna & Affirm", "attach_artwork": "yes", "drafts_only": "stage",
+        "test_mode": "yes",
+    }
+    # Answer exactly the canonical fields.
+    for f, _ in campaign_interview_questions():
+        apply_fields(plan, {f: answers[f]})
+    assert plan.artist == "Angel"
+    assert plan.location == "Spring Mountain"
+    assert plan.segment == "past"
+    assert plan.output_count == 200
+    assert plan.reference_campaign is True
+    assert plan.payment_plan == "Klarna & Affirm"
+    assert plan.attach_artwork is True
+    assert plan.drafts_only is False  # "stage" -> stage in queue (not drafts-only)
+    assert plan.test_mode is True
+
+
+def test_test_mode_field_is_display_only_not_a_send_gate() -> None:
+    # The interview field records the operator's stated preference; it must NEVER be the
+    # thing that decides sends (that is ju1.1's server-side tenant gate). Here we simply
+    # pin that the field exists and defaults to unset — the send gate lives elsewhere.
+    plan = CampaignPlan()
+    assert plan.test_mode is None
+    apply_fields(plan, {"test_mode": "no"})
+    assert plan.test_mode is False  # operator answered; the SERVER gate is unaffected
+
+
+def test_campaign_interview_prompt_contains_all_ten_questions() -> None:
+    from studio.interview import campaign_interview_prompt, campaign_interview_questions
+
+    prompt = campaign_interview_prompt()
+    for _f, q in campaign_interview_questions():
+        assert q in prompt, q
+    # Numbered 1..10 and mentions the server-side test-mode guarantee.
+    for i in range(1, 11):
+        assert f"{i}." in prompt
+    assert "TEST MODE" in prompt and "held in the Review Queue" in prompt
