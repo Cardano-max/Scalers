@@ -155,13 +155,30 @@ def test_bare_tenant_offers_honest_empty(server, seeded):
 
 # ── substantiation gate over MCP ─────────────────────────────────────────────
 def test_substantiate_real_code_and_rejects_fake(server, seeded):
+    # 65w.14 posture (CustomerAcq-ju1.2): a SEED/MOCK offers doc never substantiates a
+    # live draft — only a REAL operator-provided offers doc does. The seeded FLOWER15
+    # (source='seed') is now correctly REFUSED; a real-doc code substantiates.
+    from studio.documents import add_document
+    from studio.offers import OFFERS_DOC_KIND
+
     p = demo_principal(seeded["a"])
-    real = server.call_tool(p, "offers.substantiate", {"code": "FLOWER15"})
+    # The seeded MOCK offer is refused — seed sources never substantiate.
+    seed = server.call_tool(p, "offers.substantiate", {"code": "FLOWER15"})
+    assert seed["structuredContent"]["substantiated"] is False
+    assert seed["structuredContent"]["offer"] is None
+    # A REAL operator-provided offers doc DOES substantiate its code.
+    add_document(
+        seeded["a"], "Real Offers", "- code: REALINK20 | discount: 20% | kind: discount",
+        kind=OFFERS_DOC_KIND, source="operator",
+        doc_id=f"doc_offers_{seeded['a']}_real", dsn=DB_DSN,
+    )
+    real = server.call_tool(p, "offers.substantiate", {"code": "REALINK20"})
     assert real["structuredContent"]["substantiated"] is True
-    assert real["structuredContent"]["offer"]["code"] == "FLOWER15"
+    assert real["structuredContent"]["offer"]["code"] == "REALINK20"
+    # A fully-invented code is refused (no fabrication).
     fake = server.call_tool(p, "offers.substantiate", {"code": "TOTALLY-INVENTED-99"})
     assert fake["structuredContent"]["substantiated"] is False
-    assert fake["structuredContent"]["offer"] is None  # no fabrication
+    assert fake["structuredContent"]["offer"] is None
 
 
 # ── Postgres audit persistence ───────────────────────────────────────────────
