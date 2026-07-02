@@ -143,3 +143,51 @@ def test_ece_metric_is_the_eval_metric():
     pairs = [(0.0, False)] * 10 + [(1.0, True)] * 10
     res = ece(pairs)
     assert res.value <= 0.05
+
+
+# ── finite-input guards (4jx.14): NaN/inf -> uncomputable -> review ──────────
+
+
+def test_nonfinite_inputs_are_uncomputable_each_position():
+    nan, inf = float("nan"), float("inf")
+    for jq, sc in [(nan, 1.0), (inf, 1.0), (1.0, nan), (1.0, inf), (nan, nan)]:
+        res = compute_confidence(jury_quality=jq, self_consistency_score=sc)
+        assert res.uncomputable and res.confidence is None, (jq, sc)
+
+
+def test_nonfinite_weights_are_uncomputable():
+    res = compute_confidence(jury_quality=0.9, self_consistency_score=0.9, w_q=float("inf"))
+    assert res.uncomputable
+    res = compute_confidence(jury_quality=0.9, self_consistency_score=0.9, w_q=0.0, w_c=0.0)
+    assert res.uncomputable  # zero total weight is not a signal either
+
+
+def test_judge_vote_rejects_nonfinite_weight():
+    import pytest
+    from autonomy.decision import JudgeVote
+    for bad in (float("inf"), float("nan")):
+        with pytest.raises(Exception):
+            JudgeVote(judge="x", family="a", voice=1.0, safety=1.0, appr=1.0,
+                      reliability_weight=bad)
+
+
+def test_exploit_chain_weight_inf_now_ends_in_review():
+    """E2E regression (panel exploit): weight=inf -> pooled NaN -> min-cap laundered
+    NaN to AUTO@1.0. Now: (a) the vote is rejected at construction; (b) even a NaN
+    smuggled straight into derive_decision as `confidence` routes REVIEW."""
+    import pytest
+    from autonomy.decision import JudgeVote, RouteDecision, derive_decision
+    with pytest.raises(Exception):
+        JudgeVote(judge="x", family="a", voice=1.0, safety=1.0, appr=1.0,
+                  reliability_weight=float("inf"))
+    votes = [
+        JudgeVote(judge="a", family="anthropic", voice=0.95, safety=0.95, appr=0.95),
+        JudgeVote(judge="b", family="ollama", voice=0.95, safety=0.95, appr=0.95),
+    ]
+    from autonomy.aggregate import aggregate_jury
+    for bad in (float("nan"), float("inf")):
+        decision, esc, _, _ = derive_decision(
+            votes=votes, aggregate=aggregate_jury(votes), threshold=0.85, confidence=bad
+        )
+        assert decision is RouteDecision.REVIEW, bad
+        assert "uncomputable" in esc.label

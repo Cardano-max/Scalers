@@ -21,6 +21,7 @@ classifier can veto) and the jury-agreement concept.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -101,7 +102,9 @@ class JudgeVote(BaseModel):
     voice_hard_fail: bool = False
     safety_hard_fail: bool = False
     appr_hard_fail: bool = False
-    reliability_weight: float = Field(default=1.0, ge=0.0)
+    # allow_inf_nan=False (4jx.14): an inf weight made aggregate pooled NaN,
+    # which laundered through the min-cap to AUTO@1.0. Weights must be finite.
+    reliability_weight: float = Field(default=1.0, ge=0.0, allow_inf_nan=False)
 
     @property
     def overall(self) -> float:
@@ -248,7 +251,12 @@ def derive_decision(
         agree = agreement(votes)
     # The COMPUTED confidence (4jx.3) — jury_quality pooled with self-consistency,
     # calibrated — is the router's confidence when supplied (replaces the hardcoded
-    # 0.9 / jury-only pooling on the real decision path).
+    # 0.9 / jury-only pooling on the real decision path). Last-mile finite guard
+    # (4jx.14): a NaN/inf confidence would defeat route()'s threshold comparison
+    # (NaN < t is False -> AUTO), so a non-finite value is UNCOMPUTABLE, not a number.
+    if confidence is not None and not math.isfinite(confidence):
+        confidence = None
+        confidence_uncomputable = True
     if confidence is not None:
         pooled = confidence
 

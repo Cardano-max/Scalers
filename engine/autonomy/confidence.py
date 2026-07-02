@@ -19,6 +19,7 @@ confidence.
 
 from __future__ import annotations
 
+import math
 from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
@@ -184,6 +185,24 @@ def compute_confidence(
     if self_consistency_score is None:
         return ConfidenceResult(
             confidence=None, jury_quality=jury_quality, self_consistency=None, uncomputable=True
+        )
+    # Finite-input guards (4jx.14, ADR D2-as-amended #93: all inputs finite in
+    # [0,1]; non-finite -> uncomputable -> review). Python's min() ignores NaN in
+    # non-first position, so a single NaN/inf input would LAUNDER through the
+    # min-cap to confidence 1.0 -> AUTO (panel-verified exploit). Never route a
+    # number we cannot trust.
+    if (
+        not math.isfinite(jury_quality)
+        or not math.isfinite(self_consistency_score)
+        or not math.isfinite(w_q)
+        or not math.isfinite(w_c)
+        or (w_q + w_c) <= 0.0
+    ):
+        return ConfidenceResult(
+            confidence=None,
+            jury_quality=jury_quality,
+            self_consistency=self_consistency_score,
+            uncomputable=True,
         )
     raw = (w_q * jury_quality + w_c * self_consistency_score) / (w_q + w_c)
     calibrated = max(0.0, min(1.0, calibration.apply(raw)))
