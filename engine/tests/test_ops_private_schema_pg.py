@@ -31,8 +31,8 @@ NOW = datetime(2026, 7, 2, 19, 0, tzinfo=UTC)
 
 
 def test_two_private_schemas_do_not_see_each_others_rows():
-    with private_schema("02-side-effect-boundary.sql", "14-suppression-consent.sql") as a, \
-         private_schema("02-side-effect-boundary.sql", "14-suppression-consent.sql") as b:
+    with private_schema("02-side-effect-boundary.sql", "16-suppression-consent.sql") as a, \
+         private_schema("02-side-effect-boundary.sql", "16-suppression-consent.sql") as b:
         assert a.schema != b.schema
         record_suppression(
             tenant_id="t", identifier="+17025550001", channel="sms", reason="stop",
@@ -47,7 +47,7 @@ def test_two_private_schemas_do_not_see_each_others_rows():
 
 
 def test_private_schema_dropped_on_teardown():
-    with private_schema("02-side-effect-boundary.sql", "14-suppression-consent.sql") as s:
+    with private_schema("02-side-effect-boundary.sql", "16-suppression-consent.sql") as s:
         schema = s.schema
     with psycopg.connect(
         os.environ["ENGINE_DATABASE_URL"], autocommit=True
@@ -61,7 +61,7 @@ def test_private_schema_dropped_on_teardown():
 def test_tenant_guard_refuses_protected_tenant_at_ledger_write(monkeypatch):
     monkeypatch.delenv("STUDIO_TENANT_ID", raising=False)
     monkeypatch.setenv("PROTECTED_TENANT_IDS", "skindesign-prod")
-    with private_schema("02-side-effect-boundary.sql", "14-suppression-consent.sql") as s:
+    with private_schema("02-side-effect-boundary.sql", "16-suppression-consent.sql") as s:
         with pytest.raises(TenantWriteBlocked):
             record_suppression(
                 tenant_id="skindesign-prod", identifier="+17025550009", channel="sms",
@@ -76,7 +76,7 @@ def test_tenant_guard_refuses_protected_tenant_at_ledger_write(monkeypatch):
 def test_tenant_guard_allows_declared_tenant_at_ledger_write(monkeypatch):
     monkeypatch.setenv("STUDIO_TENANT_ID", "skindesign-prod")
     monkeypatch.setenv("PROTECTED_TENANT_IDS", "skindesign-prod")
-    with private_schema("02-side-effect-boundary.sql", "14-suppression-consent.sql") as s:
+    with private_schema("02-side-effect-boundary.sql", "16-suppression-consent.sql") as s:
         record_suppression(
             tenant_id="skindesign-prod", identifier="+17025550010", channel="sms",
             reason="stop", raw_utterance="STOP", occurred_at=NOW, dsn=s.dsn,

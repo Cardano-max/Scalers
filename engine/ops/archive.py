@@ -10,7 +10,7 @@ consumes that ledger for per-recipient frequency awareness rather than
 duplicating dedupe.
 
 The ``actions`` table is phase3-owned (08-actions.sql); on trunk this module's
-migration (``15-actions-archive.sql``) is a conditional no-op, so the archive
+migration (``17-actions-archive.sql``) is a conditional no-op, so the archive
 functions are the mechanism that activates against the real queue on the
 phase3 merge. Every function is exercised in tests against a fixture actions
 table in a private schema.
@@ -38,7 +38,7 @@ __all__ = [
 ]
 
 _INITDB = Path(__file__).resolve().parents[2] / "infra" / "initdb"
-_ARCHIVE_SQL = _INITDB / "15-actions-archive.sql"
+_ARCHIVE_SQL = _INITDB / "17-actions-archive.sql"
 
 
 def _dsn(dsn: str | None) -> str:

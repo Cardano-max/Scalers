@@ -1,4 +1,4 @@
--- 14-suppression-consent.sql — cross-channel STOP/suppression ledger + consent
+-- 16-suppression-consent.sql — cross-channel STOP/suppression ledger + consent
 -- + per-recipient send events + bi-temporal contact memories (CustomerAcq-t90.3,
 -- blueprint §2-B3 / §4.2 STOP-DND / §4.3-2/-3/-5).
 --

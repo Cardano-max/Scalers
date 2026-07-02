@@ -5,7 +5,7 @@ key), so one lead accumulated 3 byte-identical pending drafts and one address
 took 10 sends. This module makes staging per-RECIPIENT:
 
 * the outbox's partial UNIQUE ``(tenant_id, target, draft_md5) WHERE unsettled``
-  (``14-suppression-consent.sql``) enforces one unsettled draft per
+  (``16-suppression-consent.sql``) enforces one unsettled draft per
   (tenant, recipient, content) AT THE DATABASE — a conflict returns the
   EXISTING id, exactly like the boundary's idempotency-conflict path, and it
   holds even if a caller derives its key differently (the run-scoped-key bug

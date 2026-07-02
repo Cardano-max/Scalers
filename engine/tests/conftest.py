@@ -199,7 +199,7 @@ def dsn() -> str:
 # ``public``), which avoids the ``CREATE TABLE IF NOT EXISTS`` shadow gotcha
 # (a public copy would make the create a no-op). That means SQL needing an
 # extension type in public (e.g. pgvector's ``vector``) must resolve it
-# explicitly; the hygiene schema (14-suppression-consent.sql, actions) does
+# explicitly; the hygiene schema (16-suppression-consent.sql, actions) does
 # not, so it isolates cleanly. Broad adoption by the vector-using suites is a
 # follow-up.
 

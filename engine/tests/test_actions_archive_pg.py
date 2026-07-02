@@ -8,7 +8,7 @@ sweep, and per-recipient frequency awareness that reads the t90.3 ledger
 
 The ``actions`` table is phase3-only; these tests build a minimal fixture
 actions table in a private schema and apply the conditional archive migration
-(``15-actions-archive.sql``) to it, exactly as it will run against the real
+(``17-actions-archive.sql``) to it, exactly as it will run against the real
 table on the phase3 merge.
 """
 
@@ -61,7 +61,7 @@ CREATE TABLE actions (
 
 
 def _actions_schema():
-    ctx = private_schema("02-side-effect-boundary.sql", "14-suppression-consent.sql")
+    ctx = private_schema("02-side-effect-boundary.sql", "16-suppression-consent.sql")
     return ctx
 
 

@@ -1,7 +1,7 @@
 """SMS-3: cross-channel STOP/suppression ledger (CustomerAcq-t90.3, blueprint §2-B3/§4.2/§4.3).
 
 The write path (ingestion) and the read path (gating views) over the
-``14-suppression-consent.sql`` tables. Suppression is PERMANENT — rows are
+``16-suppression-consent.sql`` tables. Suppression is PERMANENT — rows are
 never deleted. Ingest is idempotent: exact re-mirrors dedupe on the natural
 key, a repeated STOP for an already-stopped identifier short-circuits (no
 second row / supersede chain), and carrier-error retries dedupe on
@@ -104,7 +104,7 @@ _INITDB = Path(__file__).resolve().parents[2] / "infra" / "initdb"
 # 14 ALTERs the outbox, so the boundary schema must exist first.
 _SCHEMA_SQLS = (
     _INITDB / "02-side-effect-boundary.sql",
-    _INITDB / "14-suppression-consent.sql",
+    _INITDB / "16-suppression-consent.sql",
 )
 
 # Reasons that are a HUMAN revocation — these also revoke consent and supersede

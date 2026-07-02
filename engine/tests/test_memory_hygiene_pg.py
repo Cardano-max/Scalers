@@ -34,7 +34,7 @@ NOW = datetime(2026, 7, 2, 19, 0, tzinfo=UTC)
 
 
 def _schema():
-    return private_schema("02-side-effect-boundary.sql", "14-suppression-consent.sql")
+    return private_schema("02-side-effect-boundary.sql", "16-suppression-consent.sql")
 
 
 def test_recall_defaults_to_exclude_test_memories():

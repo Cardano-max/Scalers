@@ -1,4 +1,4 @@
--- 15-actions-archive.sql — review-queue hygiene: archive-not-delete for the
+-- 17-actions-archive.sql — review-queue hygiene: archive-not-delete for the
 -- actions table (CustomerAcq-fr1.3, blueprint §4.3-7). NO SILENT DELETES: a
 -- stale/dev-run pending action is moved to status='archived' WITH a reason and
 -- an archived_at timestamp, and stays queryable forever.
