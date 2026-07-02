@@ -42,8 +42,8 @@ def test_healthz_reports_pins_and_temperature():
     body = resp.json()
     assert body["status"] == "ok"
     assert body["temperature"] == 0.0
-    assert body["models"]["opus"] == "claude-opus-4-8"
-    assert body["models"]["sonnet"] == "claude-sonnet-4-6"
+    assert body["models"]["opus"] == "claude-sonnet-4-5"  # 8sk: top tier == ceiling
+    assert body["models"]["sonnet"] == "claude-sonnet-4-5"  # 8sk ceiling
     assert body["models"]["haiku"] == "claude-haiku-4-5"
     assert body["checkpointer"] == "memory"
 

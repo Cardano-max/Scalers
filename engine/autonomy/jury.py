@@ -15,9 +15,11 @@ from __future__ import annotations
 
 from autonomy.decision import JudgeVote
 
-# Cross-family panel (stack-decision.md): never let one family judge itself.
+# Cross-family panel labels (stub records only — no model is ever called here).
+# The Anthropic seat label is POLICY-PINNED to haiku-4.5 (CustomerAcq-8sk) so
+# even stub provenance never claims a bigger model than policy allows.
 JURY_PANEL: tuple[tuple[str, str], ...] = (
-    ("claude-opus-4-8", "anthropic"),
+    ("claude-haiku-4-5", "anthropic"),
     ("gpt-5.5", "openai"),
     ("gemini-3-pro", "google"),
     ("deepseek-v3", "deepseek"),

@@ -36,9 +36,11 @@ from cells.validators import (
 from harness.state import GraphState
 from kb.voice import VoiceGrounding
 
-# Pinned drafting tier (stack-decision.md: Opus 4.8 for the hardest writing).
-# defer_model_check in Cell means the id is validated at run, not construction.
-DRAFTING_MODEL = "anthropic:claude-opus-4-8"
+# Pinned drafting tier — POLICY-CLAMPED to haiku-4.5 (CustomerAcq-8sk, operator
+# order 2026-07-02; was opus-4-8 per stack-decision — restore only when the
+# operator lifts the policy). defer_model_check in Cell means the id is
+# validated at run, not construction.
+DRAFTING_MODEL = "anthropic:claude-haiku-4-5"
 
 # Per-platform hard caption caps (chars).
 _CAPTION_MAX = {Platform.INSTAGRAM: 2200, Platform.FACEBOOK: 5000}
