@@ -24,7 +24,7 @@ def _runner(score_by_name):
 def _all(**kw):
     base = dict(voice=0.95, safety=0.95, appr=0.95, on_voice=True)
     base.update(kw)
-    return {n: JudgeScore(**base) for n in ("opus-strict", "opus-charitable", "ollama-cross")}
+    return {n: JudgeScore(**base) for n in ("haiku-strict", "haiku-charitable", "ollama-cross")}
 
 
 def _produce(store, runner, *, autonomy=AutonomyMode.AUTO, threshold=0.85, self_consistency=1.0):
@@ -92,8 +92,8 @@ def test_single_family_panel_is_refused():
     # auto-fire on one family judging itself.
     import pytest
 
-    single = (JudgeSpec("a", "anthropic", "anthropic:claude-opus-4-8", "x"),
-              JudgeSpec("b", "anthropic", "anthropic:claude-opus-4-8", "y"))
+    single = (JudgeSpec("a", "anthropic", "anthropic:claude-haiku-4-5", "x"),
+              JudgeSpec("b", "anthropic", "anthropic:claude-haiku-4-5", "y"))
     with pytest.raises(ValueError, match="cross-family"):
         asyncio.run(
             produce_and_record_decision_real(

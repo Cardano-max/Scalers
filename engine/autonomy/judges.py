@@ -94,14 +94,15 @@ class JudgeSpec:
     framing: str
 
 
-# The Phase-3/5 default panel: two Claude Opus jurors with DISTINCT framings + one
-# local Ollama juror (the cross-family seat, no external key). Pins use the
-# config model ids; the Ollama model id resolves once the provider extra is wired
-# (the panel SHAPE — cross-family — holds now; the live call is gated).
+# The Phase-3/5 default panel: two Claude Haiku jurors with DISTINCT framings +
+# one local Ollama juror (the cross-family seat, no external key). Anthropic
+# seats are POLICY-PINNED to haiku-4.5 (CustomerAcq-8sk; seat names stay honest
+# about the model actually called). The Ollama model id resolves once the
+# provider extra is wired (the panel SHAPE — cross-family — holds now).
 DEFAULT_PANEL: tuple[JudgeSpec, ...] = (
-    JudgeSpec("opus-strict", "anthropic", "anthropic:claude-opus-4-8",
+    JudgeSpec("haiku-strict", "anthropic", "anthropic:claude-haiku-4-5",
               "Score STRICTLY against the rubric; when in doubt, score lower and tag a hard-fail."),
-    JudgeSpec("opus-charitable", "anthropic", "anthropic:claude-opus-4-8",
+    JudgeSpec("haiku-charitable", "anthropic", "anthropic:claude-haiku-4-5",
               "Score the rubric charitably but flag any genuine disqualifier as a hard-fail."),
     JudgeSpec("ollama-cross", "ollama", "ollama:llama3.1",
               "Independent out-of-family read; score each dimension on its own merits."),

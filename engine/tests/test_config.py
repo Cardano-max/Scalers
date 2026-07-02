@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from harness.config import (
     DEFAULT_HAIKU,
-    DEFAULT_OPUS,
+    POLICY_CEILING_MODEL,
     DEFAULT_SONNET,
     ModelPins,
     Settings,
@@ -26,8 +26,8 @@ def test_nonzero_temperature_rejected(bad):
 
 def test_models_are_pinned_to_stack_decision():
     models = Settings().models
-    assert models.opus == DEFAULT_OPUS == "claude-opus-4-8"
-    assert models.sonnet == DEFAULT_SONNET == "claude-sonnet-4-6"
+    assert models.opus == POLICY_CEILING_MODEL == "claude-sonnet-4-5"  # 8sk: no opus tier
+    assert models.sonnet == DEFAULT_SONNET == "claude-sonnet-4-5"  # 8sk ceiling
     assert models.haiku == DEFAULT_HAIKU == "claude-haiku-4-5"
 
 

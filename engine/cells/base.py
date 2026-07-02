@@ -44,9 +44,11 @@ TOut = TypeVar("TOut", bound=BaseModel)
 # The prompt handed to a cell. Phase 1 cells take a plain string.
 CellInput = str
 
-# Pinned, balanced default (stack-decision.md). Cells run at temp-0. Production
-# runs need ANTHROPIC_API_KEY; tests override the model with Test/Function models.
-DEFAULT_MODEL: KnownModelName = "anthropic:claude-sonnet-4-6"
+# Pinned default under the 8sk MODEL POLICY (operator order 2026-07-02):
+# haiku-4.5 for everything, sonnet-4.5 the absolute ceiling (harness.config).
+# Cells run at temp-0. Production runs need ANTHROPIC_API_KEY; tests override
+# the model with Test/Function models.
+DEFAULT_MODEL: KnownModelName = "anthropic:claude-haiku-4-5"
 
 
 class CellError(Exception):

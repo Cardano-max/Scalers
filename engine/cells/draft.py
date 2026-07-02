@@ -20,9 +20,11 @@ model reads the artist's voice before it writes.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 
 from cells.ai_flagger import FlaggerConfig, ai_flagger
 from cells.base import Cell
+from cells.offer_guard import SubstantiatedOffer, no_unsubstantiated_offers
 from cells.content_brief import Platform
 from cells.post_schemas import MediaKind, PostDraft
 from cells.validators import (
@@ -36,9 +38,11 @@ from cells.validators import (
 from harness.state import GraphState
 from kb.voice import VoiceGrounding
 
-# Pinned drafting tier (stack-decision.md: Opus 4.8 for the hardest writing).
-# defer_model_check in Cell means the id is validated at run, not construction.
-DRAFTING_MODEL = "anthropic:claude-opus-4-8"
+# Pinned drafting tier — POLICY-CLAMPED to haiku-4.5 (CustomerAcq-8sk, operator
+# order 2026-07-02; was opus-4-8 per stack-decision — restore only when the
+# operator lifts the policy). defer_model_check in Cell means the id is
+# validated at run, not construction.
+DRAFTING_MODEL = "anthropic:claude-haiku-4-5"
 
 # Per-platform hard caption caps (chars).
 _CAPTION_MAX = {Platform.INSTAGRAM: 2200, Platform.FACEBOOK: 5000}
@@ -229,14 +233,25 @@ def media_valid() -> FieldValidator:
 
 
 def draft_validators(
-    *, grounding: VoiceGrounding, platform: Platform, config: FlaggerConfig = FlaggerConfig()
+    *,
+    grounding: VoiceGrounding,
+    platform: Platform,
+    config: FlaggerConfig = FlaggerConfig(),
+    offers: Sequence[SubstantiatedOffer] = (),
 ) -> ValidatorBank:
-    """The in-loop deterministic gates a PostDraft must clear (ADR Decision 4)."""
+    """The in-loop deterministic gates a PostDraft must clear (ADR Decision 4).
+
+    ``offers`` are the tenant's SUBSTANTIATED offers (65w.14 anti-fabrication):
+    the default () is FAIL-CLOSED — with no operator-authorized offers doc, any
+    discount code / percent-off / promo token in the draft blocks it. Seed/mock
+    offers docs never substantiate (offer_guard.is_real_offer_source)."""
     vocab = grounding.dimensions.vocabulary
     return ValidatorBank(
         validators=(
             non_empty("caption"),
             non_empty("call_to_action"),
+            no_unsubstantiated_offers("caption", offers),      # 65w.14 anti-fab
+            no_unsubstantiated_offers("call_to_action", offers),
             no_placeholder("caption"),
             no_placeholder("call_to_action"),
             caption_length(platform),
@@ -316,15 +331,21 @@ def build_draft_cell(
     grounding: VoiceGrounding,
     platform: Platform,
     config: FlaggerConfig = FlaggerConfig(),
+    offers: Sequence[SubstantiatedOffer] = (),
     model: str = DRAFTING_MODEL,
     **overrides,
 ) -> Cell[PostDraft]:
-    """Build the Draft (Create) cell — pinned drafting model, temp 0, in-loop bank."""
+    """Build the Draft (Create) cell — pinned drafting model, temp 0, in-loop bank.
+
+    ``offers`` = the tenant's substantiated real offers (65w.14); default () is
+    fail-closed (no offers doc -> no offer language allowed in the draft)."""
     params = dict(
         name="draft",
         schema=PostDraft,
         instructions=build_draft_instructions(grounding, platform),
-        validators=draft_validators(grounding=grounding, platform=platform, config=config),
+        validators=draft_validators(
+            grounding=grounding, platform=platform, config=config, offers=offers
+        ),
         model=model,
     )
     params.update(overrides)
