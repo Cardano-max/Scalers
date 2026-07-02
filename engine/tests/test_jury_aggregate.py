@@ -115,9 +115,21 @@ def test_hard_fail_forces_review_even_at_high_confidence():
 
 
 def test_clean_unanimous_high_panel_can_auto():
+    # On the measured path AUTO also requires a COMPUTED confidence (4jx.3): jury
+    # quality alone must not clear the bar. Supply one, as the real producer does.
     votes = [_v("a", voice=0.95, safety=0.95, appr=0.95), _v("b", voice=0.95, safety=0.95, appr=0.95)]
-    (decision, esc, pooled, agree), _ = _decide(votes)
+    (decision, esc, pooled, agree), _ = _decide(votes, confidence=0.95)
     assert decision is RouteDecision.AUTO and esc.kind is EscKind.NONE
+
+
+def test_measured_path_without_computed_confidence_cannot_auto():
+    """REGRESSION (adversarial hardening): a caller on the aggregate path that
+    drops the computed confidence (confidence=None, uncomputable flag unset) must
+    fail safe to review — never silently fall back to jury-only pooling."""
+    votes = [_v("a", voice=0.95, safety=0.95, appr=0.95), _v("b", voice=0.95, safety=0.95, appr=0.95)]
+    (decision, esc, _, _), _ = _decide(votes)  # no confidence kwarg at all
+    assert decision is RouteDecision.REVIEW
+    assert "uncomputable" in esc.label
 
 
 def test_split_panel_routes_review():

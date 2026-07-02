@@ -1,12 +1,13 @@
 """bead-439 autonomy HOLD — fail-safe, code-enforced (CustomerAcq-b3f).
 
 The 439 hold was doc-only; this makes it a deterministic code control. Until the
-real Phase-5 stack lands (a real cross-family jury, a *computed* confidence, a
-real embedder, and a real human gold set), the autonomy stack is stubbed — the
-jury returns agreement 1.0 with no model call, confidence is hardcoded 0.9, the
-embedder is SHA-256, and the gold set is mock. None of those may gate an
-auto-fire. So the system is **HELD by default**: a tenant/channel auto-fires only
-after an operator EXPLICITLY lifts the hold for it.
+FULL real Phase-5 stack lands AND its eval evidence is green, nothing may gate an
+auto-fire: the real jury (4jx.2) and computed self-consistency confidence (4jx.3)
+have replaced their stubs, but the embedder is still SHA-256, the real per-channel
+gold set + calibration (rvy.8) are pending, and the evidence-gated lift state
+machine (4jx.8) is not wired. So the system is **HELD by default**: a
+tenant/channel auto-fires only after an operator EXPLICITLY lifts the hold for it
+(per-channel, ADR phase-5 Decision 5).
 
 :class:`HoldRegistry` is the single source of held-ness. It is fail-safe by
 construction: ``is_held`` returns ``True`` unless an explicit lift is recorded.

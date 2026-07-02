@@ -278,16 +278,6 @@ def derive_decision(
             agree,
         )
 
-    # FAIL-SAFE on uncomputable confidence (4jx.3): too few probe samples to estimate
-    # self-consistency -> review. "Couldn't compute" is never treated as high confidence.
-    if confidence_uncomputable:
-        return (
-            RouteDecision.REVIEW,
-            Escalation(kind=EscKind.BELOW_THRESHOLD, label="confidence uncomputable (insufficient samples)"),
-            pooled,
-            agree,
-        )
-
     # The hard-fail FLOOR (ADR Decision 1/4): a tagged rubric disqualifier on ANY
     # dimension can never be averaged out by a high score elsewhere — it forces
     # review regardless of the pooled confidence. Checked before split/threshold.
@@ -335,6 +325,25 @@ def derive_decision(
             Escalation(
                 kind=EscKind.DEGRADED,
                 label=f"degraded jury ({len(votes)}/{expected_judges} judges)",
+            ),
+            pooled,
+            agree,
+        )
+
+    # FAIL-SAFE on uncomputable confidence (4jx.3) — a confidence-class reason, so
+    # it sits with the threshold check (floors/split/degraded above report their
+    # more actionable reasons first). Two triggers: the computed path explicitly
+    # said uncomputable, OR — hardening (adversarial finding) — the MEASURED path
+    # (an aggregate is supplied) has no computed confidence at all. On the measured
+    # path, AUTO requires a computed confidence; jury quality alone must not clear
+    # the bar (ADR Decision 2: the router consumes calibrate(w_q·jury + w_c·sc)).
+    # The legacy stub path (no aggregate) keeps its jury-only semantics.
+    if confidence_uncomputable or (aggregate is not None and confidence is None):
+        return (
+            RouteDecision.REVIEW,
+            Escalation(
+                kind=EscKind.BELOW_THRESHOLD,
+                label="confidence uncomputable (insufficient samples)",
             ),
             pooled,
             agree,
