@@ -530,10 +530,43 @@ def build_campaign_graph(*, team_store=None, dsn: str | None = None, checkpointe
     return b.compile(checkpointer=checkpointer or InMemorySaver())
 
 
+def _run_guarded(graph, init: "CampaignState", run_id: str) -> "CampaignState":
+    """Invoke the campaign graph under ``thread_id=run_id`` with the fk5 replay
+    guard ported from ``harness.graph.CompiledGraph.run``.
+
+    CampaignState's ``assets`` / ``critiques`` / ``queued_asset_ids`` /
+    ``pending_action_ids`` / ``step_log`` are ``operator.add`` (append-reduced)
+    channels, so blindly re-invoking a COMPLETED ``run_id`` would replay the nodes
+    and re-append to those channels — doubling the staged actions / assets (the
+    fk5 hazard). The guard inspects the durable snapshot first:
+
+    * completed thread (values present, no pending ``next``)  -> return the
+      persisted state, never re-invoke (no re-accumulation, no side-effect re-fire);
+    * crashed mid-run (values present, ``next`` pending)       -> resume from the
+      last checkpoint via ``invoke(None, ...)`` (only pending nodes re-run);
+    * fresh thread (no durable values)                         -> normal invoke.
+
+    Uses the SYNC ``get_state`` — valid here because the campaign path runs a sync
+    ``graph.invoke`` over a sync ``PostgresSaver`` (or ``InMemorySaver``); the async
+    ``AsyncPostgresSaver`` is only for the async harness spine (its sync methods
+    raise under the async Pregel loop, and vice-versa)."""
+    cfg = {"configurable": {"thread_id": run_id}}
+    snapshot = graph.get_state(cfg)
+    if snapshot.values:
+        if snapshot.next:  # crashed mid-run -> resume; only pending nodes re-run
+            final = graph.invoke(None, cfg)
+        else:              # completed -> persisted state, never replay (fk5)
+            final = snapshot.values
+    else:                  # fresh thread
+        final = graph.invoke(init, cfg)
+    return CampaignState.model_validate(final)
+
+
 def run_campaign(
     *, archetype_id: str, tenant_id: str, brief: str = "",
     campaign_id: str | None = None, dsn: str | None = None, persist: bool = True,
     run_id: str | None = None, force_research: bool = False, output_count: int = 0,
+    checkpointer=None,
 ) -> CampaignState:
     """Classify-free direct run for a KNOWN archetype id, in-process to completion.
 
@@ -542,6 +575,13 @@ def run_campaign(
 
     ``run_id`` may be supplied so a caller (e.g. the studio's async run endpoint) knows
     the id BEFORE the run finishes and can poll the per-role ``agent_runs`` as they land.
+
+    DURABILITY (fr1.2): when ``ENGINE_DATABASE_URL`` is set the graph is compiled with
+    the SYNC durable ``PostgresSaver`` (checkpointed under ``thread_id=run_id``), so a
+    crash mid-campaign resumes at the last completed node on restart instead of losing
+    the run. Callers may inject their own ``checkpointer`` (tests / a shared saver);
+    when unset and no env DB is configured the in-memory saver keeps the old ephemeral
+    behavior. Either way the invoke goes through the fk5 completed-thread replay guard.
     """
     if archetype_id not in registry.REGISTRY:
         raise KeyError(f"unregistered archetype {archetype_id!r}; registry={registry.ids()}")
@@ -560,11 +600,31 @@ def run_campaign(
 
     campaign_id = campaign_id or f"camp_{uuid.uuid4().hex[:12]}"
     run_id = run_id or f"team-{campaign_id}-{uuid.uuid4().hex[:12]}"
-    graph = build_campaign_graph(team_store=team_store, dsn=dsn)
     init = CampaignState(
         campaign_id=campaign_id, run_id=run_id, tenant_id=tenant_id,
         archetype_id=archetype_id, brief=brief,
         force_research=force_research, output_count=output_count,
     )
-    final = graph.invoke(init, config={"configurable": {"thread_id": run_id}})
-    return CampaignState.model_validate(final)
+
+    # A caller-supplied checkpointer owns its own lifecycle (don't manage it here).
+    if checkpointer is not None:
+        graph = build_campaign_graph(team_store=team_store, dsn=dsn, checkpointer=checkpointer)
+        return _run_guarded(graph, init, run_id)
+
+    # Env-var seam (AC1 parity): ENGINE_DATABASE_URL flips on the durable sync saver.
+    from harness.config import get_settings
+
+    database_url = get_settings().database_url
+    if database_url:
+        from langgraph.checkpoint.postgres import PostgresSaver
+
+        # Managed connection/pool for the life of this run; setup() is idempotent
+        # (creates the LangGraph checkpoint tables once).
+        with PostgresSaver.from_conn_string(database_url) as cp:
+            cp.setup()
+            graph = build_campaign_graph(team_store=team_store, dsn=dsn, checkpointer=cp)
+            return _run_guarded(graph, init, run_id)
+
+    # No durable DB configured -> in-memory saver (unchanged ephemeral behavior).
+    graph = build_campaign_graph(team_store=team_store, dsn=dsn)
+    return _run_guarded(graph, init, run_id)

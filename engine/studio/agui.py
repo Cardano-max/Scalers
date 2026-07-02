@@ -1497,6 +1497,26 @@ def _execute_provided_leads_sync(
     # so the strategist is load-bearing (the angle flows into the copy), not decoration.
     draft_goal = goal if not campaign_angle else f"{goal}. Lead with this campaign angle: {campaign_angle}"
 
+    # DURABLE STEP LEDGER (fr1.2 / OPS-2): make the per-lead loop crash-safe. Active
+    # when ENGINE_DATABASE_URL is set (the same activation seam as the checkpointer);
+    # a laptop reboot mid-campaign then resumes at the exact lead being drafted — an
+    # already-staged lead is a ledger no-op on restart (its expensive re-draft is
+    # skipped), and the staged action row's idempotency_key (``run_id:cust_id``) owns
+    # effect-level exactly-once regardless. Best-effort: a ledger-setup failure never
+    # breaks the run (``_durable`` stays None -> the pre-fr1.2 behavior).
+    _durable = None
+    if run_id:
+        from harness.config import get_settings
+
+        if get_settings().database_url:
+            try:
+                from studio.durable_run import DurableRun
+
+                _durable = DurableRun(run_id, tenant_id, dsn=dsn)
+                _durable.ensure_schema()
+            except Exception:
+                _durable = None
+
     # 2) Per-lead: real DB history + research ABOUT this lead + brand-voiced draft.
     # The blueprint's stop_conditions + the hard cap bound the fan-out: draft at most
     # ``effective_cap`` leads. This makes the plan load-bearing — the executor stops when
@@ -1505,6 +1525,17 @@ def _execute_provided_leads_sync(
         if len(pending) >= effective_cap:
             break  # stop_condition: per-run quota / hard cap met
         cust_id = facts["customer_id"]
+        # Replay-skip (fr1.2): this lead was fully staged in a prior (crashed) drive.
+        # Skip its re-draft; re-attach its already-staged action id to the payload so
+        # the resumed run's count is honest. The action row itself already exists
+        # (idempotency_key), so nothing re-fires.
+        _step_key = f"{run_id}:{cust_id}:stage"
+        if _durable is not None and _durable.has_run_step(_step_key):
+            _prior = _durable.prior_result(_step_key) or {}
+            _prior_aid = _prior.get("action_id") if isinstance(_prior, dict) else None
+            if _prior_aid:
+                pending.append(_prior_aid)
+            continue
         research = research_studio(facts, enabled=deep)  # real Firecrawl about THIS studio
         th = facts.get("tattoo_history", []) or []
         traits = facts.get("persona_traits", {}) or {}
@@ -1762,6 +1793,24 @@ def _execute_provided_leads_sync(
             )
         except Exception:
             pass
+        # Mark this lead durably processed (fr1.2). The action row above already
+        # committed under its idempotency key; this ledger record is what a restart
+        # reads to SKIP the (expensive) re-draft. A crash between the two leaves the
+        # action row without a ledger row -> restart re-drafts but the idempotency
+        # key blocks a second row (wasted work, never a double side-effect). The
+        # fn writes nothing on ``conn`` (record_pending_action used its own), so this
+        # step is a pure replay-skip marker per docs/design/p3-durable-hitl.md §5.1.
+        if _durable is not None:
+            try:
+                _durable.step(
+                    _step_key,
+                    lambda conn, _aid=action_id, _cid=cust_id: {
+                        "action_id": _aid, "customer_id": _cid, "staged": True,
+                    },
+                )
+                _durable.checkpoint(cursor=len(pending))
+            except Exception:
+                pass  # ledger is best-effort; the idempotency key is the real guard
 
     # 2b) PROGRESS-AWARE REPLAN (P1.5 blueprint #3, limited-commitment — NOT reflect-every-
     # step). After the loop has accumulated real evidence, ``maybe_replan`` compares the
