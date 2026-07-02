@@ -83,6 +83,26 @@ CREATE TABLE IF NOT EXISTS contact_memories (
 CREATE INDEX IF NOT EXISTS contact_memories_open_idx
     ON contact_memories (tenant_id, identifier) WHERE valid_to IS NULL;
 
+-- delivery_events: provider status callbacks (queued/sent/delivered/
+-- undelivered/failed) per message (§4.3-10). UNIQUE (provider_sid, status)
+-- makes webhook retries no-ops. Written under the sandbox redirect too — the
+-- machinery is proven before go-live.
+CREATE TABLE IF NOT EXISTS delivery_events (
+    id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    tenant_id    text        NOT NULL,
+    identifier   text        NOT NULL,
+    channel      text        NOT NULL DEFAULT 'sms',
+    provider_sid text,
+    status       text        NOT NULL,
+    error_code   integer,
+    raw          jsonb,
+    occurred_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS delivery_events_sid_status_uniq
+    ON delivery_events (provider_sid, status);
+CREATE INDEX IF NOT EXISTS delivery_events_recipient_idx
+    ON delivery_events (tenant_id, identifier, occurred_at DESC);
+
 -- carrier_errors: every carrier delivery error, for the 30007 spike alert
 -- (30003-30006 ALSO auto-suppress via a suppression_ledger row). provider_sid
 -- (the provider's message sid) is UNIQUE so webhook retries cannot inflate the

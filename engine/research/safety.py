@@ -48,6 +48,9 @@ OFFICIAL_API_HOSTS: dict[str, frozenset[str]] = {
     # Gmail + the OAuth token hosts. Connect only to these (sec conn-scaffold req D).
     "facebook": frozenset({"graph.facebook.com", "graph.instagram.com", "www.facebook.com"}),
     "gmail": frozenset({"gmail.googleapis.com", "oauth2.googleapis.com", "accounts.google.com"}),
+    # SMS connector seam (t90.1): Twilio Messages API only — a provider swap
+    # (Telnyx later) is a config change adding its host here, not a new code path.
+    "twilio": frozenset({"api.twilio.com"}),
 }
 
 # Hostnames that are never legitimate fetch targets (SSRF / metadata vectors).

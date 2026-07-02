@@ -88,6 +88,7 @@ __all__ = [
     "recipient_view",
     "record_carrier_error",
     "record_consent",
+    "record_delivery_event",
     "record_preference_memory",
     "record_send_event",
     "record_suppression",
@@ -540,6 +541,41 @@ def record_send_event(
         return _write(conn)
     with _connect(dsn) as owned:
         return _write(owned)
+
+
+def record_delivery_event(
+    *,
+    tenant_id: str,
+    identifier: str,
+    status: str,
+    channel: str = "sms",
+    provider_sid: str | None = None,
+    error_code: int | None = None,
+    raw: dict[str, Any] | None = None,
+    occurred_at: datetime | None = None,
+    dsn: str | None = None,
+) -> int:
+    """Record one provider status callback (§4.3-10). Idempotent per
+    (provider_sid, status) so webhook retries are no-ops. Written for sandbox
+    (redirected) sends too — the delivery machinery is proven before go-live."""
+    identifier = _normalize_identifier(identifier)
+    with _connect(dsn) as conn:
+        row = conn.execute(
+            "INSERT INTO delivery_events"
+            " (tenant_id, identifier, channel, provider_sid, status, error_code, raw,"
+            "  occurred_at)"
+            " VALUES (%s,%s,%s,%s,%s,%s,%s, COALESCE(%s, now()))"
+            " ON CONFLICT (provider_sid, status) DO NOTHING RETURNING id",
+            (tenant_id, identifier, channel, provider_sid, status, error_code,
+             Json(raw) if raw is not None else None, occurred_at),
+        ).fetchone()
+        if row is not None:
+            return row["id"]
+        existing = conn.execute(
+            "SELECT id FROM delivery_events WHERE provider_sid=%s AND status=%s",
+            (provider_sid, status),
+        ).fetchone()
+        return existing["id"]
 
 
 # ── read path: the gating views (fail-closed at every consumer) ──────────────
