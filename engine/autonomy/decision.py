@@ -21,6 +21,7 @@ classifier can veto) and the jury-agreement concept.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -101,7 +102,9 @@ class JudgeVote(BaseModel):
     voice_hard_fail: bool = False
     safety_hard_fail: bool = False
     appr_hard_fail: bool = False
-    reliability_weight: float = Field(default=1.0, ge=0.0)
+    # allow_inf_nan=False (4jx.14): an inf weight made aggregate pooled NaN,
+    # which laundered through the min-cap to AUTO@1.0. Weights must be finite.
+    reliability_weight: float = Field(default=1.0, ge=0.0, allow_inf_nan=False)
 
     @property
     def overall(self) -> float:
@@ -248,7 +251,12 @@ def derive_decision(
         agree = agreement(votes)
     # The COMPUTED confidence (4jx.3) — jury_quality pooled with self-consistency,
     # calibrated — is the router's confidence when supplied (replaces the hardcoded
-    # 0.9 / jury-only pooling on the real decision path).
+    # 0.9 / jury-only pooling on the real decision path). Last-mile finite guard
+    # (4jx.14): a NaN/inf confidence would defeat route()'s threshold comparison
+    # (NaN < t is False -> AUTO), so a non-finite value is UNCOMPUTABLE, not a number.
+    if confidence is not None and not math.isfinite(confidence):
+        confidence = None
+        confidence_uncomputable = True
     if confidence is not None:
         pooled = confidence
 
@@ -274,16 +282,6 @@ def derive_decision(
         return (
             RouteDecision.REVIEW,
             Escalation(kind=EscKind.GATE, label=f"jury catalog drift ({catalog_drift_reason})"),
-            pooled,
-            agree,
-        )
-
-    # FAIL-SAFE on uncomputable confidence (4jx.3): too few probe samples to estimate
-    # self-consistency -> review. "Couldn't compute" is never treated as high confidence.
-    if confidence_uncomputable:
-        return (
-            RouteDecision.REVIEW,
-            Escalation(kind=EscKind.BELOW_THRESHOLD, label="confidence uncomputable (insufficient samples)"),
             pooled,
             agree,
         )
@@ -336,6 +334,31 @@ def derive_decision(
                 kind=EscKind.DEGRADED,
                 label=f"degraded jury ({len(votes)}/{expected_judges} judges)",
             ),
+            pooled,
+            agree,
+        )
+
+    # FAIL-SAFE on uncomputable confidence (4jx.3) — a confidence-class reason, so
+    # it sits with the threshold check (floors/split/degraded above report their
+    # more actionable reasons first). Two DISTINCT triggers, distinctly labeled
+    # (arch/#93: caller-omission and probe-starvation are different facts and the
+    # audit trail must say which happened):
+    #   * the computed path explicitly said UNCOMPUTABLE (probe gathered too few
+    #     samples) -> "uncomputable (insufficient samples)";
+    #   * hardening — the MEASURED path (an aggregate is supplied) was given no
+    #     computed confidence at all -> "not supplied (measured path)". On the
+    #     measured path, AUTO requires a computed confidence; jury quality alone
+    #     must not clear the bar (ADR Decision 2). The legacy stub path (no
+    #     aggregate) keeps its jury-only semantics.
+    if confidence_uncomputable or (aggregate is not None and confidence is None):
+        reason = (
+            "confidence uncomputable (insufficient samples)"
+            if confidence_uncomputable
+            else "confidence not supplied (measured path)"
+        )
+        return (
+            RouteDecision.REVIEW,
+            Escalation(kind=EscKind.BELOW_THRESHOLD, label=reason),
             pooled,
             agree,
         )
