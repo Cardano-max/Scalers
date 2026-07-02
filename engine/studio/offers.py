@@ -14,12 +14,22 @@ project's no-fabrication gate). This module is that guarantee:
 
 If no offers doc exists, every read is honestly empty and the strategy falls back to a
 non-offer angle or a reply-based CTA — it does NOT invent a discount.
+
+65w.14 (anti-fabrication, wired by CustomerAcq-ju1.2): a SEED/MOCK offers doc never
+substantiates. Every :class:`Offer` carries its doc provenance; :func:`select_offer`
+and :func:`substantiate` refuse an offer whose source fails
+:func:`cells.offer_guard.is_real_offer_source` — so with only the seeded mock on file,
+selection and the hard gate both return ``None`` (fail-closed), exactly like the trunk
+draft cell.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
+
+from cells.offer_guard import SubstantiatedOffer, is_real_offer_source
 
 # Offer kinds (mirrors ADR §4.2 offers.kind). ``discount`` and ``payment`` are the two
 # an objection-driven angle can substantiate; the rest are surfaced as-is.
@@ -43,6 +53,15 @@ class Offer:
     valid_until: str | None = None
     applies_to: list[str] = field(default_factory=list)
     kind: str = KIND_DISCOUNT
+    # Doc provenance (65w.14): which offers doc this came from. ``source='seed'`` (or a
+    # doc_seed_* id) makes the offer non-substantiating; None (hand-built) counts as real.
+    source: str | None = None
+    doc_id: str | None = None
+
+    @property
+    def is_real(self) -> bool:
+        """True iff this offer traces to a REAL, operator-provided offers doc."""
+        return is_real_offer_source(self.source, self.doc_id)
 
     def as_evidence(self) -> str:
         """A compact, verifiable one-liner the grounding audit + evidence panel show."""
@@ -71,10 +90,13 @@ _FIELD_ALIASES = {
 }
 
 
-def parse_offers_doc(content: str) -> list[Offer]:
+def parse_offers_doc(
+    content: str, *, source: str | None = None, doc_id: str | None = None
+) -> list[Offer]:
     """Parse an offers doc into :class:`Offer` records. Tolerant of markdown bullets and
     blank lines; a line with no ``code`` is skipped (an offer with no code cannot be
-    substantiated, so it is not surfaced). Pure — no I/O, unit-testable."""
+    substantiated, so it is not surfaced). ``source``/``doc_id`` stamp the originating
+    doc's provenance onto every offer (65w.14). Pure — no I/O, unit-testable."""
     offers: list[Offer] = []
     for raw_line in (content or "").splitlines():
         line = raw_line.strip().lstrip("-*").strip()
@@ -103,6 +125,8 @@ def parse_offers_doc(content: str) -> list[Offer]:
             valid_until=fields.get("valid_until"),
             applies_to=fields.get("applies_to", []),
             kind=(fields.get("kind") or KIND_DISCOUNT).strip().lower(),
+            source=source,
+            doc_id=doc_id,
         ))
     return offers
 
@@ -125,7 +149,9 @@ def get_offers(tenant_id: str, *, dsn: str | None = None) -> list[Offer]:
         for d in docs:
             full = get_document(d["id"], dsn=dsn)
             if full and full.get("content"):
-                offers.extend(parse_offers_doc(full["content"]))
+                offers.extend(parse_offers_doc(
+                    full["content"], source=d.get("source"), doc_id=d.get("id"),
+                ))
         return offers
     except Exception:
         return []
@@ -162,13 +188,14 @@ def select_offer(
 
     Prefers an offer whose kind answers the objection AND whose ``applies_to`` matches the
     lead's interest; falls back to any objection-appropriate offer; returns ``None`` when
-    no real offer fits — the caller must then NOT reference a discount."""
+    no real offer fits — the caller must then NOT reference a discount. A seed/mock-doc
+    offer is never a candidate (65w.14: seed sources never substantiate)."""
     if not offers or not objection:
         return None
     kinds = _OBJECTION_KINDS.get(objection.strip().lower())
     if not kinds:
         return None
-    candidates = [o for o in offers if o.kind in kinds]
+    candidates = [o for o in offers if o.kind in kinds and o.is_real]
     if not candidates:
         return None
     matched = [o for o in candidates if _interest_match(o, interest)]
@@ -178,14 +205,33 @@ def select_offer(
 def substantiate(offers: list[Offer], code: str | None) -> Offer | None:
     """The HARD GATE: return the real :class:`Offer` for ``code`` iff it exists in the
     offers source, else ``None``. A draft may reference an offer ONLY when this returns a
-    non-None offer — an invented/unknown code fails closed and must not reach a draft."""
+    non-None offer — an invented/unknown code fails closed and must not reach a draft.
+    A seed/mock-doc offer never substantiates (65w.14), even by exact code match."""
     if not code:
         return None
     want = code.strip().lower()
     for o in offers:
-        if o.code.strip().lower() == want:
+        if o.code.strip().lower() == want and o.is_real:
             return o
     return None
+
+
+_DISCOUNT_PCT_RE = re.compile(r"(\d{1,3})\s*%")
+
+
+def as_substantiated(offers: list[Offer]) -> list[SubstantiatedOffer]:
+    """The :mod:`cells.offer_guard` view of these offers, provenance included, so a
+    studio call site can run :func:`cells.offer_guard.offer_violations` over built copy
+    in one line. ``percent_off`` is parsed from ``discount`` (e.g. ``"15%"`` → 15) so a
+    real offer's "15% off" copy substantiates; seed offers contribute nothing there."""
+    view: list[SubstantiatedOffer] = []
+    for o in offers:
+        m = _DISCOUNT_PCT_RE.search(o.discount or "")
+        view.append(SubstantiatedOffer(
+            code=o.code, doc_id=o.doc_id, source=o.source,
+            percent_off=int(m.group(1)) if m else None,
+        ))
+    return view
 
 
 # --------------------------------------------------------------------------- #

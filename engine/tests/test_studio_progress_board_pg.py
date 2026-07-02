@@ -36,14 +36,24 @@ def test_blueprint_lives_in_planner_run_and_board_computes_on_demand_pg() -> Non
     from studio.agui import CampaignPlan, _planner_run_output, plan_campaign
     from studio.campaign_blueprint import offer_rule_for
     from studio.campaign_runner import _materialize_runs_row
-    from studio.offers import seed_offers_doc
+    from studio.documents import add_document
+    from studio.offers import OFFERS_DOC_KIND
     from studio.progress_board import compute_progress_board
     from team.store import TeamStore
 
     tenant = f"test_{uuid.uuid4().hex[:8]}"
     campaign_id = f"camp_{uuid.uuid4().hex[:8]}"
     run_id = f"team-{campaign_id}-{uuid.uuid4().hex[:8]}"
-    assert seed_offers_doc(tenant, dsn=_DSN) is not None
+    # A REAL (operator-provided) offers doc — the seeded MOCK never substantiates a live
+    # plan under 65w.14 (is_real_offer_source), so the blueprint's offer_logic must be
+    # grounded in a real doc for a price rule to exist at all.
+    assert add_document(
+        tenant, "Studio Offers (real)",
+        "- code: INKED15 | description: 15% off returning-client sessions"
+        " | discount: 15% | applies_to: any | kind: discount",
+        kind=OFFERS_DOC_KIND, source="operator",
+        doc_id=f"doc_offers_{tenant}_real", dsn=_DSN,
+    )
 
     plan = CampaignPlan(
         goal="win back lapsed clients", target_category="past-customer-reactivation",

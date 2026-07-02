@@ -60,3 +60,29 @@ def test_real_jury_keeps_real_model_attribution():
         assert not seat.model.startswith("deterministic:")
         if seat.family == "anthropic":
             assert "claude-haiku-4-5" in seat.model  # the model actually called (8sk)
+
+
+def test_agui_provided_leads_jury_records_deterministic_label(monkeypatch):
+    """The agui recording site itself (CustomerAcq-ju1.2 wiring): the provided-leads
+    jury is a pure staged-count check — the agent_run it records must carry the
+    deterministic label, never a model id claiming a jury that never ran."""
+    from studio.agui import _execute_provided_leads_sync
+
+    from tests.test_provided_leads_real_team import _plan, _wire
+
+    _wire(monkeypatch)
+    summary = _execute_provided_leads_sync(_plan(), "sess1", "ladies8391", None, None)
+    juries = [ar for ar in summary["agent_runs"] if ar["role"] == "jury"]
+    assert juries, "no jury recorded"
+    for j in juries:
+        assert j["model"] == DETERMINISTIC_JURY_MODEL, j["model"]
+        assert not _MODEL_ID_RE.search(j["model"])
+
+
+def test_agui_brainstorm_jury_model_stays_a_real_id():
+    """The other direction stays honest: the compose/brainstorm jury DOES run a real
+    model (Agent(JURY_MODEL).run) — its label must remain a real, policy-allowed id."""
+    from studio.agui import JURY_MODEL
+
+    assert _MODEL_ID_RE.search(JURY_MODEL)
+    assert model_allowed(JURY_MODEL.split(":", 1)[-1])

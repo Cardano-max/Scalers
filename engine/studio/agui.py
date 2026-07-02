@@ -51,7 +51,10 @@ from studio.chat_store import VALID_ROLES, PostgresChatStore
 # (harness.config.DEFAULT_HAIKU = "claude-haiku-4-5"); the dated build the task
 # names (claude-haiku-4-5-20251001) resolves to the same model.
 HOST_AGUI_MODEL = "anthropic:claude-haiku-4-5"
-JURY_MODEL = "anthropic:claude-sonnet-4-5"  # harness.config.DEFAULT_OPUS
+# The REAL model the compose/brainstorm jury runs (Agent(JURY_MODEL).run). The
+# provided-leads staged-count check is pure code and records DETERMINISTIC_JURY_MODEL
+# from autonomy.jury instead (65w.15) — never this id.
+JURY_MODEL = "anthropic:claude-sonnet-4-5"
 
 
 def _draft_quality_conf(verdict: str | None, confidence: float | None) -> float | None:
@@ -1260,7 +1263,8 @@ def _execute_provided_leads_sync(
         lookup_leads,
         research_studio,
     )
-    from studio.offers import get_offers, select_offer, substantiate
+    from cells.offer_guard import offer_violations
+    from studio.offers import as_substantiated, get_offers, select_offer, substantiate
     from studio.psych_profile import analyze_customer, psych_llm_model
 
     if not run_id:
@@ -1360,8 +1364,10 @@ def _execute_provided_leads_sync(
     # Real substantiated offers for the tenant (from the offers doc); [] when none, so a
     # discount is referenced ONLY when a real offer exists — never invented. The lead's
     # conversation (the psych analyst's primary evidence) comes from the DB conversation
-    # store via the message-source adapter.
+    # store via the message-source adapter. The offer_guard view backs the per-draft
+    # anti-fabrication check below (65w.14: seed offers substantiate nothing there).
     offers = get_offers(tenant_id, dsn=dsn)
+    _guard_offers = as_substantiated(offers)
     conv_source = DbConversationSource(tenant_id, dsn=dsn)
 
     def _rec(role: str, model: str, inp: dict[str, Any], out: dict[str, Any]) -> None:
@@ -1558,6 +1564,17 @@ def _execute_provided_leads_sync(
         except Exception as exc:  # honest per-row skip; never a crash or a fake draft
             skipped.append({"row": _row, "lead": facts.get("name") or cust_id,
                             "reason": f"draft generation failed: {type(exc).__name__}"})
+            continue
+
+        # OFFER ANTI-FABRICATION (65w.14, the ARTLOVER audit): every offer/discount
+        # token in the built copy must trace to a REAL operator-provided offer — seed
+        # offers substantiate nothing. A violating draft is skipped with the concrete
+        # reason; it never reaches the pending queue.
+        _offer_viol = offer_violations(
+            f"{draft.get('subject') or ''}\n{draft.get('draft') or ''}", _guard_offers)
+        if _offer_viol:
+            skipped.append({"row": _row, "lead": facts.get("name") or cust_id,
+                            "reason": f"unsubstantiated offer language: {_offer_viol[0]}"})
             continue
 
         # First-class per-lead DOSSIER (P2-C, 65w.7): assemble the evidence-linked record
@@ -1793,7 +1810,12 @@ def _execute_provided_leads_sync(
             "note": (f"{len(pending)} of {expected_n} per-lead draft(s) staged HELD from "
                      f"{source_note}{_skip_phrase}; approve-first — nothing sent"),
         }
-    _rec("jury", JURY_MODEL, {"n_leads": len(leads), "lead_source": "provided"}, _jury_output)
+    # HONEST TRACE (65w.15): this verdict was computed by pure code above — record the
+    # deterministic label, never a model id claiming a jury that never ran.
+    from autonomy.jury import DETERMINISTIC_JURY_MODEL
+
+    _rec("jury", DETERMINISTIC_JURY_MODEL,
+         {"n_leads": len(leads), "lead_source": "provided"}, _jury_output)
 
     # The FAIL-CLOSED terminal status decided from the REAL agent_runs (incl. the honest
     # jury above): 'failed' when any required gate failed, else 'completed'. The runs row,
