@@ -24,6 +24,7 @@ import metrics
 from harness.config import get_settings
 from harness.graph import get_graph
 from harness.router import route
+from harness.hold import DEFAULT_HOLD_REGISTRY, HoldRegistry
 from harness.state import AutonomyMode, GraphState, RouteDecision
 
 app = FastAPI(title="Scalers Growth Engine — portal", version="0.1.0")
@@ -88,10 +89,23 @@ def _sse(event: str, data: dict) -> str:
 
 
 async def _run_event_stream(
-    topic: str, thread_id: str, tenant_id: str, autonomy: AutonomyMode
+    topic: str,
+    thread_id: str,
+    tenant_id: str,
+    autonomy: AutonomyMode,
+    hold_registry: HoldRegistry = DEFAULT_HOLD_REGISTRY,
 ) -> AsyncIterator[str]:
-    """Relay a LangGraph run as SSE frames: one per node, then the routed decision."""
+    """Relay a LangGraph run as SSE frames: one per node, then the routed decision.
 
+    SAFETY (4jx.13): ``autonomy`` is resolved SERVER-SIDE before any routing —
+    the client's requested dial can only REDUCE autonomy, never select AUTO for a
+    held tenant. The registry is the b3f fail-safe primitive (held unless an
+    operator explicitly lifted), so with the default registry this endpoint can
+    never emit a decision:auto frame or record an 'auto' metric, at any
+    confidence. A query param is a REQUEST, not authority.
+    """
+
+    autonomy = hold_registry.effective_autonomy(autonomy, tenant_id, "posting")
     graph = await get_graph()
     init = GraphState(tenant_id=tenant_id, run_id=thread_id, topic=topic)
 
