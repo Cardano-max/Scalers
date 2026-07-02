@@ -324,6 +324,16 @@ class DurableRun:
             ).fetchone()
         return row is not None
 
+    def prior_result(self, step_key: str) -> Any:
+        """The recorded result of an already-run ``step_key`` (or ``None``).
+
+        Public read accessor for the loop-level replay-skip pattern (fr1.2): a loop
+        that skips a lead it already processed in a prior (crashed) drive can recover
+        what that lead produced — e.g. its staged ``action_id`` — to rebuild its
+        return payload without re-running the step. Pairs with :meth:`has_run_step`.
+        """
+        return self._prior_step_result(step_key)
+
     # ---- interrupt / pause point ---------------------------------------- #
 
     def interrupt(self, payload: Any) -> Any:
