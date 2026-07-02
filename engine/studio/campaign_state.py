@@ -99,6 +99,56 @@ def _jury_result(agent_runs: list[dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
+def _output_ledger(agent_runs: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The output-count ledger the run recorded (65w.8): expected count + the per-row
+    SKIP reasons. It is written on the jury agent_run's output (mirrored on the summary),
+    so a completed run carries it. None for a run that predates the ledger."""
+    for ar in reversed(agent_runs):
+        out = ar.get("output")
+        if isinstance(out, dict) and isinstance(out.get("output_ledger"), dict):
+            return out["output_ledger"]
+    return None
+
+
+def _is_failure_reason(reason: str) -> bool:
+    """A skip row is a FAILURE (draft could not be produced) vs a benign skip (no email,
+    beyond cap, cohort short). Partitioned so the panel shows skipped and failed apart."""
+    r = (reason or "").lower()
+    return "fail" in r or "error" in r
+
+
+def build_reconciliation(
+    *, created: int, counts: dict[str, int], ledger: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Reconcile requested vs created + in-review-queue + skipped + failed, with the
+    exact per-row reasons (sgr / P2-D). Every requested row is accounted for as created
+    OR skipped OR failed — no silent undercount — so ``reconciled`` is true iff
+    ``created + skipped + failed >= expected``. Pure: derived from real rows + the
+    persisted ledger, credit-independent. The UI panel renders THIS verbatim so the
+    panel and campaign_state can never disagree (e.g. voice can't say 2 when it is 10)."""
+    rows = list((ledger or {}).get("skipped") or [])
+    skipped = [r for r in rows if not _is_failure_reason(str(r.get("reason", "")))]
+    failed = [r for r in rows if _is_failure_reason(str(r.get("reason", "")))]
+    expected = (ledger or {}).get("expected")
+    if not isinstance(expected, int):
+        # No ledger (legacy run): everything that ran is accounted, so it reconciles.
+        expected = created + len(rows)
+    accounted = created + len(skipped) + len(failed)
+    return {
+        "requested": expected,
+        "expected": expected,
+        "created": created,
+        "inQueue": counts.get("pending", 0),
+        "approved": counts.get("approved", 0),
+        "sent": counts.get("sent", 0),
+        "rejected": counts.get("rejected", 0),
+        "skipped": skipped,
+        "failed": failed,
+        "accounted": accounted,
+        "reconciled": accounted >= expected,
+    }
+
+
 def build_campaign_state(
     *,
     run_id: str,
@@ -171,6 +221,12 @@ def build_campaign_state(
         (role for role in _REPORT_ROLES if agents.get(role) == "running"), None
     )
 
+    # Draft-count reconciliation (sgr): requested/expected/created/in-queue/skipped/failed
+    # with per-row reasons, from the persisted output ledger + the real action counts.
+    reconciliation = build_reconciliation(
+        created=counts["drafts"], counts=counts, ledger=_output_ledger(agent_runs)
+    )
+
     return {
         "run_id": run_id,
         "status": status,
@@ -179,7 +235,8 @@ def build_campaign_state(
         "agents": agents,
         "failure_summary": failure_summary,
         "counts": counts,
-        "expected": None,
+        "expected": reconciliation["expected"],
+        "reconciliation": reconciliation,
         "drafts": drafts,
         "draft_1": drafts[0] if drafts else None,
         "strategy_angle": strategy_angle,
