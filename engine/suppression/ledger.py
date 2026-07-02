@@ -69,11 +69,13 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 from compliance.sms_gate import ConsentRecord, RecipientContext
+from ops.tenant_guard import assert_tenant_writable
 
 __all__ = [
     "AudienceFilterResult",
     "ConsentStatus",
     "RecipientLedgerView",
+    "backfill_test_memories",
     "carrier_30007_spike",
     "claim_send_slot",
     "consent_status",
@@ -84,6 +86,7 @@ __all__ = [
     "ingest_manual_revocation",
     "ingest_twilio_opt_out",
     "is_suppressed",
+    "recent_send_counts",
     "recipient_context_for_gate",
     "recipient_view",
     "record_carrier_error",
@@ -168,6 +171,7 @@ def record_suppression(
     transaction: suppression row + ``consent.revoked_at`` + bi-temporal
     memory supersede commit together or not at all (AC #10 / W3). Pass
     ``conn`` to join the CALLER's transaction (no commit here)."""
+    assert_tenant_writable(tenant_id)
     if conn is not None:
         return _record_suppression_tx(
             conn, tenant_id, identifier, channel, reason, raw_utterance, occurred_at
@@ -237,20 +241,24 @@ def _supersede_preferences(
     occurred_at: datetime,
 ) -> None:
     open_rows = conn.execute(
-        "SELECT id FROM contact_memories WHERE tenant_id=%s AND identifier=%s"
+        "SELECT id, is_test FROM contact_memories WHERE tenant_id=%s AND identifier=%s"
         " AND valid_to IS NULL FOR UPDATE",
         (tenant_id, identifier),
     ).fetchall()
+    # The do-not-contact supersede inherits is_test from what it supersedes: a
+    # test contact's STOP must NOT inject a real do-not-contact row into recall.
+    # A STOP with no prior memory is a real event (is_test=false).
+    inherit_test = bool(open_rows) and all(r["is_test"] for r in open_rows)
     new = conn.execute(
-        "INSERT INTO contact_memories (tenant_id, identifier, content, valid_from)"
-        " VALUES (%s,%s,%s,%s) RETURNING id",
+        "INSERT INTO contact_memories (tenant_id, identifier, content, valid_from, is_test)"
+        " VALUES (%s,%s,%s,%s,%s) RETURNING id",
         (
             tenant_id, identifier,
             Json({
                 "kind": "contact_preference", "do_not_contact": True,
                 "channel": channel, "reason": reason,
             }),
-            occurred_at,
+            occurred_at, inherit_test,
         ),
     ).fetchone()
     if open_rows:
@@ -349,6 +357,7 @@ def record_carrier_error(
     message, not the recipient, is the problem. The error row and the
     auto-suppress row commit in ONE transaction; a ``provider_sid`` makes
     webhook retries no-ops (unique), so the spike count stays honest."""
+    assert_tenant_writable(tenant_id)
     when = occurred_at or datetime.now(timezone.utc)
     identifier = _normalize_identifier(identifier)
     suppressed = False
@@ -416,6 +425,7 @@ def record_consent(
     dsn: str | None = None,
 ) -> int:
     """Record a PEWC consent grant with provenance (idempotent on the natural key)."""
+    assert_tenant_writable(tenant_id)
     identifier = _normalize_identifier(identifier)
     with _connect(dsn) as conn:
         row = conn.execute(
@@ -476,29 +486,94 @@ def record_preference_memory(
     identifier: str,
     content: dict[str, Any],
     valid_from: datetime,
+    is_test: bool = False,
     dsn: str | None = None,
 ) -> int:
-    """Record a contact-preference memory row (open-ended valid time)."""
+    """Record a contact-preference memory row (open-ended valid time).
+    ``is_test=True`` marks a synthetic/test artifact that recall excludes by
+    default (fr1.3 memory de-pollution)."""
+    assert_tenant_writable(tenant_id)
     with _connect(dsn) as conn:
         row = conn.execute(
-            "INSERT INTO contact_memories (tenant_id, identifier, content, valid_from)"
-            " VALUES (%s,%s,%s,%s) RETURNING id",
-            (tenant_id, identifier, Json(content), valid_from),
+            "INSERT INTO contact_memories (tenant_id, identifier, content, valid_from,"
+            " is_test) VALUES (%s,%s,%s,%s,%s) RETURNING id",
+            (tenant_id, identifier, Json(content), valid_from, is_test),
         ).fetchone()
         return row["id"]
 
 
 def get_memories(
-    *, tenant_id: str, identifier: str, dsn: str | None = None
+    *, tenant_id: str, identifier: str, include_test: bool = False, dsn: str | None = None
 ) -> list[dict[str, Any]]:
-    """All memory rows for a contact, superseded history included (bi-temporal:
-    the past stays auditable)."""
+    """A contact's memory rows (superseded history included — bi-temporal, the
+    past stays auditable). Recall EXCLUDES ``is_test`` artifacts by default so a
+    ``test_mem_*`` row can never ground a real draft; pass ``include_test=True``
+    for audit/backfill views."""
+    sql = (
+        "SELECT id, content, valid_from, valid_to, superseded_by, recorded_at, is_test"
+        " FROM contact_memories WHERE tenant_id=%s AND identifier=%s"
+    )
+    if not include_test:
+        sql += " AND is_test = false"
+    sql += " ORDER BY id"
+    with _connect(dsn) as conn:
+        return conn.execute(sql, (tenant_id, identifier)).fetchall()
+
+
+def backfill_test_memories(
+    *, tenant_id: str | None = None, dsn: str | None = None
+) -> int:
+    """FLAG (never delete) contact-preference memories that are ``test_mem_*``
+    artifacts — by identifier prefix, a ``test_mem_*`` content source, or a
+    ``kind='test'`` marker — setting ``is_test=true``. Returns the number of
+    rows newly flagged (idempotent: an already-flagged row is not recounted).
+    This is the mechanism that clears the audit's 102 injected test memories."""
+    # '%%' escapes the LIKE wildcard so psycopg does not read it as a placeholder.
+    where = (
+        "is_test = false AND ("
+        "identifier LIKE 'test_mem_%%'"
+        " OR content->>'source' LIKE 'test_mem_%%'"
+        " OR content->>'kind' = 'test')"
+    )
+    params: list[Any] = []
+    if tenant_id is not None:
+        where += " AND tenant_id = %s"
+        params.append(tenant_id)
     with _connect(dsn) as conn:
         return conn.execute(
-            "SELECT id, content, valid_from, valid_to, superseded_by, recorded_at"
-            " FROM contact_memories WHERE tenant_id=%s AND identifier=%s ORDER BY id",
-            (tenant_id, identifier),
+            f"UPDATE contact_memories SET is_test = true WHERE {where}", params
+        ).rowcount
+
+
+def recent_send_counts(
+    *,
+    tenant_id: str,
+    identifiers: Sequence[str],
+    channel: str = "sms",
+    kind: str = "promo",
+    window_hours: int = 72,
+    now: datetime | None = None,
+    dsn: str | None = None,
+) -> dict[str, int]:
+    """Per-identifier count of recent ``kind`` sends in the window, read from
+    ``send_events`` — the batch read backing the queue's per-recipient
+    frequency awareness (READ-only; no dedupe here). Every requested identifier
+    appears in the result (0 when it has no sends), keyed by the ORIGINAL
+    identifier the caller passed."""
+    when = now or datetime.now(timezone.utc)
+    if not identifiers:
+        return {}
+    canon = {i: _normalize_identifier(i) for i in identifiers}
+    with _connect(dsn) as conn:
+        rows = conn.execute(
+            "SELECT identifier, count(*) AS n FROM send_events"
+            " WHERE tenant_id=%s AND identifier = ANY(%s) AND channel=%s AND kind=%s"
+            " AND occurred_at > %s AND occurred_at <= %s GROUP BY identifier",
+            (tenant_id, list(set(canon.values())), channel, kind,
+             when - timedelta(hours=window_hours), when),
         ).fetchall()
+    counts = {r["identifier"]: r["n"] for r in rows}
+    return {orig: counts.get(canon[orig], 0) for orig in identifiers}
 
 
 def record_send_event(
@@ -520,6 +595,7 @@ def record_send_event(
     Pass ``conn`` to write inside the CALLER's transaction — the send path does
     this in the same transaction that settles the side-effect ledger row, so
     the delivery record and the SENT status commit together (W2)."""
+    assert_tenant_writable(tenant_id)
     identifier = _normalize_identifier(identifier)
     sql = (
         "INSERT INTO send_events"
@@ -558,6 +634,7 @@ def record_delivery_event(
     """Record one provider status callback (§4.3-10). Idempotent per
     (provider_sid, status) so webhook retries are no-ops. Written for sandbox
     (redirected) sends too — the delivery machinery is proven before go-live."""
+    assert_tenant_writable(tenant_id)
     identifier = _normalize_identifier(identifier)
     with _connect(dsn) as conn:
         row = conn.execute(
@@ -751,6 +828,7 @@ def claim_send_slot(
     provider call: a claimed slot with a failed provider send under-sends
     (fail-closed), never over-sends. Returns ``(ok, reason)``; a refused claim
     writes nothing. Fail-closed: an unreachable ledger refuses the claim."""
+    assert_tenant_writable(tenant_id)  # config error — must surface, not be swallowed below
     when = now or datetime.now(timezone.utc)
     identifier = _normalize_identifier(identifier)
     try:

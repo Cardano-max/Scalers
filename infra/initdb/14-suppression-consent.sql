@@ -78,10 +78,19 @@ CREATE TABLE IF NOT EXISTS contact_memories (
     valid_from    timestamptz NOT NULL,
     valid_to      timestamptz,                   -- NULL = current
     superseded_by bigint REFERENCES contact_memories(id),
-    recorded_at   timestamptz NOT NULL DEFAULT now()
+    recorded_at   timestamptz NOT NULL DEFAULT now(),
+    -- is_test (fr1.3, §memory de-pollution): a synthetic/test artifact. Recall
+    -- defaults to is_test=false so a test_mem_* row can NEVER ground a real
+    -- draft. Idempotent add for an existing cluster.
+    is_test       boolean     NOT NULL DEFAULT false
 );
+ALTER TABLE contact_memories ADD COLUMN IF NOT EXISTS is_test boolean NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS contact_memories_open_idx
     ON contact_memories (tenant_id, identifier) WHERE valid_to IS NULL;
+-- Recall reads real memories per contact; the partial index keeps that path
+-- cheap as flagged test artifacts accumulate.
+CREATE INDEX IF NOT EXISTS contact_memories_recall_idx
+    ON contact_memories (tenant_id, identifier) WHERE is_test = false;
 
 -- delivery_events: provider status callbacks (queued/sent/delivered/
 -- undelivered/failed) per message (§4.3-10). UNIQUE (provider_sid, status)
