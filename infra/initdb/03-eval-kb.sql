@@ -70,10 +70,17 @@ CREATE TABLE IF NOT EXISTS eval_metric (
     dataset_hash    text,
     git_sha         text,
     langfuse_trace_id text,
+    -- 4jx.17: WHICH confidence producer fed this metric (lift precondition (e));
+    -- NULL for metrics with no confidence input.
+    confidence_provenance text,
     created_at      timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT eval_metric_tenant_scope
         CHECK (scope = 'GLOBAL' OR tenant_id IS NOT NULL)
 );
+
+-- Idempotent additive migration for EXISTING clusters (the CREATE above is a
+-- no-op there, so the new column must also be added explicitly).
+ALTER TABLE eval_metric ADD COLUMN IF NOT EXISTS confidence_provenance text;
 
 -- Indexes: every read filters tenant_id; the vector column is ANN-searchable so
 -- examples stay first-class KB citizens (KNOW-02 grounding reuses them).

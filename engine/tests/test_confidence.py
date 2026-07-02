@@ -11,6 +11,7 @@ import asyncio
 import pytest
 
 from autonomy.confidence import (
+    PROVENANCE_COMPUTED,
     Calibration,
     anchored_self_consistency,
     compute_confidence,
@@ -237,6 +238,44 @@ def test_ece_metric_is_the_eval_metric():
     pairs = [(0.0, False)] * 10 + [(1.0, True)] * 10
     res = ece(pairs)
     assert res.value <= 0.05
+
+
+# ── 4jx.17: provenance + persistable components (the D6 audit payload) ───────
+
+
+def test_provenance_tagged_on_every_computed_result():
+    # Provenance identifies the PRODUCER (lift precondition (e) checks it per
+    # channel) — it is stamped even on uncomputable results: the producer ran.
+    ok = compute_confidence(jury_quality=0.8, self_consistency_score=0.6)
+    un = compute_confidence(jury_quality=0.8, self_consistency_score=None)
+    assert ok.provenance == PROVENANCE_COMPUTED
+    assert un.provenance == PROVENANCE_COMPUTED
+
+
+def test_cap_bind_delta_audits_how_much_the_cap_bound():
+    # jury 0.8 + sc 1.0 -> raw 0.9, identity-calibrated 0.9, min-capped to 0.8.
+    res = compute_confidence(jury_quality=0.8, self_consistency_score=1.0)
+    assert res.components["cap_bind_delta"] == pytest.approx(0.1)
+    # symmetric inputs: the blend IS the weakest component -> the cap never binds.
+    flat = compute_confidence(jury_quality=0.8, self_consistency_score=0.8)
+    assert flat.components["cap_bind_delta"] == pytest.approx(0.0)
+
+
+def test_persistable_components_shape_and_p_est():
+    """AC1: the persisted payload carries p_est = the CALIBRATED POOLED estimate
+    (components['calibrated']) — NOT the capped routed value, which is what
+    pooled_confidence stores and from which p_est is unrecoverable."""
+    res = compute_confidence(jury_quality=0.8, self_consistency_score=1.0)
+    pc = res.persistable_components()
+    assert set(pc) == {"raw", "p_est", "jury_quality", "self_consistency", "cap_bind_delta"}
+    assert pc["p_est"] == pytest.approx(0.9)          # calibrated, pre-cap
+    assert res.confidence == pytest.approx(0.8)       # capped routed value differs
+    assert pc["cap_bind_delta"] == pytest.approx(0.1)
+
+
+def test_persistable_components_none_when_uncomputable():
+    un = compute_confidence(jury_quality=0.8, self_consistency_score=None)
+    assert un.persistable_components() is None
 
 
 # ── finite-input guards (4jx.14): NaN/inf -> uncomputable -> review ──────────

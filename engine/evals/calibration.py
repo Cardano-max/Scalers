@@ -33,11 +33,12 @@ today rather than fabricating confidence (see
 :func:`deterministic_probe_confidence_fn`). A green calibration gate therefore does
 NOT mean "the engine is calibrated" until real jury/probe confidences flow — it
 means the gate machinery is live and will red the build the moment real pairs miss
-the bar. Cite: ADR Phase-5 Decision 2 as amended (PR #93). ``p_est`` will later
-come from ``autonomy_decisions.confidence_components`` (D6 delta — that column is
-NOT on main yet); this eval-lane harness computes ``p_est`` per gold example via
-the real :mod:`autonomy.confidence` pipeline with an injectable deterministic
-probe sampler instead.
+the bar. Cite: ADR Phase-5 Decision 2 as amended (PR #93). ``p_est`` is also
+persisted per decision in ``autonomy_decisions.confidence_components`` (D6,
+4jx.17) — :func:`pairs_from_decisions` is the offline-recompute reader for it;
+this eval-lane harness additionally computes ``p_est`` per gold example via the
+real :mod:`autonomy.confidence` pipeline with an injectable deterministic probe
+sampler.
 """
 
 from __future__ import annotations
@@ -91,6 +92,34 @@ class ConfidencePair:
     p_est: float
     routed: float
     correct: bool
+
+
+def pairs_from_decisions(
+    items: "Sequence[tuple[Any, bool, Split]]", *, cell: str
+) -> list[ConfidencePair]:
+    """The rvy.8 OFFLINE-RECOMPUTE reader (4jx.17 AC1): rebuild ``ConfidencePair``s
+    from persisted decision records + ground-truth labels.
+
+    ``p_est`` comes from the decision's ``confidence_components["p_est"]`` — the
+    calibrated pooled gate input — because ``pooled_confidence`` stores the CAPPED
+    routed value, from which ``p_est`` is unrecoverable. ``routed`` is that capped
+    ``pooled_confidence``. A decision with no components (stub path, uncomputable
+    confidence) contributes NO pair — never fabricate a gate input.
+
+    ``items`` is ``(record, correct, split)`` per labeled decision; ``record`` is
+    duck-typed (needs ``decision_id``, ``pooled_confidence``,
+    ``confidence_components``) to keep the eval lane import-light."""
+    pairs: list[ConfidencePair] = []
+    for record, correct, split in items:
+        comps = record.confidence_components
+        if not comps or "p_est" not in comps:
+            continue
+        pairs.append(ConfidencePair(
+            example_id=record.decision_id, cell=cell, split=split,
+            p_est=float(comps["p_est"]), routed=float(record.pooled_confidence),
+            correct=bool(correct),
+        ))
+    return pairs
 
 
 def collect_confidence_pairs(
@@ -268,6 +297,7 @@ def run_calibration_gate(
     min_n: int = DEFAULT_MIN_N,
     record: bool = True,
     git_sha: str | None = None,
+    confidence_provenance: str | None = None,
 ) -> CalibrationGateResult:
     """Run the D2-as-amended calibration gate for one (engine, cell, dimension).
 
@@ -320,6 +350,9 @@ def run_calibration_gate(
                 metric=name, value=mr.value, tenant_id=tenant_id, engine=engine_v,
                 cell=cell, threshold=threshold, direction=direction, passed=passed,
                 run_kind=RunKind.PER_COMMIT, git_sha=git_sha,
+                # 4jx.17 AC2: which producer computed the gate's confidence input
+                # (the LiftController's per-channel lift-precondition-(e) signal).
+                confidence_provenance=confidence_provenance,
             ))
 
     if result.failures:

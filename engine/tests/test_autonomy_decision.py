@@ -49,7 +49,11 @@ def test_single_juror_agreement_is_one():
 
 
 def test_auto_when_clean_and_confident():
-    d, esc, pooled, agree = derive_decision(votes=_votes(0.9, 0.9, 0.9), threshold=0.85)
+    # allow_stub_auto: these precedence tests exercise the LEGACY (no-aggregate)
+    # path, which is review-only outside the explicit demo flag since 4jx.17.
+    d, esc, pooled, agree = derive_decision(
+        votes=_votes(0.9, 0.9, 0.9), threshold=0.85, allow_stub_auto=True
+    )
     assert d is RouteDecision.AUTO
     assert esc.kind is EscKind.NONE
     assert pooled == pytest.approx(0.9)
@@ -97,9 +101,43 @@ def test_below_threshold_reviews():
 
 def test_threshold_boundary_is_inclusive_auto():
     # Exactly at the bar auto-fires (matches the router's inclusive auto bar).
-    d, esc, *_ = derive_decision(votes=_votes(0.85, 0.85, 0.85), threshold=0.85)
+    d, esc, *_ = derive_decision(
+        votes=_votes(0.85, 0.85, 0.85), threshold=0.85, allow_stub_auto=True
+    )
     assert d is RouteDecision.AUTO
     assert esc.kind is EscKind.NONE
+
+
+# -- 4jx.17: structural closure of the legacy (no-aggregate) path ------------- #
+
+
+def test_jury_only_auto_repro_now_reviews():
+    """4jx.17 (panel BLOCKER, verified repro): clean high votes, NO aggregate, NO
+    computed confidence, autonomy=AUTO returned AUTO — the stub/jury-only path's
+    exclusion from auto was PROCEDURAL (everything held today), not structural.
+    Lift is per-CHANNEL, so post-lift a legacy caller could jury-only AUTO on a
+    lifted channel. A would-be AUTO without a measured aggregate now fails safe."""
+    d, esc, *_ = derive_decision(
+        votes=_votes(0.95, 0.95, 0.95), threshold=0.85, autonomy=AutonomyMode.AUTO
+    )
+    assert d is RouteDecision.REVIEW
+    assert esc.kind is EscKind.DEGRADED
+    assert "aggregate" in esc.label
+
+
+def test_demo_flag_is_the_only_stub_auto_door():
+    # The explicit demo flag re-opens stub auto (demos/tests only).
+    d, esc, *_ = derive_decision(
+        votes=_votes(0.95, 0.95, 0.95), threshold=0.85, allow_stub_auto=True
+    )
+    assert d is RouteDecision.AUTO and esc.kind is EscKind.NONE
+
+
+def test_closure_does_not_mask_more_actionable_reasons():
+    # Below-threshold still reports below_threshold (not the structural label):
+    # the closure fires ONLY on a would-be AUTO.
+    d, esc, *_ = derive_decision(votes=_votes(0.6, 0.6, 0.6), threshold=0.85)
+    assert d is RouteDecision.REVIEW and esc.kind is EscKind.BELOW_THRESHOLD
 
 
 def test_autonomy_mode_review_forces_review():

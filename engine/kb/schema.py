@@ -88,6 +88,10 @@ class EvalMetric:
     dataset_hash: str | None = None
     git_sha: str | None = None
     langfuse_trace_id: str | None = None
+    # WHICH confidence producer fed this metric (4jx.17, lift precondition (e)):
+    # the LiftController refuses to lift a channel whose gate rows were driven by
+    # a stub/jury-only/sc-only path. None for metrics with no confidence input.
+    confidence_provenance: str | None = None
     id: str | None = None
     passed: bool | None = None
     created_at: datetime | None = None

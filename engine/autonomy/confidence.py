@@ -42,6 +42,13 @@ PROBE_TEMPERATURE = 0.7
 W_JURY = 0.5
 W_SELF_CONSISTENCY = 0.5
 
+# Confidence PROVENANCE (4jx.17, ADR D5 lift precondition (e)): a closed, exact-
+# match vocabulary identifying WHICH producer computed a decision's confidence.
+# The LiftController queries it per channel — a channel driven by a jury-only /
+# stub / sc-only path cannot lift, and nothing else excludes a legacy path
+# post-lift. This tag names the real min-cap pipeline in this module.
+PROVENANCE_COMPUTED = "computed_min_cap_v1"
+
 
 def self_consistency(signatures: Sequence[Any], *, min_samples: int = MIN_SAMPLES) -> float | None:
     """Modal-agreement self-consistency over K probe-sample signatures, in ``[0,1]``.
@@ -243,6 +250,27 @@ class ConfidenceResult:
     # reason; the decision layer labels the escalation with it when present).
     uncomputable_reason: str = ""
     components: dict[str, float] = field(default_factory=dict)
+    # WHICH producer computed this result (4jx.17) — stamped even on uncomputable
+    # results (the producer ran; the outcome is separate from the identity).
+    provenance: str = PROVENANCE_COMPUTED
+
+    def persistable_components(self) -> dict[str, float] | None:
+        """The D6 audit payload persisted to ``autonomy_decisions.confidence_components``.
+
+        ``p_est`` is the CALIBRATED POOLED estimate (``components['calibrated']``)
+        — the rvy.8 gate input, which is UNRECOVERABLE from ``pooled_confidence``
+        (that column stores the capped routed value). ``cap_bind_delta`` audits
+        how much the weakest-component cap lowered it (0.0 = the cap never bound).
+        ``None`` when nothing was computed (uncomputable)."""
+        if not self.components:
+            return None
+        return {
+            "raw": self.components["raw"],
+            "p_est": self.components["calibrated"],
+            "jury_quality": self.components["jury_quality"],
+            "self_consistency": self.components["self_consistency"],
+            "cap_bind_delta": self.components["cap_bind_delta"],
+        }
 
 
 def compute_confidence(
@@ -327,6 +355,9 @@ def compute_confidence(
             "calibrated": calibrated,
             "jury_quality": jury_quality,
             "self_consistency": self_consistency_score,
+            # How much the weakest-component cap lowered the calibrated estimate
+            # (>= 0; 0.0 when the cap never bound) — persisted for the D6 audit.
+            "cap_bind_delta": calibrated - capped,
         },
     )
 

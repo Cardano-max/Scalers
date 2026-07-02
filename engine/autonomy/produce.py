@@ -21,6 +21,11 @@ from autonomy.jury import expected_judge_count, stub_jury
 from harness.router import DEFAULT_THRESHOLD
 from harness.state import AutonomyMode, Gate
 
+# Provenance tag for the stub producer (4jx.17): decisions written by this path
+# are jury-only — the LiftController must be able to prove a channel is NOT
+# driven by it (lift precondition (e)).
+PROVENANCE_STUB_JURY = "stub_jury_v0"
+
 
 def resolve_channel_policy(pack, channel) -> tuple[float, AutonomyMode]:
     """Resolve ``(threshold, autonomy)`` for a channel from a tenant pack (INFRA-04).
@@ -49,11 +54,14 @@ def produce_and_record_decision(
     gates: list[Gate] | None = None,
     autonomy: AutonomyMode = AutonomyMode.AUTO,
     safety_verdict: SafetyVerdict = SafetyVerdict.PASS,
+    allow_stub_auto: bool = False,
 ) -> DecisionRecord:
     """Produce a decision record from signals and persist it; return the record.
 
     ``base_confidence`` is the run's computed confidence signal feeding the stub
     jury; ``gates`` are the deterministic gate results from eng2's validator bank.
+    Structurally review-only since 4jx.17: the stub path cannot AUTO unless the
+    explicit ``allow_stub_auto`` demo flag is set (demos/tests only).
     """
     gates = gates or []
     votes = stub_jury(base_confidence)
@@ -64,6 +72,7 @@ def produce_and_record_decision(
         autonomy=autonomy,
         safety_verdict=safety_verdict,
         expected_judges=expected_judge_count(),
+        allow_stub_auto=allow_stub_auto,
     )
     record = DecisionRecord(
         decision_id=decision_id,
@@ -79,6 +88,7 @@ def produce_and_record_decision(
         safety_verdict=safety_verdict,
         decision=decision,
         esc=esc,
+        confidence_provenance=PROVENANCE_STUB_JURY,  # jury-only: can never lift
     )
     store.record_decision(record)
     return record
@@ -164,6 +174,8 @@ async def produce_and_record_decision_real(
         threshold=threshold,
         agreement=agreement,
         self_consistency=conf.self_consistency,
+        confidence_components=conf.persistable_components(),
+        confidence_provenance=conf.provenance,
         gates=[GateResult.from_gate(g) for g in gates],
         safety_verdict=safety_verdict,
         decision=decision,

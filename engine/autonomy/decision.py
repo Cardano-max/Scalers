@@ -172,6 +172,15 @@ class DecisionRecord(BaseModel):
     # until that bead computes it. Persisted to autonomy_decisions.self_consistency
     # (4jx.10) so the console/eval can show both confidence inputs.
     self_consistency: float | None = None
+    # D6 audit payload (4jx.17): raw / p_est / jury_quality / self_consistency /
+    # cap_bind_delta. p_est (the calibrated pooled gate input) is UNRECOVERABLE
+    # from pooled_confidence (the capped routed value) — this is the rvy.8 offline
+    # recompute's data source. None on the stub path / uncomputable decisions.
+    confidence_components: dict[str, float] | None = None
+    # WHICH producer computed the confidence (4jx.17, lift precondition (e)) —
+    # queryable per channel so the LiftController can prove a channel is driven
+    # by the real computed path, never a stub/jury-only one.
+    confidence_provenance: str | None = None
     gates: list[GateResult] = Field(default_factory=list)
     safety_verdict: SafetyVerdict = SafetyVerdict.PASS
     decision: RouteDecision
@@ -220,6 +229,7 @@ def derive_decision(
     confidence: float | None = None,
     confidence_uncomputable: bool = False,
     confidence_uncomputable_reason: str = "",
+    allow_stub_auto: bool = False,
 ) -> tuple[RouteDecision, Escalation, float, float]:
     """Derive ``(decision, escalation, pooled_confidence, agreement)`` from signals.
 
@@ -376,5 +386,23 @@ def derive_decision(
 
     if base is RouteDecision.REVIEW:  # autonomy dial forced approve-first
         return base, Escalation(kind=EscKind.MODE, label="channel set to approve-first"), pooled, agree
+
+    # STRUCTURAL closure of the legacy path (4jx.17, panel BLOCKER): a would-be
+    # AUTO with no measured aggregate is the stub/jury-only path — its exclusion
+    # from auto used to be procedural (everything held), and lift is per-CHANNEL,
+    # so post-lift a legacy caller could jury-only AUTO on a lifted channel.
+    # ``allow_stub_auto`` is the explicit demo flag (demos/tests only); nothing on
+    # the live path sets it. Sits LAST so more actionable review reasons above
+    # keep their labels — only the final auto-fire is refused.
+    if aggregate is None and not allow_stub_auto:
+        return (
+            RouteDecision.REVIEW,
+            Escalation(
+                kind=EscKind.DEGRADED,
+                label="stub/jury-only path (no measured aggregate): auto requires the computed-confidence path",
+            ),
+            pooled,
+            agree,
+        )
 
     return base, Escalation(kind=EscKind.NONE, label="auto"), pooled, agree

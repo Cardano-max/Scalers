@@ -202,8 +202,8 @@ class KbStore:
                 "INSERT INTO eval_metric"
                 " (scope, tenant_id, engine, cell, metric, value, threshold, direction,"
                 "  passed, run_kind, label_version, model_pins_hash, prompt_version,"
-                "  dataset_hash, git_sha, langfuse_trace_id)"
-                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                "  dataset_hash, git_sha, langfuse_trace_id, confidence_provenance)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
                 (
                     metric.scope.value, metric.tenant_id, metric.engine, metric.cell,
                     metric.metric, metric.value, metric.threshold,
@@ -211,6 +211,7 @@ class KbStore:
                     metric.run_kind.value if metric.run_kind else None,
                     metric.label_version, metric.model_pins_hash, metric.prompt_version,
                     metric.dataset_hash, metric.git_sha, metric.langfuse_trace_id,
+                    metric.confidence_provenance,
                 ),
             ).fetchone()
             return str(row[0])
@@ -248,7 +249,8 @@ class KbStore:
             rows = conn.execute(
                 "SELECT id, scope, tenant_id, engine, cell, metric, value, threshold,"
                 " direction, passed, run_kind, label_version, model_pins_hash,"
-                " prompt_version, dataset_hash, git_sha, langfuse_trace_id, created_at"
+                " prompt_version, dataset_hash, git_sha, langfuse_trace_id, created_at,"
+                " confidence_provenance"
                 " FROM eval_metric WHERE " + " AND ".join(clauses) + " ORDER BY created_at",
                 params,
             ).fetchall()
@@ -260,6 +262,7 @@ class KbStore:
                 run_kind=RunKind(r[10]) if r[10] else None, label_version=r[11],
                 model_pins_hash=r[12], prompt_version=r[13], dataset_hash=r[14],
                 git_sha=r[15], langfuse_trace_id=r[16], created_at=r[17],
+                confidence_provenance=r[18],
             )
             for r in rows
         ]

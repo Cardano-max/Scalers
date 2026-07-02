@@ -20,6 +20,7 @@ def test_producer_persists_full_record_queryable_by_id_and_run():
         action_kind="post",
         base_confidence=0.9,
         threshold=0.85,
+        allow_stub_auto=True,  # 4jx.17: stub auto is demo-flag-only
     )
     # Clean + confident -> auto, full per-judge jury persisted.
     assert rec.decision is RouteDecision.AUTO
@@ -31,6 +32,29 @@ def test_producer_persists_full_record_queryable_by_id_and_run():
     got = store.get_decision("d1")
     assert got == rec  # round-trips through the store
     assert [r.decision_id for r in store.list_decisions("r1")] == ["d1"]
+
+
+def test_stub_producer_reviews_by_default_and_tags_stub_provenance():
+    """4jx.17 structural closure at the producer: the stub path cannot AUTO
+    without the explicit demo flag, and every stub decision is provenance-tagged
+    so the LiftController can prove a channel is NOT driven by a stub (lift
+    precondition (e)). Stub decisions never carry confidence_components."""
+    from autonomy.produce import PROVENANCE_STUB_JURY
+
+    store = InMemoryDecisionStore()
+    rec = produce_and_record_decision(
+        store,
+        decision_id="d5",
+        run_id="r5",
+        tenant_id="t",
+        channel="instagram",
+        action_kind="post",
+        base_confidence=0.95,  # would have been AUTO pre-closure
+    )
+    assert rec.decision is RouteDecision.REVIEW
+    assert rec.esc.kind is EscKind.DEGRADED
+    assert rec.confidence_provenance == PROVENANCE_STUB_JURY
+    assert rec.confidence_components is None
 
 
 def test_producer_records_gate_failure_as_regenerate():

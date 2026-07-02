@@ -434,6 +434,63 @@ def test_probe_confidence_fn_too_few_probes_fails_safe():
     assert fn(ex, _predictor(ex)) is None
 
 
+# ── 4jx.17: provenance on eval_metric rows + the offline-recompute data source ─
+
+
+def test_gate_records_confidence_provenance_on_metric_rows():
+    """AC2: eval_metric rows identify the confidence producer (lift precondition
+    (e)) — a channel driven by a jury-only/stub/sc-only path cannot lift, and the
+    LiftController needs the recorded tag to prove which producer fed the gate."""
+    examples = (
+        _group(Split.CALIBRATION, 20, 0.90, 0.92)
+        + _group(Split.CALIBRATION, 20, 0.30, 0.32)
+        + _group(Split.HOLDOUT, 20, 0.90, 0.92)
+        + _group(Split.HOLDOUT, 20, 0.30, 0.32)
+    )
+    store = FakeStore(examples)
+    result = run_calibration_gate(
+        store, tenant_id=TENANT, engine=Engine.ENGAGEMENT, cell="triage",
+        dimension="triage_class", predictor=_predictor, confidence_fn=_confidence_fn,
+        confidence_provenance="computed_min_cap_v1",
+    )
+    assert result.verdict == "PASS"
+    assert len(store.metrics) == 2  # ECE + routed lift, both tagged
+    assert all(m.confidence_provenance == "computed_min_cap_v1" for m in store.metrics)
+
+
+def test_offline_recompute_reads_p_est_from_confidence_components():
+    """AC1: the rvy.8 offline recompute finally has a data source — p_est comes
+    from the persisted decision's confidence_components, NOT pooled_confidence
+    (which stores the CAPPED routed value; p_est is unrecoverable from it)."""
+    import asyncio
+
+    from autonomy.judges import JudgeScore, JudgeSpec
+    from autonomy.produce import produce_and_record_decision_real
+    from autonomy.store import InMemoryDecisionStore
+    from evals.calibration import pairs_from_decisions
+
+    async def runner(spec: JudgeSpec, action: str) -> JudgeScore:
+        return JudgeScore(voice=0.95, safety=0.95, appr=0.95, on_voice=True)
+
+    rec = asyncio.run(produce_and_record_decision_real(
+        InMemoryDecisionStore(),
+        decision_id="d-oc1", run_id="r-oc", tenant_id=TENANT,
+        channel="instagram", action_kind="post", action="a",
+        threshold=0.85, judge_runner=runner, self_consistency=0.9,
+    ))
+    # cap binds here: p_est (calibrated pooled 0.925) != routed/capped 0.9
+    pairs = pairs_from_decisions([(rec, True, Split.HOLDOUT)], cell="post")
+    assert len(pairs) == 1
+    p = pairs[0]
+    assert p.p_est == pytest.approx(rec.confidence_components["p_est"])
+    assert p.p_est != pytest.approx(rec.pooled_confidence)
+    assert p.routed == pytest.approx(rec.pooled_confidence)
+    assert p.correct is True and p.split is Split.HOLDOUT
+    # a decision with no components (stub / uncomputable) contributes NO pair
+    stub = rec.model_copy(update={"confidence_components": None})
+    assert pairs_from_decisions([(stub, True, Split.HOLDOUT)], cell="post") == []
+
+
 # ── QA regression tests (rvy.8 adversarial-verify findings) ───────────────────
 
 

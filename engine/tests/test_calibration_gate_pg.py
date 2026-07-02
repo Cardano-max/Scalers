@@ -87,6 +87,7 @@ def test_well_calibrated_pass_records_metrics_on_real_pg(store):
         store, tenant_id=tenant, engine=Engine.ENGAGEMENT, cell="triage",
         dimension="triage_class", predictor=_predictor, confidence_fn=_confidence_fn,
         git_sha="cafe1234",
+        confidence_provenance="computed_min_cap_v1",  # 4jx.17 AC2
     )
     assert result.verdict == "PASS"
     assert result.n_pairs == 80
@@ -101,6 +102,8 @@ def test_well_calibrated_pass_records_metrics_on_real_pg(store):
     assert ece_row.value <= 0.05
     assert ece_row.run_kind is RunKind.PER_COMMIT
     assert ece_row.git_sha == "cafe1234"
+    # 4jx.17 AC2: the confidence producer is recorded and queryable on real PG.
+    assert all(m.confidence_provenance == "computed_min_cap_v1" for m in rows)
 
     lift_row = by_metric["routed_lift"]
     assert lift_row.passed is True

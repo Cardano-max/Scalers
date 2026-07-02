@@ -94,6 +94,8 @@ class PostgresDecisionStore:
                     esc_label         TEXT        NOT NULL,
                     gates             JSONB       NOT NULL DEFAULT '[]'::jsonb,
                     self_consistency  DOUBLE PRECISION,
+                    confidence_components JSONB,
+                    confidence_provenance TEXT,
                     created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
                 );
                 CREATE INDEX IF NOT EXISTS autonomy_decisions_run_idx
@@ -152,6 +154,13 @@ class PostgresDecisionStore:
                     ADD COLUMN IF NOT EXISTS safety_hard_fail BOOLEAN NOT NULL DEFAULT false;
                 ALTER TABLE autonomy_jury
                     ADD COLUMN IF NOT EXISTS appr_hard_fail BOOLEAN NOT NULL DEFAULT false;
+                -- 4jx.17 (D6): the audit payload (raw/p_est/jury_quality/
+                -- self_consistency/cap_bind_delta) + the confidence-producer tag
+                -- the LiftController queries per channel (lift precondition (e)).
+                ALTER TABLE autonomy_decisions
+                    ADD COLUMN IF NOT EXISTS confidence_components JSONB;
+                ALTER TABLE autonomy_decisions
+                    ADD COLUMN IF NOT EXISTS confidence_provenance TEXT;
                 """
             )
 
@@ -163,9 +172,10 @@ class PostgresDecisionStore:
                 """
                 INSERT INTO autonomy_decisions (
                     decision_id, run_id, tenant_id, channel, action_kind,
-                    pooled_confidence, threshold, agreement, self_consistency, decision,
+                    pooled_confidence, threshold, agreement, self_consistency,
+                    confidence_components, confidence_provenance, decision,
                     safety_verdict, esc_kind, esc_label, gates, created_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
                 (
                     record.decision_id,
@@ -177,6 +187,10 @@ class PostgresDecisionStore:
                     record.threshold,
                     record.agreement,
                     record.self_consistency,
+                    Json(record.confidence_components)
+                    if record.confidence_components is not None
+                    else None,
+                    record.confidence_provenance,
                     record.decision.value,
                     record.safety_verdict.value,
                     record.esc.kind.value,
@@ -255,6 +269,8 @@ class PostgresDecisionStore:
             threshold=row["threshold"],
             agreement=row["agreement"],
             self_consistency=row.get("self_consistency"),
+            confidence_components=row.get("confidence_components"),
+            confidence_provenance=row.get("confidence_provenance"),
             gates=[GateResult(**g) for g in row["gates"]],
             safety_verdict=SafetyVerdict(row["safety_verdict"]),
             decision=RouteDecision(row["decision"]),

@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import asyncio
 
-from autonomy.confidence import IDENTITY_CALIBRATION, Calibration
+import pytest
+
+from autonomy.confidence import IDENTITY_CALIBRATION, PROVENANCE_COMPUTED, Calibration
 from autonomy.decision import EscKind, RouteDecision, SafetyVerdict
 from autonomy.judges import JudgeScore, JudgeSpec
 from autonomy.produce import produce_and_record_decision_real
@@ -94,6 +96,31 @@ def test_measured_bin_same_signals_still_auto():
     rec = _produce(InMemoryDecisionStore(), _runner(_all()),
                    threshold=0.80, self_consistency=0.84, calibration=cal)
     assert rec.decision is RouteDecision.AUTO
+
+
+def test_real_path_persists_components_and_provenance():
+    """4jx.17 AC1+AC2: the decision carries confidence_components (raw / p_est /
+    jury_quality / self_consistency / cap_bind_delta) and the producer provenance
+    tag — the LiftController's per-channel signal and the rvy.8 offline
+    recompute's p_est source (pooled_confidence stores the CAPPED value)."""
+    store = InMemoryDecisionStore()
+    rec = _produce(store, _runner(_all()), self_consistency=0.9)
+    assert rec.confidence_provenance == PROVENANCE_COMPUTED
+    comps = rec.confidence_components
+    assert comps is not None
+    assert set(comps) == {"raw", "p_est", "jury_quality", "self_consistency", "cap_bind_delta"}
+    # jury 0.95 + sc 0.9 -> raw/p_est 0.925 (identity map), routed capped to 0.9
+    assert comps["p_est"] == pytest.approx(0.925)
+    assert rec.pooled_confidence == pytest.approx(0.9)
+    assert comps["cap_bind_delta"] == pytest.approx(0.025)
+    assert store.get_decision("d1").confidence_components == comps  # round-trips
+
+
+def test_uncomputable_decision_still_carries_provenance():
+    # Components are None (nothing computed) but the producer identity remains.
+    rec = _produce(InMemoryDecisionStore(), _runner(_all()), self_consistency=None)
+    assert rec.confidence_provenance == PROVENANCE_COMPUTED
+    assert rec.confidence_components is None
 
 
 def test_hard_fail_item_routes_review_via_floor():
