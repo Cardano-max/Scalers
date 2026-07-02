@@ -40,6 +40,13 @@ dependencies = [
     # SHA-256 stub via $SCALERS_EMBEDDER=deterministic, so the eval gate stays
     # network-free without uninstalling this.
     "fastembed>=0.4",
+    # Public-holiday calendar for the proactive scanner's holiday detector
+    # (CustomerAcq-fr1.1 detector #3). sec dep-gate APPROVED 2026-07-03
+    # (sec/reviews/dependency-vetting.md): MIT, pure-Python py3-none-any, inert
+    # import (no net/exec/subprocess), 0 CVEs. Pinned EXACT + hash-pinned in
+    # uv.lock per sec; re-vet on any version bump. Single transitive dep
+    # python-dateutil(>=2.9.0.post0,<3), already hash-pinned in the lock.
+    "holidays==0.99",
 ]
 
 [project.optional-dependencies]
