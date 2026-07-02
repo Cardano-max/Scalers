@@ -8,10 +8,14 @@ can exercise valid output, repair-on-retry, persistent failure, and messy text.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import os
 import sys
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import psycopg
 import pytest
@@ -181,3 +185,52 @@ async def db():
 @pytest_asyncio.fixture
 def dsn() -> str:
     return DB_DSN
+
+
+# ── per-process private test schema (fr1.3, AC-4) ────────────────────────────
+# The proven fix for shared-Postgres cross-process pollution (the audit's
+# junk-row incident + the gold/eval flake family): each caller gets its OWN
+# schema, and the schema is baked into the DSN via ``options=-c search_path=``
+# so EVERY connection made with that DSN — including the ones the ledger/ops
+# code opens internally — reads and writes only that schema. Two processes (or
+# two `with` blocks) cannot see or TRUNCATE each other's rows.
+#
+# Scope note: the private schema is private-ONLY on the search_path (no
+# ``public``), which avoids the ``CREATE TABLE IF NOT EXISTS`` shadow gotcha
+# (a public copy would make the create a no-op). That means SQL needing an
+# extension type in public (e.g. pgvector's ``vector``) must resolve it
+# explicitly; the hygiene schema (14-suppression-consent.sql, actions) does
+# not, so it isolates cleanly. Broad adoption by the vector-using suites is a
+# follow-up.
+
+_schema_counter = itertools.count()
+
+
+def _dsn_with_search_path(base_dsn: str, schema: str) -> str:
+    """Return ``base_dsn`` with libpq ``options=-c search_path=<schema>`` set,
+    so every connection opened from it lands in the private schema."""
+    parts = urlsplit(base_dsn)
+    opt = f"-c search_path={schema}"
+    q = f"options={quote(opt)}"
+    query = f"{parts.query}&{q}" if parts.query else q
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
+
+
+@contextmanager
+def private_schema(*initdb_names: str):
+    """Context manager yielding ``SimpleNamespace(dsn, schema)`` bound to a
+    fresh per-process private schema. ``initdb_names`` are ``infra/initdb``
+    SQL files applied INTO that schema (unqualified DDL lands there because the
+    search_path points only at it). The schema is dropped CASCADE on exit."""
+    _require_db()
+    schema = f"test_p{os.getpid()}_{next(_schema_counter)}"
+    with psycopg.connect(DB_DSN, autocommit=True) as conn:
+        conn.execute(f'CREATE SCHEMA "{schema}"')
+        conn.execute(f'SET search_path TO "{schema}"')
+        for name in initdb_names:
+            conn.execute((_INITDB / name).read_text(encoding="utf-8"))
+    try:
+        yield SimpleNamespace(dsn=_dsn_with_search_path(DB_DSN, schema), schema=schema)
+    finally:
+        with psycopg.connect(DB_DSN, autocommit=True) as conn:
+            conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')

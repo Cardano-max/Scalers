@@ -33,6 +33,23 @@ class SuppressionGate:
         self._refs = set(refs)
 
     @classmethod
+    def from_ledger(cls, *, tenant_id: str, dsn: str | None = None) -> "SuppressionGate":
+        """Build the email gate from the cross-channel suppression ledger
+        (CustomerAcq-t90.3): every ``email`` or ``'all'``-channel revocation —
+        web-form and verbal revocations included — suppresses the email path
+        too. One ledger, every channel."""
+        from suppression.ledger import _connect  # lazy: this module stays DB-free by default
+
+        with _connect(dsn) as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT identifier FROM suppression_ledger"
+                " WHERE tenant_id = %s AND (channel = 'email' OR channel = 'all')",
+                (tenant_id,),
+            ).fetchall()
+        emails = [r["identifier"] for r in rows if "@" in r["identifier"]]
+        return cls(emails=emails)
+
+    @classmethod
     def from_rows(cls, rows: Iterable[str]) -> "SuppressionGate":
         """Build from raw list rows. A row starting with '@' is a domain rule; a
         32+ hex row is treated as a ref; anything with '@' inside is an email."""

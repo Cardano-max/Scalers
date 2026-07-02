@@ -108,6 +108,11 @@ SIDE_EFFECTS = Counter(
     "Side-effect dispatch outcomes.",
     ["tenant", "channel", "outcome"],
 )
+CARRIER_ERRORS = Counter(
+    "scalers_carrier_errors_total",
+    "Carrier delivery errors by code (a 30007 series backs the spike alert).",
+    ["tenant", "code"],
+)
 
 
 # ── Recording API (callers use these; never touch label internals directly) ──
@@ -151,6 +156,11 @@ def record_gate(*, tenant: str, gate: str, passed: bool) -> None:
 def record_side_effect(*, tenant: str, channel: str, outcome: str) -> None:
     """Count a side-effect dispatch outcome (e.g. ``sent`` / ``failed`` / ``deduped``)."""
     SIDE_EFFECTS.labels(tenant=tenant, channel=channel, outcome=outcome).inc()
+
+
+def record_carrier_error_metric(*, tenant: str, code: int) -> None:
+    """Count one carrier delivery error (30003-30007 class)."""
+    CARRIER_ERRORS.labels(tenant=tenant, code=str(code)).inc()
 
 
 def inc_published(*, tenant: str, channel: str, n: int = 1) -> None:
