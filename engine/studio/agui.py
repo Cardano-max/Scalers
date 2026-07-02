@@ -51,7 +51,7 @@ from studio.chat_store import VALID_ROLES, PostgresChatStore
 # (harness.config.DEFAULT_HAIKU = "claude-haiku-4-5"); the dated build the task
 # names (claude-haiku-4-5-20251001) resolves to the same model.
 HOST_AGUI_MODEL = "anthropic:claude-haiku-4-5"
-JURY_MODEL = "anthropic:claude-opus-4-8"  # harness.config.DEFAULT_OPUS
+JURY_MODEL = "anthropic:claude-sonnet-4-5"  # harness.config.DEFAULT_OPUS
 
 
 def _draft_quality_conf(verdict: str | None, confidence: float | None) -> float | None:
@@ -993,7 +993,7 @@ async def brainstorm_with_roles(ctx: RunContext[StudioDeps]) -> str:
     await asyncio.to_thread(
         _log_turn, dsn, sid, "copywriter",
         f"[copywriter] hook: {top.hook} | CTA: {top.call_to_action}",
-        "anthropic:claude-sonnet-4-6",
+        "anthropic:claude-haiku-4-5",
     )
 
     # 3) Critic — a real INDEPENDENT pass over the copy (never a staged debate)

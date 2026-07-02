@@ -131,7 +131,7 @@ def build_strategy_cell(**overrides) -> Cell[CampaignStrategy]:
 
     Keyword overrides are passed through to :class:`~cells.base.Cell` (e.g.
     ``model`` or ``temperature``) — useful for tests and for routing the cell to a
-    different model. Defaults to the pinned ``anthropic:claude-sonnet-4-6``.
+    different model. Defaults to the pinned ``anthropic:claude-haiku-4-5``.
     """
     params = dict(
         name="strategy",

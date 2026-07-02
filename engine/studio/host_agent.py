@@ -8,7 +8,7 @@ are explicitly OUT of scope for this slice — the system prompt forbids the hos
 from pretending to run them.
 
 The model is pinned the same way the typed cells pin theirs
-(``cells.base.DEFAULT_MODEL``): ``anthropic:claude-sonnet-4-6``. Pydantic-AI reads
+(``cells.base.DEFAULT_MODEL``): ``anthropic:claude-haiku-4-5``. Pydantic-AI reads
 ``ANTHROPIC_API_KEY`` from the environment (loaded from ``engine/.env`` by
 ``harness.config`` at import). Temperature ~0.4 keeps the host warm and varied
 without drifting off-task.
@@ -23,7 +23,7 @@ from pydantic_ai import Agent
 from pydantic_ai.models import KnownModelName
 
 # Pinned, real model (HARN-06 style pin). host turns persist THIS exact string.
-HOST_MODEL: KnownModelName = "anthropic:claude-sonnet-4-6"
+HOST_MODEL: KnownModelName = "anthropic:claude-haiku-4-5"
 HOST_TEMPERATURE: float = 0.4
 
 _SYSTEM = (

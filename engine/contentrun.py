@@ -201,7 +201,7 @@ async def run_content_to_review_async(
     # 1. REAL draft (temp-0, the decision artifact).
     content_cell = build_content_brief_cell()
     # The pinned model id the draft cell actually runs against (default
-    # "anthropic:claude-sonnet-4-6"). Read off the cell, never hardcoded — if the
+    # "anthropic:claude-haiku-4-5"). Read off the cell, never hardcoded — if the
     # cell is routed to another model the captured pin follows it.
     draft_model = str(content_cell.model)
     drafted: ContentBrief = await content_cell.run(prompt)
@@ -335,7 +335,7 @@ async def run_content_to_review_async(
         # so the Studio orchestrator can populate runs.steps[].input/.output/.model
         # for the draft + jury steps with real content + the real model pins.
         "draft_prompt": prompt,            # exact prompt sent to the content cell
-        "draft_model": draft_model,        # e.g. "anthropic:claude-sonnet-4-6"
+        "draft_model": draft_model,        # e.g. "anthropic:claude-haiku-4-5"
         "content_brief": drafted.model_dump(mode="json"),  # the typed ContentBrief
         "jury_action": draft,              # exact text scored by every juror
         "judge_outputs": list(judge_captures.values()),    # per-seat model + JudgeScore

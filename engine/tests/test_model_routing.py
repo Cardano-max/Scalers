@@ -21,13 +21,15 @@ def test_task_tiers_route_high_stakes_to_best_and_extraction_to_cheap() -> None:
     assert mr.model_for("something-unknown") == mr.TIER_MID
     # The pins carry the anthropic provider prefix and the planner uses the best tier.
     assert mr.PLANNER_MODEL == mr.TIER_BEST
-    assert mr.TIER_BEST.startswith("anthropic:claude-opus")
+    # 8sk MODEL POLICY: sonnet-4-5 is the absolute ceiling — "best" is the ceiling now.
+    assert mr.TIER_BEST.startswith("anthropic:claude-sonnet-4-5")
     assert mr.TIER_CHEAP.startswith("anthropic:claude-haiku")
 
 
 def test_tier_of_labels_models() -> None:
     assert mr.tier_of(mr.TIER_BEST) == "best"
-    assert mr.tier_of(mr.TIER_MID) == "mid"
+    # Under the 8sk policy MID and CHEAP collapse to haiku-4-5, so tier_of reads "cheap".
+    assert mr.tier_of(mr.TIER_MID) == "cheap"
     assert mr.tier_of(mr.TIER_CHEAP) == "cheap"
     assert mr.tier_of("anthropic:some-other-model") == "other"
 

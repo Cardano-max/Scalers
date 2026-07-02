@@ -122,7 +122,7 @@ def _findings_validators() -> ValidatorBank:
 
 
 def build_research_queries_cell(**overrides) -> Cell[ResearchQueries]:
-    """Build the query-derivation cell (pinned ``anthropic:claude-sonnet-4-6`` default)."""
+    """Build the query-derivation cell (pinned ``anthropic:claude-haiku-4-5`` default)."""
     params = dict(
         name="research-queries",
         schema=ResearchQueries,
@@ -134,7 +134,7 @@ def build_research_queries_cell(**overrides) -> Cell[ResearchQueries]:
 
 
 def build_research_findings_cell(**overrides) -> Cell[ResearchFindings]:
-    """Build the findings-synthesis cell (pinned ``anthropic:claude-sonnet-4-6`` default)."""
+    """Build the findings-synthesis cell (pinned ``anthropic:claude-haiku-4-5`` default)."""
     params = dict(
         name="research-findings",
         schema=ResearchFindings,

@@ -189,7 +189,7 @@ def start_campaign(
     try:
         strategy_cell = build_strategy_cell()
         # The pinned model id the strategy cell actually runs against, read off the
-        # cell (default "anthropic:claude-sonnet-4-6") — never hardcoded.
+        # cell (default "anthropic:claude-haiku-4-5") — never hardcoded.
         strategy_model = str(strategy_cell.model)
         strategy_obj = strategy_cell.run_sync(strategy_prompt)
         strategy_text = render_strategy(strategy_obj)
@@ -269,7 +269,7 @@ def start_campaign(
             action_ids.append(result["action_id"])
 
             # Capture the REAL draft-cell I/O for the draft span (the actual prompt
-            # sent to anthropic:claude-sonnet-4-6 and the typed ContentBrief it
+            # sent to anthropic:claude-haiku-4-5 and the typed ContentBrief it
             # returned).
             draft_captures.append(
                 {

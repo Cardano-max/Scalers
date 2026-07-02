@@ -10,7 +10,7 @@ Schema (one row per chat turn, ordered by ``seq`` within a session):
 
 * ``studio_chat_turns`` — ``(id, session_id, seq, role, text, model, created_at)``.
   ``role`` is one of ``operator`` | ``host``; ``host`` rows carry the real model
-  pin (e.g. ``anthropic:claude-sonnet-4-6``), ``operator`` rows carry ``NULL``.
+  pin (e.g. ``anthropic:claude-haiku-4-5``), ``operator`` rows carry ``NULL``.
 
 The DDL follows the additive ``CREATE TABLE IF NOT EXISTS`` pattern of
 ``autonomy/store.py`` so re-running ``setup()`` on an existing cluster is a no-op.

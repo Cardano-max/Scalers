@@ -426,7 +426,7 @@ class RunEvent:
     # Per-agent trace detail surfaced straight from the top-level step JSONB so a
     # frontend can render an in-app "what each agent thought" view: the node (agent
     # role, e.g. strategist/draft/critic/jury), the REAL model pin that produced the
-    # step (e.g. "anthropic:claude-sonnet-4-6"), and the captured input/output. All
+    # step (e.g. "anthropic:claude-haiku-4-5"), and the captured input/output. All
     # Optional + honest-null — a step that captured no value stays null, never
     # fabricated. Additive: existing documents that don't select these are unaffected.
     node: Optional[str] = None

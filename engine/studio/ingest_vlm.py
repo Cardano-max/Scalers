@@ -268,7 +268,7 @@ def _default_model() -> str:
 
         return DEFAULT_SONNET
     except Exception:
-        return "claude-sonnet-4-6"
+        return "claude-haiku-4-5"
 
 
 def _client():
