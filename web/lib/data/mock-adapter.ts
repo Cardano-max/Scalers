@@ -15,11 +15,13 @@ import type { SSEClient, SSEHandlers, SSEStatus } from './sse';
 import type {
   Action,
   ActionEvidence,
+  ActionLineage,
   ActivityItem,
   AutonomyConfig,
   AutonomyMode,
   Channel,
   ActionFilter,
+  CampaignExamplesPage,
   CampaignSpec,
   ChatMessage,
   EngineState,
@@ -30,6 +32,7 @@ import type {
   RunFilter,
   SystemHealth,
   Tenant,
+  TenantMeta,
   Worker,
 } from './models';
 
@@ -848,6 +851,58 @@ function filterByType<T extends { type: string }>(items: T[], filter?: ActionFil
 /** Internal engine-state cell so pause/resume reflects across calls in the mock. */
 let engineState: EngineState = TENANT.engineState;
 
+// ── ju1.5 mock fixtures: campaign-example memory + draft lineage ──────────────
+
+const MOCK_EXAMPLES: CampaignExamplesPage['examples'] = [
+  {
+    id: 'cex_mock_angel', campaign_name: '06.18 Angel Mini App + Rev $1200',
+    status: 'Sent', sent_at: '2026-06-18 19:04 GMT+5', artist_name: 'Angel',
+    offer_price_usd: 1200, offer_type: 'mini + rev session', recipient_count: 1466,
+    delivered_count: 1102, sent_pending_count: 0, failed_count: 168,
+    dnd_blocked_count: 196, message_copy: 'ANGEL MINI APP — reply YES to claim',
+    cta: 'reply YES', location: 'Las Vegas', source: 'operator_screenshot',
+    source_screenshot: 'MOCKSHOT1', screenshot_url: null,
+  },
+  {
+    id: 'cex_mock_bella', campaign_name: '06.20 Bella $500',
+    status: 'Sent', sent_at: '2026-06-20 18:00 GMT+5', artist_name: 'Bella',
+    offer_price_usd: 500, offer_type: 'flash special', recipient_count: 900,
+    delivered_count: 700, sent_pending_count: 0, failed_count: 90,
+    dnd_blocked_count: 110, message_copy: 'BELLA FLASH — reply BELLA',
+    cta: 'reply BELLA', location: null, source: 'operator_screenshot',
+    source_screenshot: null, screenshot_url: null,
+  },
+];
+
+const MOCK_PATTERNS: CampaignExamplesPage['patterns'] = [
+  { id: 'pat_mock_reply', pattern_key: 'reply_keyword_cta',
+    description: 'Every campaign closes on a reply-keyword CTA',
+    evidence_example_ids: ['cex_mock_angel', 'cex_mock_bella'] },
+];
+
+/** Lineage keyed to the review-queue fixture ids: the first draft carries full
+ *  lineage; the second renders the honest-missing path (every groundable field
+ *  null); the third has no lineage row at all. */
+const LINEAGE: Record<string, ActionLineage> = {
+  act_8f2a1: {
+    actionId: 'act_8f2a1', runId: 'run_a1b2c', channel: 'gmail',
+    sourceFile: 'customers.csv',
+    customer: { id: 'cust_mock1', name: 'Jordan Reyes',
+                email: 'jordan@example.com', phone: '+1-702-555-0134' },
+    artist: 'Angel', studio: 'Skin Design Tattoo Las Vegas',
+    offer: 'MINIAPP1200', cta: 'reply YES to claim your spot',
+    examples: [], limitedPersonalization: true,
+    personalizationNote: 'no conversation history for this lead',
+  },
+  act_3c7b9: {
+    actionId: 'act_3c7b9', runId: null, channel: 'INSTAGRAM',
+    sourceFile: null,
+    customer: { id: null, name: null, email: null, phone: null },
+    artist: null, studio: null, offer: null, cta: null,
+    examples: [], limitedPersonalization: null, personalizationNote: null,
+  },
+};
+
 export class MockAdapter implements DataAdapter {
   readonly source = 'mock' as const;
 
@@ -872,6 +927,27 @@ export class MockAdapter implements DataAdapter {
   async getActionEvidence(actionId: string): Promise<ActionEvidence | null> {
     // Keyed fixtures only; an unknown id resolves null (honest), never a stub.
     return EVIDENCE[actionId] ?? null;
+  }
+  /** ju1.5 fixtures: 'skindesign' reads as a registered TEST-MODE tenant so the
+   *  banner/send-disable paths are testable offline; the mock tenant reads
+   *  registered-live (no banner); anything else is an unregistered legacy row. */
+  async getTenantMeta(tenantId: string): Promise<TenantMeta | null> {
+    if (tenantId === 'skindesign') {
+      return { id: 'skindesign', registered: true, name: 'Skin Design Tattoo',
+               testMode: true, allowlistSize: 2 };
+    }
+    if (tenantId === TENANT_ID) {
+      return { id: TENANT_ID, registered: true, name: TENANT.name,
+               testMode: false, allowlistSize: 0 };
+    }
+    return { id: tenantId, registered: false, testMode: null };
+  }
+  async getCampaignExamples(tenantId: string): Promise<CampaignExamplesPage> {
+    if (tenantId !== 'skindesign') return { tenantId, examples: [], patterns: [] };
+    return { tenantId, examples: MOCK_EXAMPLES, patterns: MOCK_PATTERNS };
+  }
+  async getActionLineage(actionId: string): Promise<ActionLineage | null> {
+    return LINEAGE[actionId] ?? null;
   }
   async getActivity(_tenantId: string, filter?: ActionFilter) {
     return filterByType(ACTIVITY, filter);

@@ -17,6 +17,7 @@ import { FeedScreen } from './FeedScreen';
 import { VoiceScreen } from './studio/VoiceScreen';
 import { AgencyScreen } from './studio/AgencyScreen';
 import { StepDetailScreen } from './StepDetailScreen';
+import { MemoryScreen } from './MemoryScreen';
 
 export const SCREENS: Record<ScreenId, ComponentType> = {
   // Voice-first: the talk-to-your-agency hero (default landing). Agency: the
@@ -29,6 +30,8 @@ export const SCREENS: Record<ScreenId, ComponentType> = {
   activity: ActivityScreen,
   feed: FeedScreen,
   runs: RunsScreen,
+  // ju1.5: the campaign-example memory (real transcribed past campaigns).
+  memory: MemoryScreen,
   // drill-only — not in NAV_ITEMS; reached via navigate('step_detail', actionId)
   step_detail: StepDetailScreen,
 };

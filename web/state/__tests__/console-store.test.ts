@@ -6,6 +6,7 @@ describe('console store — nav + edit reset', () => {
 
   it('leads with the voice-first headline modes then the real-data tabs', () => {
     // The separate Command chat tab was removed — Voice is the one conversation.
+    // ju1.5 appends the Campaign memory tab (real past-campaign example library).
     expect(NAV_ITEMS.map((n) => n.id)).toEqual([
       'voice',
       'agency',
@@ -14,6 +15,7 @@ describe('console store — nav + edit reset', () => {
       'activity',
       'feed',
       'runs',
+      'memory',
     ]);
   });
 

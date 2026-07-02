@@ -23,6 +23,7 @@ export type ScreenId =
   | 'activity'
   | 'feed'
   | 'runs'
+  | 'memory'
   | 'step_detail';
 
 export interface NavItemDef {
@@ -45,6 +46,8 @@ export const NAV_ITEMS: NavItemDef[] = [
   { id: 'activity', label: 'Activity' },
   { id: 'feed', label: 'Live feed' },
   { id: 'runs', label: 'Runs' },
+  // ju1.5: the campaign-example memory (real transcribed past campaigns).
+  { id: 'memory', label: 'Campaign memory' },
 ];
 
 interface ConsoleState {

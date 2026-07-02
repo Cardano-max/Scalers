@@ -9,11 +9,13 @@
 import type {
   Action,
   ActionEvidence,
+  ActionLineage,
   ActivityItem,
   AutonomyConfig,
   AutonomyMode,
   Channel,
   ActionFilter,
+  CampaignExamplesPage,
   CampaignSpec,
   EngineState,
   FeedEvent,
@@ -23,6 +25,7 @@ import type {
   RunFilter,
   SystemHealth,
   Tenant,
+  TenantMeta,
   ChatMessage,
 } from './models';
 import type { SSEClient, SSEHandlers, SSEStatus } from './sse';
@@ -44,6 +47,23 @@ export interface DataAdapter {
    * (honest) when no evidence was captured for the id.
    */
   getActionEvidence(actionId: string): Promise<ActionEvidence | null>;
+  /**
+   * Server-driven tenant safety flags (ju1.5): the TEST-MODE banner + send-disable
+   * state come from here, never from a hardcoded tenant list. Honest-null on
+   * transport failure (the UI then shows no banner rather than a guessed one —
+   * the SERVER gate still refuses the send regardless).
+   */
+  getTenantMeta(tenantId: string): Promise<TenantMeta | null>;
+  /**
+   * The tenant's campaign-example MEMORY (ju1.2 library): real transcribed
+   * examples + extracted patterns, honest-empty when none.
+   */
+  getCampaignExamples(tenantId: string): Promise<CampaignExamplesPage>;
+  /**
+   * Draft lineage for the review queue (ju1.5): source CSV / customer / artist /
+   * studio / offer / CTA / examples referenced. Null fields = honest "missing".
+   */
+  getActionLineage(actionId: string): Promise<ActionLineage | null>;
   /**
    * Executed (completed) actions for the Activity screen — the reasoning trace,
    * engagement, outcome, and thread/comments deep-links resolved alongside the

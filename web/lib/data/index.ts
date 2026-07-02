@@ -22,8 +22,18 @@ import { LiveAdapter } from './live-adapter';
 
 export type DataSource = 'mock' | 'live';
 
-/** The live demo tenant whose real campaign runs + drafts back these tabs. */
-export const LIVE_TENANT_ID = 'ladies8391';
+/**
+ * The default live tenant. Per operator order (ju1.5) the console now lands on
+ * the REAL client tenant `skindesign` (TEST MODE, server-gated sends);
+ * `ladies8391` remains selectable as the dev fixture via the tenant switcher.
+ */
+export const LIVE_TENANT_ID = 'skindesign';
+
+/** Tenants the TopBar switcher offers. Order = default first. */
+export const SELECTABLE_TENANTS: { id: string; label: string }[] = [
+  { id: 'skindesign', label: 'Skin Design Tattoo' },
+  { id: 'ladies8391', label: 'Ladies First (dev fixture)' },
+];
 
 export interface DataLayerEnv {
   source?: string;

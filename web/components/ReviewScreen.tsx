@@ -24,8 +24,11 @@ import { SendModeToggle } from './studio/send-mode';
 // --- traceability spine (additive) ---
 import { useTraceArrival } from '@/lib/useTraceArrival';
 import { LineageChips } from './trace/LineageChips';
+import { LineagePanel } from './trace/LineagePanel';
 import { ConfidenceEvidence } from './trace/ConfidenceEvidence';
 import { EvidenceProvenance } from './trace/EvidenceProvenance';
+// --- ju1.5: server-driven TEST-MODE state (banner chip + send-disable) ---
+import { TestModeChip, useTenantMeta } from './TestModeBanner';
 
 type ToastTone = 'success' | 'neutral' | 'amber';
 interface ToastState {
@@ -138,6 +141,13 @@ export function ReviewScreen() {
   // operator's per-draft #11 complaint ("I approved a real email and it had [TEST]")
   // lives on THIS path, so the toggle governs every approve in the queue.
   const [liveMode, setLiveMode] = useState(false);
+  // ju1.5: SERVER-driven tenant test-mode — disables the Live toggle in the UI
+  // (with the reason) and badges every draft. The UI is not the defense: the
+  // engine's ju1.1 gate refuses a test-mode live send regardless.
+  const { testMode } = useTenantMeta();
+  useEffect(() => {
+    if (testMode) setLiveMode(false); // a test-mode tenant can never sit in Live
+  }, [testMode]);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Local working copy of the queue so approve/reject can remove items + advance
@@ -328,9 +338,24 @@ export function ReviewScreen() {
               );
             })}
           </div>
-          {/* Approve→publish send mode — default Test (safe), explicit Live is confirm-gated. */}
+          {/* Approve→publish send mode — default Test (safe), explicit Live is confirm-gated.
+              ju1.5: a TEST-MODE tenant gets the toggle disabled WITH the reason; the server
+              refuses the live send anyway (UI is never the only defense). */}
           <div style={{ marginTop: 10 }}>
-            <SendModeToggle live={liveMode} onChange={setLiveMode} disabled={busy} />
+            <SendModeToggle
+              live={liveMode}
+              onChange={setLiveMode}
+              disabled={busy || testMode}
+            />
+            {testMode ? (
+              <div
+                role="note"
+                style={{ marginTop: 6, fontSize: 11.5, color: 'var(--warning-text, #7a5200)' }}
+              >
+                TEST MODE — real customer sends disabled for this tenant (server-enforced);
+                approve still stages drafts as HELD.
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -358,6 +383,7 @@ export function ReviewScreen() {
                           highlighted={a.id === highlightId}
                           scrollRef={a.id === highlightId ? scrollRef : undefined}
                           onSelect={() => selectRow(a.id)}
+                          testMode={testMode}
                         />
                       ))}
                     </ul>
@@ -377,6 +403,7 @@ export function ReviewScreen() {
             editing={editing}
             draftText={draftText}
             busy={busy}
+            testMode={testMode}
             onDraftChange={setDraftText}
             onApprove={() => onApprove(selected)}
             onReject={() => onReject(selected)}
@@ -455,12 +482,15 @@ function QueueRow({
   highlighted,
   scrollRef,
   onSelect,
+  testMode = false,
 }: {
   action: Action;
   selected: boolean;
   highlighted?: boolean;
   scrollRef?: (node: HTMLElement | null) => void;
   onSelect: () => void;
+  /** ju1.5: server-driven tenant test-mode — badges every draft in the queue. */
+  testMode?: boolean;
 }) {
   const preview = action.subject ?? action.draft;
   return (
@@ -499,6 +529,7 @@ function QueueRow({
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
           <Tag>{typeLabel(action.type)}</Tag>
           <Dot color={CHANNEL_COLOR[action.channel]} size={7} />
+          {testMode ? <TestModeChip /> : null}
           <Chip tone="amber" style={{ marginLeft: 'auto' }}>
             {action.escalation.label}
           </Chip>
@@ -553,6 +584,7 @@ function DetailPane({
   editing,
   draftText,
   busy,
+  testMode = false,
   onDraftChange,
   onApprove,
   onReject,
@@ -565,6 +597,8 @@ function DetailPane({
   editing: boolean;
   draftText: string;
   busy: boolean;
+  /** ju1.5: server-driven tenant test-mode — badges the header. */
+  testMode?: boolean;
   onDraftChange: (v: string) => void;
   onApprove: () => void;
   onReject: () => void;
@@ -613,6 +647,7 @@ function DetailPane({
             <Dot color={CHANNEL_COLOR[action.channel]} size={8} />
             {channelLabel(action.channel)}
           </span>
+          {testMode ? <TestModeChip /> : null}
           <span className="mono" style={{ fontSize: 12, color: 'var(--text-muted)' }}>{action.id}</span>
           <span className="mono" style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-muted)' }}>
             {clockTime(action.createdAt)}
@@ -681,6 +716,10 @@ function DetailPane({
       {action.status === 'FAILED' && action.lastError ? (
         <ProviderErrorPanel error={action.lastError} />
       ) : null}
+
+      {/* ju1.5: full draft lineage — source CSV / customer / artist / studio /
+          example memory / offer / CTA / channel, honest-missing per field. */}
+      <LineagePanel actionId={action.id} />
 
       <AutonomyCard action={action} />
 

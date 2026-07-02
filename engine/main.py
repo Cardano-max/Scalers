@@ -54,6 +54,12 @@ from studio.voice import mount_studio_voice  # noqa: E402
 
 mount_studio_voice(app)
 
+# Mount the ju1.5 console read API (campaign-example memory + draft lineage) —
+# additive read-only endpoints the Review Queue and Campaign Memory views bind.
+from studio.console_api import mount_console_api  # noqa: E402
+
+mount_console_api(app)
+
 
 @app.get("/tenants/{tenant_id}")
 def tenant_flags(tenant_id: str) -> dict:

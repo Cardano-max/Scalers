@@ -5,6 +5,8 @@
  * pill (right). The title/subtitle are derived from the active screen.
  */
 import { useConsole, type ScreenId } from '@/state/console-store';
+import { useData } from '@/lib/data/DataProvider';
+import { SELECTABLE_TENANTS } from '@/lib/data';
 import { Dot } from './icons';
 
 const TITLES: Record<ScreenId, { title: string; subtitle: string }> = {
@@ -15,6 +17,7 @@ const TITLES: Record<ScreenId, { title: string; subtitle: string }> = {
   activity: { title: 'Activity', subtitle: 'What the agents executed — and why' },
   feed: { title: 'Live feed', subtitle: 'Realtime decision stream' },
   runs: { title: 'Runs', subtitle: 'LangGraph / Temporal workflow history' },
+  memory: { title: 'Campaign memory', subtitle: 'Real past campaigns — metrics, copy, and source screenshots' },
   // drill-only; reached via navigate('step_detail', actionId), not nav bar
   step_detail: { title: 'Step detail', subtitle: 'Full trace and jury derivation for this action' },
 };
@@ -27,6 +30,7 @@ export function TopBar({
   pack: string;
 }) {
   const { screen } = useConsole();
+  const { tenantId, setTenantId } = useData();
   const { title, subtitle } = TITLES[screen];
 
   return (
@@ -48,6 +52,31 @@ export function TopBar({
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        {/* ju1.5 tenant switcher: skindesign is the default; ladies8391 stays
+            selectable as the dev fixture. The choice persists (localStorage). */}
+        <select
+          aria-label="Tenant"
+          value={SELECTABLE_TENANTS.some((t) => t.id === tenantId) ? tenantId : ''}
+          onChange={(e) => e.target.value && setTenantId(e.target.value)}
+          style={{
+            padding: '6px 10px',
+            borderRadius: 'var(--radius-pill)',
+            border: '1px solid var(--hairline)',
+            background: 'var(--surface)',
+            fontSize: 12.5,
+            fontWeight: 600,
+            color: 'var(--text-primary, inherit)',
+          }}
+        >
+          {!SELECTABLE_TENANTS.some((t) => t.id === tenantId) && (
+            <option value="">{tenantId}</option>
+          )}
+          {SELECTABLE_TENANTS.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.label}
+            </option>
+          ))}
+        </select>
         <span
           style={{
             display: 'inline-flex',

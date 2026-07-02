@@ -16,6 +16,8 @@ const nextConfig = {
     return [
       { source: '/studio/:path*', destination: `${STUDIO_BACKEND_ORIGIN}/studio/:path*` },
       { source: '/graphql', destination: `${STUDIO_BACKEND_ORIGIN}/graphql` },
+      // Tenant safety flags (ju1.5): the server-driven TEST-MODE banner source.
+      { source: '/tenants/:path*', destination: `${STUDIO_BACKEND_ORIGIN}/tenants/:path*` },
       // SSE realtime (Live feed / Overview): /sse/stream + /sse/feed. Proxied
       // same-origin so EventSource never trips CORS and survives any dev port.
       { source: '/sse/:path*', destination: `${STUDIO_BACKEND_ORIGIN}/sse/:path*` },

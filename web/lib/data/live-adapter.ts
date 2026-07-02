@@ -12,11 +12,13 @@ import type { DataAdapter } from './adapter';
 import type {
   Action,
   ActionEvidence,
+  ActionLineage,
   ActivityItem,
   AutonomyConfig,
   AutonomyMode,
   Channel,
   ActionFilter,
+  CampaignExamplesPage,
   CampaignSpec,
   ChatMessage,
   EngineState,
@@ -27,6 +29,7 @@ import type {
   RunFilter,
   SystemHealth,
   Tenant,
+  TenantMeta,
 } from './models';
 
 export interface LiveConfig {
@@ -91,6 +94,46 @@ export class LiveAdapter implements DataAdapter {
       });
       if (!res.ok) return null;
       return (await res.json()) as ActionEvidence;
+    } catch {
+      return null;
+    }
+  }
+  /** ju1.5: server-driven tenant safety flags (GET /tenants/{id}, same-origin
+   *  Next rewrite). Honest-null on failure — the server send-gate still holds. */
+  async getTenantMeta(tenantId: string): Promise<TenantMeta | null> {
+    try {
+      const res = await fetch(`/tenants/${encodeURIComponent(tenantId)}`, {
+        method: 'GET',
+        headers: { accept: 'application/json' },
+      });
+      if (!res.ok) return null;
+      return (await res.json()) as TenantMeta;
+    } catch {
+      return null;
+    }
+  }
+  /** ju1.5: the campaign-example memory (real examples + patterns; honest-empty). */
+  async getCampaignExamples(tenantId: string): Promise<CampaignExamplesPage> {
+    try {
+      const res = await fetch(
+        `/studio/campaign-examples?tenant_id=${encodeURIComponent(tenantId)}`,
+        { method: 'GET', headers: { accept: 'application/json' } },
+      );
+      if (!res.ok) return { tenantId, examples: [], patterns: [] };
+      return (await res.json()) as CampaignExamplesPage;
+    } catch {
+      return { tenantId, examples: [], patterns: [] };
+    }
+  }
+  /** ju1.5: draft lineage (source CSV / customer / artist / studio / offer / CTA). */
+  async getActionLineage(actionId: string): Promise<ActionLineage | null> {
+    try {
+      const res = await fetch(`/studio/action/${encodeURIComponent(actionId)}/lineage`, {
+        method: 'GET',
+        headers: { accept: 'application/json' },
+      });
+      if (!res.ok) return null;
+      return (await res.json()) as ActionLineage;
     } catch {
       return null;
     }

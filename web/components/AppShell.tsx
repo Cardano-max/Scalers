@@ -10,6 +10,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
+import { TestModeBanner } from './TestModeBanner';
 import { useConsole } from '@/state/console-store';
 import { useData } from '@/lib/data/DataProvider';
 import { useAsync } from '@/lib/useAsync';
@@ -109,6 +110,9 @@ export function AppShell() {
           clientName={tenant.data?.name ?? 'Loading…'}
           pack={tenant.data?.pack ?? ''}
         />
+        {/* ju1.5: server-driven TEST-MODE banner — renders only when the tenants
+            API reports testMode; the ladies8391 dev fixture shows nothing. */}
+        <TestModeBanner />
         {/* screen area: position:relative; each screen inset:0, active one rendered.
             The StudioRunProvider lives HERE (above the single active-screen mount) so
             the Voice + Agency tabs share ONE live run — switching between them does not

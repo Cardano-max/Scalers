@@ -442,3 +442,72 @@ export interface ActionEvidence {
   reasoningUrl: string | null;
   isRealOnly: boolean;
 }
+
+// ── ju1.5: tenant safety flags + campaign-example memory + draft lineage ──────
+
+/** Server-driven tenant safety flags (GET /tenants/{id}, ju1.1). `testMode` is
+ *  the console's TEST-MODE banner source of truth — never hardcoded per tenant.
+ *  `registered: false` = legacy tenant with no row (no banner, sends ungated). */
+export interface TenantMeta {
+  id: string;
+  registered: boolean;
+  name?: string | null;
+  testMode: boolean | null;
+  allowlistSize?: number | null;
+}
+
+/** One REAL transcribed campaign example (ju1.2 library) — metrics + provenance.
+ *  Fields not visible in the source screenshot are null (never inferred). */
+export interface CampaignExample {
+  id: string;
+  campaign_name: string;
+  status: string | null;
+  sent_at: string | null;
+  artist_name: string | null;
+  offer_price_usd: number | null;
+  offer_type: string | null;
+  recipient_count: number | null;
+  delivered_count: number | null;
+  sent_pending_count: number | null;
+  failed_count: number | null;
+  dnd_blocked_count: number | null;
+  message_copy: string | null;
+  cta: string | null;
+  location: string | null;
+  source: string | null;
+  source_screenshot: string | null;
+  /** Streamable local screenshot URL, or null when the file is absent locally. */
+  screenshot_url: string | null;
+}
+
+export interface CampaignExamplePattern {
+  id: string;
+  pattern_key: string;
+  description: string | null;
+  evidence_example_ids: string[];
+}
+
+export interface CampaignExamplesPage {
+  tenantId: string;
+  examples: CampaignExample[];
+  patterns: CampaignExamplePattern[];
+}
+
+/** Where one staged draft CAME from (GET /studio/action/{id}/lineage). Every
+ *  field the engine cannot ground is null — the UI renders an explicit
+ *  "missing", never a blank fake. `examples` stays [] until ju1.4 wires
+ *  per-draft example provenance into the generator. */
+export interface ActionLineage {
+  actionId: string;
+  runId: string | null;
+  channel: string | null;
+  sourceFile: string | null;
+  customer: { id: string | null; name: string | null; email: string | null; phone: string | null };
+  artist: string | null;
+  studio: string | null;
+  offer: string | null;
+  cta: string | null;
+  examples: { id: string; campaign_name: string }[];
+  limitedPersonalization: boolean | null;
+  personalizationNote: string | null;
+}
