@@ -332,19 +332,25 @@ def derive_decision(
 
     # FAIL-SAFE on uncomputable confidence (4jx.3) — a confidence-class reason, so
     # it sits with the threshold check (floors/split/degraded above report their
-    # more actionable reasons first). Two triggers: the computed path explicitly
-    # said uncomputable, OR — hardening (adversarial finding) — the MEASURED path
-    # (an aggregate is supplied) has no computed confidence at all. On the measured
-    # path, AUTO requires a computed confidence; jury quality alone must not clear
-    # the bar (ADR Decision 2: the router consumes calibrate(w_q·jury + w_c·sc)).
-    # The legacy stub path (no aggregate) keeps its jury-only semantics.
+    # more actionable reasons first). Two DISTINCT triggers, distinctly labeled
+    # (arch/#93: caller-omission and probe-starvation are different facts and the
+    # audit trail must say which happened):
+    #   * the computed path explicitly said UNCOMPUTABLE (probe gathered too few
+    #     samples) -> "uncomputable (insufficient samples)";
+    #   * hardening — the MEASURED path (an aggregate is supplied) was given no
+    #     computed confidence at all -> "not supplied (measured path)". On the
+    #     measured path, AUTO requires a computed confidence; jury quality alone
+    #     must not clear the bar (ADR Decision 2). The legacy stub path (no
+    #     aggregate) keeps its jury-only semantics.
     if confidence_uncomputable or (aggregate is not None and confidence is None):
+        reason = (
+            "confidence uncomputable (insufficient samples)"
+            if confidence_uncomputable
+            else "confidence not supplied (measured path)"
+        )
         return (
             RouteDecision.REVIEW,
-            Escalation(
-                kind=EscKind.BELOW_THRESHOLD,
-                label="confidence uncomputable (insufficient samples)",
-            ),
+            Escalation(kind=EscKind.BELOW_THRESHOLD, label=reason),
             pooled,
             agree,
         )

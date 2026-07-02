@@ -129,7 +129,16 @@ def test_measured_path_without_computed_confidence_cannot_auto():
     votes = [_v("a", voice=0.95, safety=0.95, appr=0.95), _v("b", voice=0.95, safety=0.95, appr=0.95)]
     (decision, esc, _, _), _ = _decide(votes)  # no confidence kwarg at all
     assert decision is RouteDecision.REVIEW
-    assert "uncomputable" in esc.label
+    # arch/#93 label split: caller-omission reads distinctly from probe-starvation.
+    assert "not supplied (measured path)" in esc.label
+
+
+def test_probe_starvation_label_is_distinct():
+    # The OTHER trigger (explicit uncomputable flag) keeps its own honest label.
+    votes = [_v("a", voice=0.95, safety=0.95, appr=0.95), _v("b", voice=0.95, safety=0.95, appr=0.95)]
+    (decision, esc, _, _), _ = _decide(votes, confidence=None, confidence_uncomputable=True)
+    assert decision is RouteDecision.REVIEW
+    assert "uncomputable (insufficient samples)" in esc.label
 
 
 def test_split_panel_routes_review():
