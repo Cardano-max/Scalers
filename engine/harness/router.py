@@ -60,9 +60,9 @@ def route(
 
     # bead-439 (CustomerAcq-b3f): a HELD tenant/channel never auto-fires. HOLD
     # forces human review, overriding confidence and the dial — so no signal
-    # (incl. the stubbed jury's hardcoded 0.9 confidence) can route it to AUTO.
-    # Ordering is safe either way: the only path to AUTO is the final return,
-    # which HOLD short-circuits.
+    # (incl. a unanimous real jury or a perfect computed confidence, 4jx.2/.3)
+    # can route it to AUTO. Ordering is safe either way: the only path to AUTO
+    # is the final return, which HOLD short-circuits.
     if autonomy is AutonomyMode.HOLD:
         return RouteDecision.REVIEW
 

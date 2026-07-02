@@ -32,7 +32,9 @@ from dataclasses import dataclass, field
 import psycopg
 from pydantic_ai.models import KnownModelName, Model
 
+from autonomy.confidence import MIN_PROBES, PROBE_TEMPERATURE, anchored_self_consistency
 from autonomy.produce import resolve_channel_policy
+from cells.base import CellError
 from cells.content_brief import ContentBrief, build_content_brief_cell
 from config.loader import load_pack
 from config.schema import Channel as PackChannel
@@ -94,17 +96,31 @@ def _resolve_routing(pack: TenantPack, channel: PackChannel) -> tuple[float, Aut
         autonomy = AutonomyMode.REVIEW
     return threshold, autonomy
 
-# Deterministic placeholder confidence for the Phase-1 assemble cell. A real
-# self-consistency confidence computer lands in Phase 5; here the slice exercises
-# the router with a concrete, stable signal.
-ASSEMBLE_CONFIDENCE = 0.9
+# Self-consistency probe size for the assemble cell (AUTON-02 / 4jx.3): 1 temp-0
+# decision sample + (PROBE_K - 1) temp>0 probe samples. Must be >= MIN_SAMPLES or
+# the estimate could never compute and every run would fail safe to review.
+PROBE_K = 3
 
 
-def _confidence_of(state) -> float:
-    """Read ``confidence`` whether the graph hands us a model or a mapping."""
+def _confidence_of(state) -> float | None:
+    """Read ``confidence`` whether the graph hands us a model or a mapping.
+
+    ``None`` means UNCOMPUTABLE (the probe could not gather enough samples) and is
+    returned as-is — callers must fail safe to review, never coerce it to a number
+    (a ``None -> 0.0`` coercion would silently AUTO-fire under a zero threshold)."""
     if isinstance(state, dict):
-        return state.get("confidence") or 0.0
-    return getattr(state, "confidence", None) or 0.0
+        return state.get("confidence")
+    return getattr(state, "confidence", None)
+
+
+def _brief_signature(brief: ContentBrief) -> str:
+    """Reduce a typed brief to a comparable self-consistency signature.
+
+    Whitespace-normalized lowercase caption — the caption IS the draft the slice
+    ships, so agreement on it is agreement on the output. Exact-match is the
+    hermetic default; the live path can inject a coarser semantic signature once
+    the 4jx.4 embedder lands (composes via ``AssembleCellNode(signature=...)``)."""
+    return " ".join(brief.caption.lower().split())
 
 
 def _draft_of(state) -> str:
@@ -122,13 +138,39 @@ class AssembleCellNode:
     Runs eng2's content-brief cell, which returns a schema- and validator-valid
     ``ContentBrief`` or raises ``CellError``. The validated brief is mapped into
     the harness's typed ``AssembleOutput`` so only typed state flows downstream.
+
+    **Confidence is COMPUTED (AUTON-02 / 4jx.3), not hardcoded**: the temp-0
+    decision sample is the ANCHOR; ``probe_k - 1`` additional temp>0 samples of the
+    same cell probe it, and confidence = the fraction of probes agreeing with the
+    anchor (the anchor never votes for itself — the confidence must describe the
+    draft that SHIPS, not whatever the probes cluster on). A divergent (unstable)
+    generation yields low confidence → the route edge sends it to review; too few
+    surviving probes yields ``None`` (uncomputable) → fail safe to review. No
+    logprobs anywhere.
     """
 
     name = "assemble"
 
-    def __init__(self, model: Model | KnownModelName | None = None) -> None:
-        self._cell = build_content_brief_cell()
+    def __init__(
+        self,
+        model: Model | KnownModelName | None = None,
+        *,
+        probe_k: int = PROBE_K,
+        signature=_brief_signature,
+    ) -> None:
+        if probe_k - 1 < MIN_PROBES:
+            raise ValueError(
+                f"probe_k={probe_k} yields {probe_k - 1} probes < MIN_PROBES="
+                f"{MIN_PROBES}: the estimate could never compute and every run "
+                "would route to review"
+            )
+        self._cell = build_content_brief_cell()  # temp-0 decision path (pinned)
+        # The PROBE is a separate cell at temp>0 (ADR Decision 2): the shipped draft
+        # stays deterministic; only the consistency probe samples vary.
+        self._probe_cell = build_content_brief_cell(temperature=PROBE_TEMPERATURE)
         self._model = model
+        self._probe_k = probe_k
+        self._signature = signature
 
     async def __call__(self, state: GraphState) -> dict:
         research = state.research
@@ -139,9 +181,24 @@ class AssembleCellNode:
         )
         brief: ContentBrief = await self._cell.run(prompt, model=self._model)
         assembled = AssembleOutput(topic=topic, draft=brief.caption)
+
+        # Anchored self-consistency probe: (probe_k - 1) temp>0 samples scored
+        # AGAINST the shipped decision sample. A failed probe sample is DROPPED
+        # (never fabricated); fewer than MIN_PROBES surviving probes -> confidence
+        # None -> the route edge fails safe to review.
+        anchor = self._signature(brief)
+        probe_signatures = []
+        for _ in range(self._probe_k - 1):
+            try:
+                probe = await self._probe_cell.run(prompt, model=self._model)
+            except CellError:
+                continue
+            probe_signatures.append(self._signature(probe))
+        confidence = anchored_self_consistency(anchor, probe_signatures)
+
         return {
             "assembled": assembled,
-            "confidence": ASSEMBLE_CONFIDENCE,
+            "confidence": confidence,
             "step_log": ["assemble"],
         }
 
@@ -184,10 +241,18 @@ class EnqueueNode:
 
 
 def _make_route_edge(threshold: float, gates: Sequence[Gate] | None, autonomy: AutonomyMode):
-    """Conditional-edge function: only an ``auto`` decision flows to enqueue."""
+    """Conditional-edge function: only an ``auto`` decision flows to enqueue.
+
+    An UNCOMPUTABLE confidence (``None`` — the probe couldn't gather enough
+    samples) fails safe to review here, explicitly: it must never be coerced to a
+    number first, or a zero-threshold channel would auto-fire on "couldn't
+    compute" (4jx.3 fail-safe)."""
 
     def choose(state) -> str:
-        decision = route(_confidence_of(state), threshold, gates, autonomy)
+        confidence = _confidence_of(state)
+        if confidence is None:
+            return END  # uncomputable -> review; never enqueue
+        decision = route(confidence, threshold, gates, autonomy)
         return "enqueue" if decision is RouteDecision.AUTO else END
 
     return choose
@@ -231,16 +296,21 @@ def build_slice_graph(
     target: str = "feed",
     checkpointer=None,
     enqueue_node: EnqueueNode | None = None,
+    probe_k: int = PROBE_K,
+    signature=_brief_signature,
 ):
     """Build the Phase-1 slice graph: research -> assemble -> route -> [enqueue|END].
 
     ``checkpointer`` defaults to an in-memory saver; inject the durable Postgres
     checkpointer for crash-resume. ``enqueue_node`` can be overridden (e.g. a
-    crash-injecting subclass in tests).
+    crash-injecting subclass in tests). ``probe_k``/``signature`` tune the 4jx.3
+    self-consistency probe (the live path swaps in a semantic ``signature`` once
+    the 4jx.4 embedder lands — until then the exact-match default reads low on
+    live temp>0 probes and conservatively routes to review).
     """
     harness = Harness()
     harness.add_node(ResearchNode())
-    harness.add_node(AssembleCellNode(assemble_model))
+    harness.add_node(AssembleCellNode(assemble_model, probe_k=probe_k, signature=signature))
     harness.add_node(
         enqueue_node
         or EnqueueNode(dsn=dsn, tenant_id=tenant_id, channel=channel, target=target)
@@ -278,6 +348,8 @@ async def run_slice(
     target: str = "feed",
     checkpointer=None,
     hold_registry: HoldRegistry = DEFAULT_HOLD_REGISTRY,
+    probe_k: int = PROBE_K,
+    signature=_brief_signature,
 ) -> SliceResult:
     """Run the deterministic Phase-1 slice end to end and return what happened.
 
@@ -313,12 +385,19 @@ async def run_slice(
         channel=side_channel,
         target=target,
         checkpointer=checkpointer,
+        probe_k=probe_k,
+        signature=signature,
     )
     state = await graph.run(
         run_id, GraphState(tenant_id=tenant_id, run_id=run_id, topic=topic)
     )
 
-    decision = slice_route(pack, channel, state.confidence or 0.0, gates, held=held)
+    # Uncomputable confidence (None) fails safe to REVIEW explicitly — never coerced
+    # to a number (a None -> 0.0 coercion would AUTO under a zero threshold).
+    if state.confidence is None:
+        decision = RouteDecision.REVIEW
+    else:
+        decision = slice_route(pack, channel, state.confidence, gates, held=held)
     result = SliceResult(
         pack=pack, state=state, decision=decision, steps=list(state.step_log)
     )

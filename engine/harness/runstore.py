@@ -337,8 +337,14 @@ async def execute_and_record(
         spans = list(collector.spans)
 
     values = (await graph.get_state(run_id)).values
-    confidence = values.get("confidence") or 0.0
-    decision = route(confidence, autonomy=autonomy)
+    # Uncomputable confidence (None) is recorded as an explicit REVIEW (4jx.3) —
+    # never coerced to 0.0, which would auto-fire under a zero threshold and would
+    # record "reviewed at confidence 0.0" for a value that was never computed.
+    confidence = values.get("confidence")
+    if confidence is None:
+        decision = RouteDecision.REVIEW
+    else:
+        decision = route(confidence, autonomy=autonomy)
     store.finish_run(
         run_id,
         status=RunStatus.COMPLETED,

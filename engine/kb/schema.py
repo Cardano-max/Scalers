@@ -79,6 +79,10 @@ class EvalMetric:
     tenant_id: str | None = None
     engine: str | None = None
     cell: str | None = None
+    # The routing channel the metric was measured for (4jx.16): lift is granted
+    # per (tenant, channel), so the D5 precondition gates must be queryable at
+    # that grain. None for cell-level metrics with no channel dimension.
+    channel: str | None = None
     threshold: float | None = None
     direction: Direction | None = None
     run_kind: RunKind | None = None
@@ -88,6 +92,10 @@ class EvalMetric:
     dataset_hash: str | None = None
     git_sha: str | None = None
     langfuse_trace_id: str | None = None
+    # WHICH confidence producer fed this metric (4jx.17, lift precondition (e)):
+    # the LiftController refuses to lift a channel whose gate rows were driven by
+    # a stub/jury-only/sc-only path. None for metrics with no confidence input.
+    confidence_provenance: str | None = None
     id: str | None = None
     passed: bool | None = None
     created_at: datetime | None = None

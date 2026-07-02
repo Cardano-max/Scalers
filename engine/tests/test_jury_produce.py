@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
+from autonomy.confidence import IDENTITY_CALIBRATION, PROVENANCE_COMPUTED, Calibration
 from autonomy.decision import EscKind, RouteDecision, SafetyVerdict
 from autonomy.judges import JudgeScore, JudgeSpec
 from autonomy.produce import produce_and_record_decision_real
@@ -27,7 +30,8 @@ def _all(**kw):
     return {n: JudgeScore(**base) for n in ("haiku-strict", "haiku-charitable", "ollama-cross")}
 
 
-def _produce(store, runner, *, autonomy=AutonomyMode.AUTO, threshold=0.85, self_consistency=1.0):
+def _produce(store, runner, *, autonomy=AutonomyMode.AUTO, threshold=0.85, self_consistency=1.0,
+             calibration=IDENTITY_CALIBRATION):
     return asyncio.run(
         produce_and_record_decision_real(
             store,
@@ -35,7 +39,7 @@ def _produce(store, runner, *, autonomy=AutonomyMode.AUTO, threshold=0.85, self_
             channel="instagram", action_kind="post",
             action="a healed floral cover-up, captioned warmly",
             threshold=threshold, autonomy=autonomy, judge_runner=runner,
-            self_consistency=self_consistency,
+            self_consistency=self_consistency, calibration=calibration,
         )
     )
 
@@ -70,6 +74,53 @@ def test_low_self_consistency_blocks_auto():
     rec = _produce(InMemoryDecisionStore(), _runner(_all()), self_consistency=0.2)
     assert rec.decision is RouteDecision.REVIEW
     assert rec.self_consistency == 0.2
+
+
+def test_unmeasured_calibration_bin_at_threshold_routes_review_end_to_end():
+    """4jx.15 AC1: extremes-only gold (ECE green) leaves the 0.8–0.9 bin unmeasured;
+    a clean high panel (jury 0.95) + sc 0.84 pools raw to ~0.895, which previously
+    passed through identity and routed AUTO (capped 0.84 >= 0.80) with ZERO
+    calibration evidence. The unmeasured bin at/above the channel threshold is
+    uncomputable -> REVIEW (see the measured-bin control below: same signals AUTO)."""
+    cal = Calibration.fit([(0.05, False)] * 5 + [(0.95, True)] * 5, n_bins=10)
+    rec = _produce(InMemoryDecisionStore(), _runner(_all()),
+                   threshold=0.80, self_consistency=0.84, calibration=cal)
+    assert rec.decision is RouteDecision.REVIEW
+    assert "unmeasured" in rec.esc.label
+
+
+def test_measured_bin_same_signals_still_auto():
+    # Control for AC1: IDENTICAL signals, but the raw's bin is MEASURED (acc 1.0)
+    # -> the rule does not fire and the channel autos. Measurement is the only delta.
+    cal = Calibration.fit([(0.85, True)] * 10, n_bins=10)
+    rec = _produce(InMemoryDecisionStore(), _runner(_all()),
+                   threshold=0.80, self_consistency=0.84, calibration=cal)
+    assert rec.decision is RouteDecision.AUTO
+
+
+def test_real_path_persists_components_and_provenance():
+    """4jx.17 AC1+AC2: the decision carries confidence_components (raw / p_est /
+    jury_quality / self_consistency / cap_bind_delta) and the producer provenance
+    tag — the LiftController's per-channel signal and the rvy.8 offline
+    recompute's p_est source (pooled_confidence stores the CAPPED value)."""
+    store = InMemoryDecisionStore()
+    rec = _produce(store, _runner(_all()), self_consistency=0.9)
+    assert rec.confidence_provenance == PROVENANCE_COMPUTED
+    comps = rec.confidence_components
+    assert comps is not None
+    assert set(comps) == {"raw", "p_est", "jury_quality", "self_consistency", "cap_bind_delta"}
+    # jury 0.95 + sc 0.9 -> raw/p_est 0.925 (identity map), routed capped to 0.9
+    assert comps["p_est"] == pytest.approx(0.925)
+    assert rec.pooled_confidence == pytest.approx(0.9)
+    assert comps["cap_bind_delta"] == pytest.approx(0.025)
+    assert store.get_decision("d1").confidence_components == comps  # round-trips
+
+
+def test_uncomputable_decision_still_carries_provenance():
+    # Components are None (nothing computed) but the producer identity remains.
+    rec = _produce(InMemoryDecisionStore(), _runner(_all()), self_consistency=None)
+    assert rec.confidence_provenance == PROVENANCE_COMPUTED
+    assert rec.confidence_components is None
 
 
 def test_hard_fail_item_routes_review_via_floor():

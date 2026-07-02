@@ -152,8 +152,15 @@ async def _run_event_stream(
 
         snapshot = await graph.get_state(thread_id)
         values = snapshot.values
-        confidence = values.get("confidence") or 0.0
-        decision = route(confidence, autonomy=autonomy)
+        # Uncomputable confidence (None) fails safe to REVIEW explicitly (4jx.3) —
+        # never coerced to 0.0: a zero threshold would auto-fire on it, and the SSE
+        # frame would fabricate a "confidence": 0.0 for a value never computed
+        # (None serializes to null = honest "uncomputable" for the console).
+        confidence = values.get("confidence")
+        if confidence is None:
+            decision = RouteDecision.REVIEW
+        else:
+            decision = route(confidence, autonomy=autonomy)
 
     # Record the run + its autonomy outcome (auto vs review) for the dashboard.
     metrics.record_run(tenant=tenant_id, status="completed")
