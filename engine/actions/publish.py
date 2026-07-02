@@ -59,6 +59,14 @@ class ActionNotFoundError(LookupError):
     """``approve_and_publish``/``reject`` was given an unknown action id."""
 
 
+class TestModeSendBlockedError(RuntimeError):
+    """A send was refused by the SERVER-SIDE tenant TEST-MODE gate (ju1.1).
+
+    Raised BEFORE the exactly-once claim and BEFORE any connector is built, so the
+    action stays PENDING (re-approvable once the tenant is un-held) and no side
+    effect can occur — regardless of redirect config or the operator live toggle."""
+
+
 class MockOnLivePathError(RuntimeError):
     """A mock/stub connector was about to perform a REAL send on the live
     approve→publish path. Refused: a live action MUST use a real connector
@@ -158,6 +166,19 @@ def approve_and_publish(
     # Exactly-once: a sent action is terminal — return it, do not re-send.
     if action.status == "sent":
         return action
+
+    # SERVER-SIDE TEST-MODE GATE (ju1.1) — the hard sandbox for tenants holding real
+    # client PII (skindesign): if the tenant is in test_mode, refuse EVERY send whose
+    # recipient is not on the operator-approved allowlist, BEFORE the claim and BEFORE
+    # any connector exists. Deliberately above ``live=``/redirect handling: no toggle
+    # or env config can reach past this. Unknown tenants (no registry row) pass
+    # through unchanged (ladies8391 behavior identical).
+    from tenants.store import check_send_allowed
+
+    allowed, reason = check_send_allowed(action.tenant_id, action.target, dsn=dsn)
+    if not allowed:
+        update_status(action.id, action.status, dsn=dsn, last_error=reason)
+        raise TestModeSendBlockedError(reason)
 
     # Exactly-once CLAIM (atomic). Replace the old pre-send 'approved' write with a
     # single conditional UPDATE pending->'sending'. If 0 rows are claimed the action

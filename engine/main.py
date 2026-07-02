@@ -55,6 +55,20 @@ from studio.voice import mount_studio_voice  # noqa: E402
 mount_studio_voice(app)
 
 
+@app.get("/tenants/{tenant_id}")
+def tenant_flags(tenant_id: str) -> dict:
+    """Tenant safety flags (ju1.1): the server-side TEST-MODE state the console
+    renders. 404-shaped honest null for an unregistered (legacy) tenant."""
+    from tenants.store import get_tenant
+
+    row = get_tenant(tenant_id)
+    if row is None:
+        return {"id": tenant_id, "registered": False, "testMode": None}
+    return {"id": row["id"], "registered": True, "name": row["name"],
+            "testMode": bool(row["test_mode"]),
+            "allowlistSize": len(row.get("test_send_allowlist") or [])}
+
+
 @app.get("/metrics")
 def metrics_endpoint() -> Response:
     """Prometheus scrape endpoint (13u) — the 3bu stack scrapes /metrics on :8000.
