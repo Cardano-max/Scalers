@@ -11,6 +11,7 @@ per-tenant pack config (`engine/config/`, INFRA-04).
 
 from __future__ import annotations
 
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -94,20 +95,84 @@ def require_foreplay_api_key() -> str:
     return _require_api_key("FOREPLAY_API_KEY", needed_for="Phase 3 (Foreplay research)")
 
 
-# Pinned Claude model IDs (docs/stack-decision.md). Exact strings — no date
-# suffixes. Opus 4.8 for the hardest writing/judging, Sonnet 4.6 as the
-# balanced default, Haiku 4.5 for cheap classification/triage.
-DEFAULT_OPUS = "claude-opus-4-8"
-DEFAULT_SONNET = "claude-sonnet-4-6"
-DEFAULT_HAIKU = "claude-haiku-4-5"
+# ── MODEL POLICY (CustomerAcq-8sk; operator order 2026-07-02) ─────────────────
+# Every engine LLM call defaults to claude-haiku-4-5; claude-sonnet-4-5 is the
+# ABSOLUTE ceiling. Nothing above (sonnet-4-6, opus, fable) may be named for a
+# live call: resolve_model() clamps any out-of-policy request DOWN to the ceiling
+# and logs the clamp honestly. Protects the operator's freshly-funded credits;
+# supersedes the stack-decision tiering until the operator lifts the policy.
+POLICY_DEFAULT_MODEL = "claude-haiku-4-5"
+POLICY_CEILING_MODEL = "claude-sonnet-4-5"
+# Dated snapshots of the allowed models (e.g. claude-haiku-4-5-20251001) pass too.
+_POLICY_ALLOWED_PREFIXES = (POLICY_DEFAULT_MODEL, POLICY_CEILING_MODEL)
+
+_policy_log = logging.getLogger("engine.model_policy")
+
+
+def _split_provider(model_id: str) -> tuple[str, str]:
+    """Split ``provider:model`` -> (provider, bare id); provider may be ''."""
+    if ":" in model_id:
+        provider, _, bare = model_id.partition(":")
+        return provider, bare
+    return "", model_id
+
+
+def model_allowed(model_id: str) -> bool:
+    """True if ``model_id`` may be used for a live call under the 8sk policy.
+
+    Non-Anthropic providers (e.g. the local ``ollama:`` jury seat) are not
+    Anthropic-billed and pass through; Anthropic ids must be haiku-4.5* or
+    sonnet-4.5*.
+    """
+    provider, bare = _split_provider(model_id)
+    if provider and provider != "anthropic":
+        return True
+    return bare.startswith(_POLICY_ALLOWED_PREFIXES)
+
+
+def resolve_model(requested: str | None = None) -> str:
+    """Resolve a model id under the policy: default, allow, or CLAMP to ceiling.
+
+    * ``requested=None`` → the ``ENGINE_MODEL_DEFAULT`` env override if set
+      (itself clamped), else :data:`POLICY_DEFAULT_MODEL`.
+    * an allowed id (haiku-4.5*/sonnet-4.5*, any provider-prefix form) → as-is.
+    * a non-Anthropic provider id → as-is (not Anthropic-billed).
+    * anything else (sonnet-4-6, opus, fable, unknown) → the CEILING, with an
+      honest warning log — never silently, and never upward.
+    """
+    raw = requested if requested is not None else os.environ.get("ENGINE_MODEL_DEFAULT", "")
+    if not raw:
+        return POLICY_DEFAULT_MODEL
+    if model_allowed(raw):
+        return raw
+    provider, _ = _split_provider(raw)
+    clamped = f"{provider}:{POLICY_CEILING_MODEL}" if provider else POLICY_CEILING_MODEL
+    _policy_log.warning(
+        "model policy clamp (CustomerAcq-8sk): %r is above the ceiling; using %r",
+        raw,
+        clamped,
+    )
+    return clamped
+
+
+# Pinned Claude model IDs. Exact strings — no date suffixes. POLICY-CLAMPED
+# (8sk): haiku-4.5 is the default for every tier; sonnet-4.5 is the top tier.
+DEFAULT_SONNET = POLICY_CEILING_MODEL
+DEFAULT_HAIKU = POLICY_DEFAULT_MODEL
 
 
 class ModelPins(BaseModel):
-    """The pinned model versions used by the engine's typed cells (HARN-06)."""
+    """The pinned model versions used by the engine's typed cells (HARN-06).
+
+    Field NAMES are the legacy tier labels (kept for the API/console wire
+    contract); the VALUES are what is actually called — under the 8sk policy the
+    former opus tier is clamped to the sonnet-4.5 ceiling and the balanced tier
+    to haiku. Provenance records use the values, so they stay honest.
+    """
 
     model_config = {"frozen": True}
 
-    opus: str = DEFAULT_OPUS
+    opus: str = POLICY_CEILING_MODEL  # top tier ≡ the ceiling under 8sk (no opus)
     sonnet: str = DEFAULT_SONNET
     haiku: str = DEFAULT_HAIKU
 

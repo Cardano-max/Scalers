@@ -66,8 +66,8 @@ def test_every_seat_is_invoked_and_voted():
 
 def test_divergent_judges_yield_agreement_below_one():
     scores = {
-        "opus-strict": _score(appr=0.35),
-        "opus-charitable": _score(appr=0.95),
+        "haiku-strict": _score(appr=0.35),
+        "haiku-charitable": _score(appr=0.95),
         "ollama-cross": _score(appr=0.6),
     }
     run = asyncio.run(run_jury("x", judge_runner=_runner(scores)))
@@ -79,8 +79,8 @@ def test_divergent_judges_yield_agreement_below_one():
 def test_exact_voice_but_inappropriate_splits_dimensions():
     # The mastectomy-as-glow-up case: voice high, appropriateness low + hard-fail.
     scores = {
-        "opus-strict": _score(voice=0.95, safety=0.9, appr=0.15, ahf=True),
-        "opus-charitable": _score(voice=0.96, safety=0.9, appr=0.2, ahf=True),
+        "haiku-strict": _score(voice=0.95, safety=0.9, appr=0.15, ahf=True),
+        "haiku-charitable": _score(voice=0.96, safety=0.9, appr=0.2, ahf=True),
         "ollama-cross": _score(voice=0.94, safety=0.9, appr=0.18, ahf=True),
     }
     run = asyncio.run(run_jury("x", judge_runner=_runner(scores)))
@@ -95,16 +95,16 @@ def test_exact_voice_but_inappropriate_splits_dimensions():
 
 
 def test_errored_judge_is_dropped_not_counted():
-    scores = {"opus-strict": _score(), "ollama-cross": _score()}
+    scores = {"haiku-strict": _score(), "ollama-cross": _score()}
 
     async def run(spec, action):
-        if spec.name == "opus-charitable":
+        if spec.name == "haiku-charitable":
             raise RuntimeError("judge refused")
         return scores[spec.name]
 
     out = asyncio.run(run_jury("x", judge_runner=run))
     assert len(out.votes) == len(DEFAULT_PANEL) - 1
-    assert ("opus-charitable", "RuntimeError: judge refused") in out.dropped
+    assert ("haiku-charitable", "RuntimeError: judge refused") in out.dropped
     assert out.expected_judges == len(DEFAULT_PANEL)  # coverage gap is visible
     # a degraded panel still routes review even if the survivors agree.
     agg = aggregate_jury(out.votes)
@@ -164,7 +164,7 @@ def test_hard_fail_code_becomes_per_dimension_floor():
     # A judge emits an appropriateness hard-fail CODE (high numeric appr) -> the
     # aggregator maps it to an appr floor -> review, even at high scores.
     scores = {n: _score_codes(["APPR_HF_COMMERCIALIZE_TRAUMA"]) for n in
-              ("opus-strict", "opus-charitable", "ollama-cross")}
+              ("haiku-strict", "haiku-charitable", "ollama-cross")}
     run = asyncio.run(run_jury("x", judge_runner=_runner(scores)))
     assert not run.catalog_drift
     agg = aggregate_jury(run.votes)
@@ -175,15 +175,15 @@ def test_hard_fail_code_becomes_per_dimension_floor():
 
 def test_soft_cap_code_caps_the_score():
     scores = {n: _score_codes(["APPR_SC_OUT_OF_SCOPE"]) for n in
-              ("opus-strict", "opus-charitable", "ollama-cross")}
+              ("haiku-strict", "haiku-charitable", "ollama-cross")}
     run = asyncio.run(run_jury("x", judge_runner=_runner(scores)))
     assert all(v.appr == 0.5 for v in run.votes)  # capped from 0.95 to the 2/4 anchor
     assert aggregate_jury(run.votes).hard_fail["appr"] is False  # cap, not a floor
 
 
 def test_unknown_code_trips_catalog_drift_fail_safe():
-    scores = {n: _score_codes([]) for n in ("opus-strict", "opus-charitable", "ollama-cross")}
-    scores["opus-strict"] = _score_codes(["NOT_A_REAL_CODE"])
+    scores = {n: _score_codes([]) for n in ("haiku-strict", "haiku-charitable", "ollama-cross")}
+    scores["haiku-strict"] = _score_codes(["NOT_A_REAL_CODE"])
     run = asyncio.run(run_jury("x", judge_runner=_runner(scores)))
     assert run.catalog_drift and "unknown" in run.drift_reason.lower()
     decision, esc, _, _ = derive_decision(
@@ -194,7 +194,7 @@ def test_unknown_code_trips_catalog_drift_fail_safe():
 
 
 def test_catalog_version_drift_fail_safe():
-    scores = {n: _score_codes([], version=2) for n in ("opus-strict", "opus-charitable", "ollama-cross")}
+    scores = {n: _score_codes([], version=2) for n in ("haiku-strict", "haiku-charitable", "ollama-cross")}
     run = asyncio.run(run_jury("x", judge_runner=_runner(scores)))
     assert run.catalog_drift and "version" in run.drift_reason.lower()
 

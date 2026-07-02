@@ -40,13 +40,13 @@ def store(dsn):
 
 def _clean_scores():
     return {n: JudgeScore(voice=0.95, safety=0.95, appr=0.95, on_voice=True)
-            for n in ("opus-strict", "opus-charitable", "ollama-cross")}
+            for n in ("haiku-strict", "haiku-charitable", "ollama-cross")}
 
 
 def test_real_jury_rows_persist_reliability_weight_and_hard_fail(store, dsn):
     # One judge hard-fails appropriateness; all weights uniform.
     scores = _clean_scores()
-    scores["opus-strict"] = JudgeScore(voice=0.95, safety=0.95, appr=0.2, on_voice=True, appr_hard_fail=True)
+    scores["haiku-strict"] = JudgeScore(voice=0.95, safety=0.95, appr=0.2, on_voice=True, appr_hard_fail=True)
     rec = asyncio.run(
         produce_and_record_decision_real(
             store, decision_id="d1", run_id="r1", tenant_id="ladies8391",
@@ -69,10 +69,10 @@ def test_real_jury_rows_persist_reliability_weight_and_hard_fail(store, dsn):
 
     assert len(jury) == 3
     by_judge = {r["judge"]: r for r in jury}
-    # opus-strict hard-failed appropriateness; the per-dimension floor flag persists.
-    assert by_judge["opus-strict"]["appr_hard_fail"] is True
-    assert by_judge["opus-strict"]["voice_hard_fail"] is False
-    assert by_judge["opus-charitable"]["appr_hard_fail"] is False
+    # haiku-strict hard-failed appropriateness; the per-dimension floor flag persists.
+    assert by_judge["haiku-strict"]["appr_hard_fail"] is True
+    assert by_judge["haiku-strict"]["voice_hard_fail"] is False
+    assert by_judge["haiku-charitable"]["appr_hard_fail"] is False
     assert all(r["reliability_weight"] == 1.0 for r in jury)    # real weights, not NULL
     # self_consistency column exists + is writable (None until 4jx.3 computes it).
     assert "self_consistency" in dec
