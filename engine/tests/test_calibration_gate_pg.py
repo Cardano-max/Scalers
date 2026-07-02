@@ -141,3 +141,76 @@ def test_no_gold_pairs_skips_and_writes_nothing_on_real_pg(store):
     )
     assert result.verdict == "SKIP"
     assert store.get_metrics(tenant_id=tenant) == []  # neutral: no rows written
+
+
+def test_decisions_lane_two_gates_end_to_end_on_real_pg(store):
+    """4jx.16 on real PG: decisions persisted by the REAL producer (components +
+    provenance from 4jx.17) -> route-independent labels -> decisions-lane runner
+    -> per-channel eval_metric rows (incl. the ECE-on-routed observability row)
+    -> lift_preconditions_ab reads them back at the (tenant, engine, channel)
+    grain."""
+    import asyncio
+    import os as _os
+
+    from autonomy.judges import JudgeScore, JudgeSpec
+    from autonomy.produce import produce_and_record_decision_real
+    from autonomy.store import PostgresDecisionStore
+    from evals.calibration import (
+        ECE_ROUTED_OBS_METRIC,
+        lift_preconditions_ab,
+        run_decision_calibration_gate,
+    )
+
+    tenant = _tenant()
+    dstore = PostgresDecisionStore(_os.environ["ENGINE_DATABASE_URL"])
+    dstore.setup()
+
+    async def runner(spec: JudgeSpec, action: str) -> JudgeScore:
+        return JudgeScore(voice=0.95, safety=0.95, appr=0.95, on_voice=True)
+
+    async def produce_all():
+        recs = []
+        for i in range(24):
+            recs.append(await produce_and_record_decision_real(
+                dstore, decision_id=f"{tenant}-d{i}", run_id=f"{tenant}-r",
+                tenant_id=tenant, channel="instagram", action_kind="post",
+                action="a", threshold=0.85, judge_runner=runner,
+                self_consistency=0.9,
+            ))
+        return recs
+
+    recs = asyncio.run(produce_all())
+    # Route-independent audit labels (protocol §8): sticky random split, rubric
+    # ground truth. Here: jury 0.95 + sc 0.9 -> p_est 0.925, routed 0.9 >= thr;
+    # label 22/24 correct (~0.917 >= 0.80 directional bound; ECE needs spread ->
+    # synthesize a calibrated low group from the same records' shape is not
+    # possible on real decisions, so accept a NOT_PROMOTABLE ECE (degenerate
+    # spread) and assert the DIRECTIONAL gate + rows + reader explicitly).
+    labeled = [
+        (rec, i not in (0, 1), Split.CALIBRATION if i % 2 else Split.HOLDOUT)
+        for i, rec in enumerate(recs)
+    ]
+    result = run_decision_calibration_gate(
+        labeled, store=store, tenant_id=tenant, engine=Engine.POSTING,
+        channel="instagram", thr=0.85, git_sha="4jx16pg",
+    )
+    assert result.verdict == "NOT_PROMOTABLE"  # ECE spread degenerate; honest
+    lift = next(o for o in result.outcomes if o.metric == "routed_lift")
+    assert lift.passed is True and lift.n == 12
+
+    rows = store.get_metrics(tenant_id=tenant, engine=Engine.POSTING.value,
+                             channel="instagram")
+    by_metric = {m.metric: m for m in rows}
+    # lift row recorded (reliable) + the observability row; unreliable ECE not.
+    assert set(by_metric) == {"routed_lift", ECE_ROUTED_OBS_METRIC}
+    assert by_metric["routed_lift"].passed is True
+    assert by_metric["routed_lift"].confidence_provenance == "computed_min_cap_v1"
+    obs = by_metric[ECE_ROUTED_OBS_METRIC]
+    assert obs.passed is None and obs.threshold is None
+
+    # The 4jx.8 surface: blocked, and the reason names the MISSING ECE row —
+    # a not-promotable gate can never be laundered into a lift.
+    ok, reasons = lift_preconditions_ab(
+        store, tenant_id=tenant, engine=Engine.POSTING, channel="instagram")
+    assert not ok
+    assert any("calibration_ece_holdout" in r for r in reasons)

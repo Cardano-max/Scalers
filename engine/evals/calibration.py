@@ -67,6 +67,11 @@ DEFAULT_MIN_N = 10        # min routed>=thr pairs before the lift value is trust
 
 ECE_METRIC = "calibration_ece_holdout"
 LIFT_METRIC = "routed_lift"
+# ECE measured symmetrically on the ROUTED/capped value — OBSERVABILITY ONLY
+# (4jx.16 AC5): cap-induced underconfidence makes it read high by design, so it
+# is recorded with no threshold and never enters any verdict. Gating on it is
+# explicitly rejected (arch D2-as-amended).
+ECE_ROUTED_OBS_METRIC = "ece_routed_observability"
 
 # (example, predictor payload) -> (p_est, routed) | None.
 # p_est  = calibrated pooled estimate (THE gate input, contract §1).
@@ -318,7 +323,75 @@ def run_calibration_gate(
     )
     if not pairs:
         return CalibrationGateResult(verdict="SKIP")
+    return _judge_and_record(
+        pairs, thr=thr, ece_threshold=ece_threshold, min_n=min_n,
+        record=record, metric_store=store, tenant_id=tenant_id,
+        engine=engine, cell=cell, channel=None, git_sha=git_sha,
+        confidence_provenance=confidence_provenance,
+    )
 
+
+def run_decision_calibration_gate(
+    labeled: "Sequence[tuple[Any, bool, Split]]",
+    *,
+    store: Any | None = None,
+    tenant_id: str,
+    engine: Engine | str,
+    channel: str,
+    thr: float = DEFAULT_THR,
+    ece_threshold: float = ECE_THRESHOLD,
+    min_n: int = DEFAULT_MIN_N,
+    record: bool = True,
+    git_sha: str | None = None,
+) -> CalibrationGateResult:
+    """The DECISIONS-sourced two-gate runner (4jx.16), per channel.
+
+    ``labeled`` is ``(decision_record, correct, split)`` from the route-independent
+    gold audit (labeling protocol §8). ``p_est`` is read from each decision's
+    ``confidence_components`` — NEVER from ``pooled_confidence`` (the capped routed
+    value); decisions without components (stub path / uncomputable) contribute no
+    pair. Fit on CALIBRATION-split labels only; holdout ECE + the one-sided
+    directional bound ``P(correct | routed >= thr) >= thr - 0.05`` measured on
+    HOLDOUT only. Rows are recorded per (tenant, engine, channel) with the
+    decisions' confidence provenance — the 4jx.8 lift-precondition grain."""
+    pairs = pairs_from_decisions(labeled, cell=channel)
+    if not pairs:
+        return CalibrationGateResult(verdict="SKIP")
+    provs = {
+        rec.confidence_provenance
+        for rec, _, _ in labeled
+        if getattr(rec, "confidence_components", None)
+    }
+    provenance = next(iter(provs)) if len(provs) == 1 else ("mixed" if provs else None)
+    return _judge_and_record(
+        pairs, thr=thr, ece_threshold=ece_threshold, min_n=min_n,
+        record=record, metric_store=store, tenant_id=tenant_id,
+        engine=engine, cell=None, channel=channel, git_sha=git_sha,
+        confidence_provenance=provenance,
+    )
+
+
+def _judge_and_record(
+    pairs: Sequence[ConfidencePair],
+    *,
+    thr: float,
+    ece_threshold: float,
+    min_n: int,
+    record: bool,
+    metric_store: Any | None,
+    tenant_id: str,
+    engine: Engine | str,
+    cell: str | None,
+    channel: str | None,
+    git_sha: str | None,
+    confidence_provenance: str | None,
+) -> CalibrationGateResult:
+    """Shared judge+record core for both lanes (gold-example and decisions).
+
+    Fits on CALIBRATION pairs, judges holdout ECE (LTE) + the one-sided routed
+    lift (GTE), records reliable metrics to eval_metric, and emits the
+    ECE-on-routed OBSERVABILITY row (no threshold, ``passed=None``) — which never
+    participates in the verdict."""
     calibration = fit_on_calibration(pairs)
     ece_mr = holdout_ece(pairs, calibration)
     lift_mr = routed_lift(pairs, thr, min_n=min_n)
@@ -339,27 +412,76 @@ def run_calibration_gate(
                 n=mr.n, reliable=False, passed=None,
                 reason=str(mr.detail.get("reason", "unreliable")),
             ))
-            continue  # unreliable -> NOT recorded (documented above)
+            continue  # unreliable -> NOT recorded (authoritative history stays clean)
         passed = mr.value >= threshold if direction is Direction.GTE else mr.value <= threshold
         result.outcomes.append(CalibrationOutcome(
             metric=name, value=mr.value, threshold=threshold, direction=direction,
             n=mr.n, reliable=True, passed=passed,
         ))
-        if record:
-            store.record_metric(EvalMetric(
+        if record and metric_store is not None:
+            metric_store.record_metric(EvalMetric(
                 metric=name, value=mr.value, tenant_id=tenant_id, engine=engine_v,
-                cell=cell, threshold=threshold, direction=direction, passed=passed,
-                run_kind=RunKind.PER_COMMIT, git_sha=git_sha,
+                cell=cell, channel=channel, threshold=threshold, direction=direction,
+                passed=passed, run_kind=RunKind.PER_COMMIT, git_sha=git_sha,
                 # 4jx.17 AC2: which producer computed the gate's confidence input
                 # (the LiftController's per-channel lift-precondition-(e) signal).
                 confidence_provenance=confidence_provenance,
             ))
+
+    # 4jx.16 AC5: ECE on the ROUTED/capped value, symmetric — recorded for
+    # observability (no threshold, passed=None) and NEVER judged: cap-induced
+    # underconfidence makes it read high by design. Decisions lane only
+    # (channel set): in the gold-example lane routed == p_est by construction
+    # (no cap is applied there), so the row would only duplicate ECE_METRIC.
+    routed_hold = [(p.routed, p.correct) for p in pairs if p.split is Split.HOLDOUT]
+    if record and metric_store is not None and channel is not None and routed_hold:
+        obs_mr = expected_calibration_error(routed_hold)
+        metric_store.record_metric(EvalMetric(
+            metric=ECE_ROUTED_OBS_METRIC, value=obs_mr.value, tenant_id=tenant_id,
+            engine=engine_v, cell=cell, channel=channel, threshold=None,
+            direction=None, passed=None, run_kind=RunKind.PER_COMMIT,
+            git_sha=git_sha, confidence_provenance=confidence_provenance,
+        ))
 
     if result.failures:
         result.verdict = "FAIL"  # a real FAIL always wins over NOT_PROMOTABLE
     elif any(o.passed is None for o in result.outcomes):
         result.verdict = "NOT_PROMOTABLE"
     return result
+
+
+def lift_preconditions_ab(
+    store: Any,
+    *,
+    tenant_id: str,
+    engine: Engine | str,
+    channel: str,
+) -> tuple[bool, list[str]]:
+    """D5 lift preconditions (a)+(b) for one (tenant, engine, channel) — the
+    4jx.8 LiftController consumer surface.
+
+    (a) holdout ECE gate and (b) the directional routed bound hold iff the
+    LATEST recorded row of each metric at this grain exists and passed. A
+    missing row blocks: never lift on the absence of proof (an unmeasured
+    channel is exactly the case the gates exist for). Returns
+    ``(ok, blocking_reasons)``."""
+    engine_v = engine.value if isinstance(engine, Engine) else str(engine)
+    reasons: list[str] = []
+    for metric in (ECE_METRIC, LIFT_METRIC):
+        rows = store.get_metrics(
+            tenant_id=tenant_id, engine=engine_v, channel=channel, metric=metric,
+        )
+        if not rows:
+            reasons.append(
+                f"{metric}: no recorded row for channel {channel!r} "
+                "(never lift on absence of proof)"
+            )
+        elif rows[-1].passed is not True:  # rows are created_at-ordered
+            reasons.append(
+                f"{metric}: latest row not passing "
+                f"(value={rows[-1].value}, threshold={rows[-1].threshold})"
+            )
+    return (not reasons, reasons)
 
 
 # ── Eval-lane confidence source (the done-gate wiring, rvy.8) ─────────────────

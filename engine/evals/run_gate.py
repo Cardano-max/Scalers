@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 
+from autonomy.confidence import PROVENANCE_COMPUTED
 from evals.calibration import deterministic_probe_confidence_fn, run_calibration_gate
 from evals.predictors import cell_predictor, regressed_cell_predictor
 from evals.gate import run_eval_gate
@@ -69,6 +70,9 @@ def main() -> int:
             predictor=predictor,
             confidence_fn=deterministic_probe_confidence_fn(predictor, jury_quality_source=None),
             git_sha=os.environ.get("GIT_SHA"),
+            # 4jx.17 AC2: the probe fn runs the REAL compute_confidence pipeline,
+            # so its rows are tagged with the computed producer.
+            confidence_provenance=PROVENANCE_COMPUTED,
         )
         print(cal_result.message())
         failed = failed or cal_result.verdict == "FAIL"

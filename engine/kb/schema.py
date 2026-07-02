@@ -79,6 +79,10 @@ class EvalMetric:
     tenant_id: str | None = None
     engine: str | None = None
     cell: str | None = None
+    # The routing channel the metric was measured for (4jx.16): lift is granted
+    # per (tenant, channel), so the D5 precondition gates must be queryable at
+    # that grain. None for cell-level metrics with no channel dimension.
+    channel: str | None = None
     threshold: float | None = None
     direction: Direction | None = None
     run_kind: RunKind | None = None

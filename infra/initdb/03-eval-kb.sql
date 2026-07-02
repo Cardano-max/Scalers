@@ -73,14 +73,18 @@ CREATE TABLE IF NOT EXISTS eval_metric (
     -- 4jx.17: WHICH confidence producer fed this metric (lift precondition (e));
     -- NULL for metrics with no confidence input.
     confidence_provenance text,
+    -- 4jx.16: the routing channel the metric was measured for — lift is granted
+    -- per (tenant, channel), so the D5 precondition gates query at that grain.
+    channel         text,
     created_at      timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT eval_metric_tenant_scope
         CHECK (scope = 'GLOBAL' OR tenant_id IS NOT NULL)
 );
 
--- Idempotent additive migration for EXISTING clusters (the CREATE above is a
--- no-op there, so the new column must also be added explicitly).
+-- Idempotent additive migration for EXISTING clusters (the CREATEs above are
+-- no-ops there, so the new columns must also be added explicitly).
 ALTER TABLE eval_metric ADD COLUMN IF NOT EXISTS confidence_provenance text;
+ALTER TABLE eval_metric ADD COLUMN IF NOT EXISTS channel text;
 
 -- Indexes: every read filters tenant_id; the vector column is ANN-searchable so
 -- examples stay first-class KB citizens (KNOW-02 grounding reuses them).
