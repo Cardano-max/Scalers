@@ -137,6 +137,100 @@ def test_unmeasured_bin_is_identity_never_rounds_up():
     assert cal.apply(0.05) == pytest.approx(0.0)
 
 
+# ── 4jx.15: unmeasured bins are not AUTO-eligible + monotonized map ──────────
+
+
+def _extremes_only() -> Calibration:
+    # gold pairs only at the extremes: bins 1..8 (0.1–0.9) never measured, ECE green.
+    return Calibration.fit([(0.05, False)] * 5 + [(0.95, True)] * 5, n_bins=10)
+
+
+def test_unmeasured_bin_at_or_above_threshold_is_uncomputable():
+    """AC1 (panel finding, verified by execution): extremes-only gold leaves the
+    0.8–0.9 bin unmeasured; a live raw=0.87 passed through identity and routed
+    AUTO with ZERO calibration evidence. An unmeasured bin at/above the channel
+    threshold is uncomputable -> the decision layer fails safe to REVIEW."""
+    # jury 0.90, sc 0.84 -> raw mean 0.87 -> lands in the unmeasured 0.8–0.9 bin
+    res = compute_confidence(
+        jury_quality=0.90, self_consistency_score=0.84,
+        calibration=_extremes_only(), threshold=0.8,
+    )
+    assert res.uncomputable and res.confidence is None
+    assert "unmeasured" in res.uncomputable_reason
+
+
+def test_unmeasured_rule_fires_at_exact_threshold():
+    # "at/above": raw == threshold is NOT auto-eligible without evidence.
+    res = compute_confidence(
+        jury_quality=0.85, self_consistency_score=0.85,
+        calibration=_extremes_only(), threshold=0.85,
+    )
+    assert res.uncomputable
+
+
+def test_unmeasured_bin_below_threshold_keeps_identity():
+    """AC2: below the bar an unmeasured bin stays identity (observability) — review
+    comes from the ordinary below-threshold path, not the uncomputable one."""
+    res = compute_confidence(
+        jury_quality=0.42, self_consistency_score=0.42,
+        calibration=_extremes_only(), threshold=0.8,
+    )
+    assert not res.uncomputable
+    assert res.components["calibrated"] == pytest.approx(0.42)  # identity
+    assert res.confidence == pytest.approx(0.42)
+
+
+def test_measured_bin_at_threshold_stays_computable():
+    # The rule targets UNMEASURED bins only: measured evidence routes normally.
+    cal = Calibration.fit([(0.87, True)] * 10, n_bins=10)
+    res = compute_confidence(
+        jury_quality=0.90, self_consistency_score=0.84, calibration=cal, threshold=0.8
+    )
+    assert not res.uncomputable and res.confidence is not None
+
+
+def test_unfitted_identity_default_is_exempt_from_the_rule():
+    # The wholly-unfitted default map is the flagged pre-gold-set state (module
+    # docstring); the routing rule engages only for FITTED maps.
+    res = compute_confidence(jury_quality=0.9, self_consistency_score=0.9, threshold=0.8)
+    assert not res.uncomputable
+
+
+def test_fit_monotonizes_measured_bins_pav():
+    """AC3: a measured bin mapping BELOW a lower-raw measured bin (non-monotone
+    empirical accs) is pooled by PAV so weaker evidence never maps more favorably."""
+    # bin 8 (0.8–0.9): acc 1.0 over 10 pairs; bin 9 (0.9–1.0): acc 0.5 over 10 -> violators
+    pairs = [(0.85, True)] * 10 + [(0.95, True)] * 5 + [(0.95, False)] * 5
+    cal = Calibration.fit(pairs, n_bins=10)
+    lo, hi = cal.apply(0.85), cal.apply(0.95)
+    assert lo <= hi  # monotone
+    # PAV pools the violating pair to their count-weighted mean: (10·1.0 + 10·0.5)/20
+    assert lo == pytest.approx(0.75) and hi == pytest.approx(0.75)
+
+
+def test_apply_is_monotone_nondecreasing_property():
+    """AC3 property test: for ANY gold set, apply is monotone nondecreasing over the
+    whole [0,1] domain (measured accs PAV-pooled; boundary reconciliation with the
+    identity bins only ever LOWERS a value, never raises one)."""
+    import random
+
+    rng = random.Random(4315)
+    grid = [i / 200 for i in range(201)]
+    for trial in range(50):
+        pairs = [(rng.random(), rng.random() < 0.5) for _ in range(rng.randint(1, 60))]
+        cal = Calibration.fit(pairs, n_bins=10)
+        ys = [cal.apply(x) for x in grid]
+        assert all(a <= b + 1e-12 for a, b in zip(ys, ys[1:])), (trial, pairs)
+
+
+def test_boundary_reconciliation_is_down_only():
+    # A lone measured bottom bin with acc 1.0 cannot leap over the identity bins
+    # above it: it is capped DOWN to the boundary. The identity region is untouched.
+    cal = Calibration.fit([(0.05, True)] * 5, n_bins=10)
+    assert cal.apply(0.05) <= 0.1 + 1e-12
+    assert cal.apply(0.5) == pytest.approx(0.5)  # identity intact
+
+
 def test_ece_metric_is_the_eval_metric():
     # Reuses evals.expected_calibration_error so the gate + the computed-confidence
     # ECE are one computation. Perfectly-calibrated pairs -> low ECE.

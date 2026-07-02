@@ -219,6 +219,7 @@ def derive_decision(
     catalog_drift_reason: str = "",
     confidence: float | None = None,
     confidence_uncomputable: bool = False,
+    confidence_uncomputable_reason: str = "",
 ) -> tuple[RouteDecision, Escalation, float, float]:
     """Derive ``(decision, escalation, pooled_confidence, agreement)`` from signals.
 
@@ -351,8 +352,10 @@ def derive_decision(
     #     must not clear the bar (ADR Decision 2). The legacy stub path (no
     #     aggregate) keeps its jury-only semantics.
     if confidence_uncomputable or (aggregate is not None and confidence is None):
+        # A caller-supplied reason (e.g. 4jx.15 "unmeasured calibration bin") wins;
+        # the probe-starvation default keeps the historical label.
         reason = (
-            "confidence uncomputable (insufficient samples)"
+            f"confidence uncomputable ({confidence_uncomputable_reason or 'insufficient samples'})"
             if confidence_uncomputable
             else "confidence not supplied (measured path)"
         )

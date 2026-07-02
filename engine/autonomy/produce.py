@@ -135,6 +135,9 @@ async def produce_and_record_decision_real(
         jury_quality=aggregate.pooled,
         self_consistency_score=self_consistency,
         calibration=calibration,
+        # 4jx.15: the live path supplies the channel threshold so a raw landing in
+        # an unmeasured calibration bin at/above the bar is uncomputable -> review.
+        threshold=threshold,
     )
     decision, esc, pooled, agreement = derive_decision(
         votes=jury.votes,
@@ -148,6 +151,7 @@ async def produce_and_record_decision_real(
         catalog_drift_reason=jury.drift_reason,
         confidence=conf.confidence,
         confidence_uncomputable=conf.uncomputable,
+        confidence_uncomputable_reason=conf.uncomputable_reason,
     )
     record = DecisionRecord(
         decision_id=decision_id,

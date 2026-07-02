@@ -419,7 +419,9 @@ def test_probe_confidence_fn_with_real_jury_source_produces_pairs():
     got = fn(ex, _predictor(ex))
     assert got is not None
     p_est, routed = got
-    assert p_est == pytest.approx((0.8 + 1.0) / 2)  # w_q=w_c=0.5, sc=1.0, identity map
+    # min-cap pooling (4jx.3 canon, ADR D2-as-amended): min(mean, jury, sc) —
+    # min(0.9, 0.8, 1.0) = 0.8; the weighted mean alone would read 0.9.
+    assert p_est == pytest.approx(0.8)
     assert routed == p_est  # eval lane applies no cap
 
 
