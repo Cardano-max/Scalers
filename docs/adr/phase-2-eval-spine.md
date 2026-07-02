@@ -148,7 +148,7 @@ cell_solver(cell, *, live: bool) -> Solver                # invokes the Cell und
 
 scorers_for(cell) -> list[Scorer]                         # DeepEval-backed scorers
     classification: precision / recall / f1 vs target.label
-    calibration:    ECE / Brier over (confidence, correct) pairs   (Decision 5)
+    calibration:    ECE / Brier over (p_est, correct) pairs on HOLDOUT   (Decision 5)
     voice:          on-voice rate vs human/jury labels + κ across raters
     validator:      typed-output pass-rate after retry (pure code, no model)
 ```
@@ -170,7 +170,8 @@ Every threshold becomes an `eval_metric` row with a `passed` bool; **the CI gate
 | validator typed-output after retry | ≥0.99 | GTE | **per-commit** (pure code) | yes |
 | router determinism | exact | — | **per-commit** (pure code) | yes |
 | classify/extract precision, recall, F1 | ≥0.95 | GTE | **per-commit** offline (mock + recorded) → re-confirmed **per-promotion** live | yes |
-| calibration ECE | ≤0.05 | LTE | **per-commit** offline (recompute over stored preds) → **per-promotion** live | yes |
+| calibration ECE (on `p_est`, HOLDOUT) | ≤0.05 | LTE | **per-commit** offline (recompute over stored `confidence_components.p_est`) → **per-promotion** live | yes |
+| routed decision-honesty (directional): P(correct \| routed ≥ thr) | ≥ thr − 0.05 | GTE | **per-promotion** (with ECE; both are lift preconditions, Phase-5 D5) | Phase-5 |
 | brand-voice on-voice (blind holdout) | ≥0.90 | GTE | **per-promotion** (human/jury raters) | yes |
 | rater agreement κ (holdout) | ≥0.6 | GTE | **per-promotion** | yes |
 | auto-draft edit rate | <0.15 | LTE | **per-promotion** (live + human) | scaffold; data in P5/P7 |
@@ -187,10 +188,10 @@ Every threshold becomes an `eval_metric` row with a `passed` bool; **the CI gate
 
 ## Decision 5 — Confidence = self-consistency variance (no logprobs)
 
-**Confirmed (per stack-decision.md + spec §5 + systemdesign §6/§7):** hosted Claude/Gemini expose **no logprobs/activations**, so the confidence signal the router consumes and the calibration target (ECE ≤0.05) optimizes is **self-consistency variance**, not token-margin/logprob methods.
+**Confirmed (per stack-decision.md + spec §5 + systemdesign §6/§7):** hosted Claude/Gemini expose **no logprobs/activations**, so the **generation-stability component** of confidence is **self-consistency variance**, not token-margin/logprob methods. *(Amended 2026-06-29 to match Phase-5 ADR Decision 2 as amended:)* the signal the router consumes is `min(p_est, jury_quality, self_consistency)` where `p_est = calibrate(weighted mean)` — self-consistency is one capped component of it, not the whole signal.
 
-- The confidence computer is a **separate probe** from the temp-0 decision path: it samples the generating/judging cell **K times with varied prompts/seeds**, then scores agreement/variance of the typed outputs → a computed confidence in `[0,1]`. The decision/classify cells themselves stay temp-0 and pinned (HARN-06); the probe's sampling does not change the routed decision, only its confidence.
-- Calibration (ECE/Brier) is computed over `(self_consistency_confidence, correct_bool)` pairs against the gold set — the `eval_metric` `ece` row's input contract.
+- The confidence computer is a **separate probe** from the temp-0 decision path: it samples the generating/judging cell **K times with varied prompts/seeds**, then scores agreement of the typed outputs — **anchored** against the shipped artifact when one sample ships (the anchor does not vote) — → a computed confidence in `[0,1]`. The decision/classify cells themselves stay temp-0 and pinned (HARN-06); the probe's sampling does not change the routed decision, only its confidence.
+- **The `eval_metric` `ece` row's input contract:** ECE/Brier is computed over `(p_est, correct)` pairs — the calibrated pooled estimate, **fit on `split=CALIBRATION`, measured on `split=HOLDOUT`** (never fit pairs). Its companion **decision-honesty gate** is the directional routed bound `P(correct | routed ≥ threshold) ≥ threshold − 0.05` per channel. ECE on the routed/capped value, or on the self-consistency component alone, is **observability only — never the gate input**. (Full semantics: Phase-5 ADR Decision 2.)
 - **Reserve token-margin/linear-probe methods for self-hosted cells only** (the local Ollama cross-family juror), where logits are available — not for any hosted-Claude cell. This is the documented "confidence-signal availability" critique fix.
 
 **Rationale.** It is the only calibration input actually implementable on the chosen hosted models; baking the `(confidence, correct)` contract into `eval_metric` now means Phase-5 autonomy calibration plugs in without a schema change.
