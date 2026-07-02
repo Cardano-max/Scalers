@@ -74,13 +74,26 @@ def substantiated_percents(offers: Iterable[SubstantiatedOffer]) -> frozenset[in
 
 # ── token detection ───────────────────────────────────────────────────────────
 
-# "15% off", "15 % off", "15%off", "15 percent off", "15% discount"
-_PERCENT_RE = re.compile(r"\b(\d{1,3})\s*(?:%|percent)\s*(?:off|discount)\b", re.IGNORECASE)
-# "code ARTLOVER", "use code artlover", "promo code X", "discount code X",
-# "with the code X" — the captured token is the code.
-_CODE_RE = re.compile(
-    r"\b(?:promo\s+|discount\s+|offer\s+|coupon\s+|voucher\s+)?code\s+[\"']?([A-Za-z0-9]{3,20})[\"']?",
+# Percent-off in BOTH shapes (qa1 adversarial re-QA fix):
+#   (a) percent followed by off/discount, admitting space/hyphen/nothing:
+#       "15% off", "15 % off", "15%off", "15%-off", "15 percent discount";
+#   (b) a promo verb BEFORE a bare percent — the save/get family carries the same
+#       fabrication with no trailing "off": "save 15% on your first session",
+#       "get 20% today", "save 15 percent this month".
+# A bare percent with neither shape ("100% custom designs") stays clean.
+_PERCENT_RE = re.compile(
+    r"\b(\d{1,3})\s*(?:%|percent)[\s-]*(?:off|discount)\b"
+    r"|\b(?:save|get|enjoy|take|claim|unlock|score)\s+(\d{1,3})\s*(?:%|percent\b)",
     re.IGNORECASE,
+)
+# Code tokens, two arms (qa1 fix):
+#   (a) the literal word "code" before the token, any case ("use code artlover");
+#   (b) promo/coupon/voucher + a CODE-SHAPED token WITHOUT the word "code"
+#       ("use promo FLOWER15"). Code-shaped = contains a digit or is ALL-CAPS >=3,
+#       so "promo runs friday" never false-positives on a common word.
+_CODE_RE = re.compile(
+    r"\b(?i:(?:promo\s+|discount\s+|offer\s+|coupon\s+|voucher\s+)?code)\s+[\"']?([A-Za-z0-9]{3,20})[\"']?"
+    r"|\b(?i:promo|coupon|voucher)\s+[\"']?([A-Za-z]*\d[A-Za-z0-9]{0,19}|[A-Z]{3,20})\b[\"']?",
 )
 # Offer-implying lexicon: naming these implies an authorized offer exists at all.
 # Deliberately NOT including bare "free" (e.g. the approved "free consultation"
@@ -98,9 +111,12 @@ def find_offer_tokens(text: str) -> list[str]:
     lexicon hits lowercased (``discount``). Order of appearance, deduped."""
     tokens: list[str] = []
     for m in _CODE_RE.finditer(text):
-        tokens.append(m.group(1).upper())
+        tok = m.group(1) or m.group(2)
+        if tok:
+            tokens.append(tok.upper())
     for m in _PERCENT_RE.finditer(text):
-        tokens.append(f"{int(m.group(1))}% off")
+        pct = m.group(1) or m.group(2)
+        tokens.append(f"{int(pct)}% off")
     for m in _LEXICON_RE.finditer(text):
         tokens.append(m.group(1).lower())
     seen: set[str] = set()
