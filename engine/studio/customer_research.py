@@ -591,7 +591,6 @@ def _choose_angle(
     if objection_angle is not None:
         return objection_angle
 
-    name = (facts.get("name") or "this studio").strip()
     traits = facts.get("persona_traits", {}) or {}
     interests = facts.get("interests", []) or []
     city = (facts.get("city") or "").strip()
@@ -856,7 +855,7 @@ def _build_email_prompt(
         intro,
         "",
         f"# WHAT YOU ACTUALLY KNOW ABOUT THE {recipient_word.upper()}",
-        f"# (hard facts you may state about them):",
+        "# (hard facts you may state about them):",
         *known,
         *inferred_block,
         *objection_block,
@@ -868,7 +867,7 @@ def _build_email_prompt(
         *angle_block,
         "",
         "# HARD GROUNDING RULES — no fabrication:",
-        f"- You may reference ONLY the hard facts above, the SOFT signals (marked as "
+        "- You may reference ONLY the hard facts above, the SOFT signals (marked as "
         "impressions, never as fact), the REAL offer above if one is listed, and a "
         "research snippet ONLY when it is unmistakably about them.",
         f"- Do NOT invent or imply anything NOT listed above about the {recipient_word}'s "
@@ -899,8 +898,28 @@ def _offer_phrase(offer: Any) -> str:
     return f" We've got a small offer that might help — {offer.description}{disc}, code {offer.code}."
 
 
+# The closed set of customer_type values that mark a lead as an actual business /
+# peer studio. EXACT-token membership, not substring: a consumer row whose type merely
+# CONTAINS a B2B word ("studio walk-in", "business owner", "partner referral") must
+# stay customer-framed — substring matching failed open in the embarrassing direction.
+_STUDIO_LEAD_TYPES = frozenset({
+    "studio", "tattoo studio", "shop", "tattoo shop", "b2b", "partner", "business",
+})
+
+
+def _is_studio_lead(facts: dict[str, Any]) -> bool:
+    """True ONLY when the lead's ``customer_type`` explicitly marks it as a studio /
+    shop / business partner — the one case peer-studio (B2B) framing is legitimate.
+    Unknown or blank types default to CUSTOMER framing (65w.13 bug 3, fail-safe: a
+    studio greeted like a customer reads merely generic; a past customer greeted as
+    a peer studio is a client-facing embarrassment)."""
+    ct = " ".join(str(facts.get("customer_type") or "").strip().lower().split())
+    return ct in _STUDIO_LEAD_TYPES
+
+
 def _template_outreach(
     facts: dict[str, Any], *, goal: str, ch: str, angle: dict[str, Any], offer: Any = None,
+    sender_city: str | None = None,
 ) -> tuple[str | None, str]:
     """Deterministic fallback copy (no model): honest, grounded only in real facts,
     and SHAPED BY THE PER-LEAD ANGLE so two leads do not collapse to one template.
@@ -909,7 +928,14 @@ def _template_outreach(
     invents a recipient detail — opener, detail, and subject are keyed off the angle
     chosen from this lead's real differentiators (and honestly generic when thin). An
     objection angle references the REAL ``offer`` (code + terms) ONLY when one was passed;
-    with no offer it stays a genuine low-commitment nudge, never a fabricated discount."""
+    with no offer it stays a genuine low-commitment nudge, never a fabricated discount.
+
+    COPY-SAFETY (65w.13): ``goal`` is the operator's INTERNAL objective — it is
+    deliberately never spliced into the customer-facing body (bug 1). The sender's
+    location comes ONLY from ``sender_city`` (tenant/studio config); when unknown the
+    phrase is omitted — the recipient's own city is never presented as ours (bug 2).
+    Peer-studio ("one studio to another") framing is used ONLY for an explicit studio
+    lead (:func:`_is_studio_lead`); every other lead gets customer framing (bug 3)."""
     name = (facts.get("name") or "there").strip()
     first = name.split()[0] if name else "there"
     traits = facts.get("persona_traits", {}) or {}
@@ -921,8 +947,13 @@ def _template_outreach(
     tattoos = facts.get("tattoo_history", []) or []
     last_style = tattoos[0]["style"] if tattoos and tattoos[0].get("style") else None
 
-    city_phrase = f" over in {city}" if city else ""
-    goal_line = (goal or "open a genuine conversation").strip()
+    # Sender location: ONLY the explicitly-provided sender city (never facts["city"],
+    # which is the RECIPIENT's). Unknown -> omit the phrase entirely, never fabricate.
+    _sender = (sender_city or "").strip()
+    city_phrase = f" over in {_sender}" if _sender else ""
+    # "We're local" claims are honest only when the sender's city is known AND matches.
+    same_city = bool(_sender) and bool(city) and _sender.lower() == str(city).strip().lower()
+    is_studio = _is_studio_lead(facts)
     key = angle["key"]
     offer_phrase = _offer_phrase(offer)
     # A warm-lead objection/category angle writes to a CUSTOMER, not a peer studio; the
@@ -964,33 +995,67 @@ def _template_outreach(
         opener = f"Hi {first}, your last {last_style} piece stuck with me."
         detail = " It's the kind of work we love to see."
     elif key == "shared-craft" and top_interest:
-        opener = f"Hi {first}, looks like we share a soft spot for {top_interest}."
-        detail = " We spend a lot of our time there too."
+        # Recipient-centered: their interest grounds the copy, but we never assert the
+        # SENDER's own affinity/presence from recipient-row data ("we share a soft spot…
+        # we spend a lot of our time there") — with a place-bearing interest that became
+        # an implied false sender-location claim (same class as bug 2).
+        opener = f"Hi {first}, saw you're into {top_interest} and wanted to say hello."
+        detail = ""
     elif key == "re-engagement":
         opener = f"Hi {first}, it's been a while and we've been thinking about you."
         detail = ""
     elif key == "csv-note" and notes:
-        opener = f"Hi {first}, reaching out from one studio to another."
-        detail = f" Saw on our end you're {notes.lower()}."
+        # B2B intro only for an actual studio lead; a customer gets a plain, warm reach-out.
+        opener = (
+            f"Hi {first}, reaching out from one studio to another."
+            if is_studio else f"Hi {first}, wanted to reach out."
+        )
+        # The CRM note is staff-written INTERNAL text ("hesitated when we talked
+        # price") — it grounds the ANGLE and the operator-facing rationale but is
+        # never quoted into the outgoing body (same exposes-internal-wording class
+        # as the goal leak, bug 1). Applies to B2B leads too: notes are internal.
+        detail = ""
     elif key == "their-positioning":
-        opener = f"Hi {first}, came across {name} and wanted to say hello."
+        # For a person, "came across <full name>" reads like a mail-merge; ground the
+        # same research signal as "came across your work" instead.
+        opener = (
+            f"Hi {first}, came across {name} and wanted to say hello."
+            if is_studio else f"Hi {first}, came across your work and wanted to say hello."
+        )
         detail = ""
     elif key == "local" and city:
-        opener = f"Hi {first}, fellow {city} studio here, saying hello."
+        # A "we're local too" claim is only honest when the SENDER's city is known and
+        # actually matches the recipient's — otherwise say hello without claiming to be
+        # local (the recipient's own city is fine to mention AS the recipient's).
+        # On a genuine match, render OUR canonical city string (_sender) — never the
+        # recipient row's raw casing/whitespace as the sender's own identity.
+        if is_studio and same_city:
+            opener = f"Hi {first}, fellow {_sender} studio here, saying hello."
+        elif same_city:
+            opener = f"Hi {first}, we're over in {_sender} too — wanted to say hello."
+        elif is_studio:
+            opener = f"Hi {first}, came across {name} and wanted to say hello."
+        else:
+            opener = f"Hi {first}, hope {city} is treating you well — wanted to say hello."
         detail = ""
     else:  # generic — honest general intro, no manufactured specifics
-        opener = f"Hi {first}, I'm reaching out from one studio to another."
+        opener = (
+            f"Hi {first}, I'm reaching out from one studio to another."
+            if is_studio else f"Hi {first}, wanted to reach out and say hello."
+        )
         detail = ""
 
     # The CTA + opt-out line are added by _finalize_outreach_body so there is ONE
     # place that guarantees a clear next step and a resolved (never raw-token) opt-out.
+    # COPY-SAFETY: the closing NEVER contains the internal campaign goal (bug 1); the
+    # "I run a small studio…" self-intro is peer-studio copy, so customers instead get
+    # a warm studio line (the finalizer still appends the real CTA after it).
     if warm_key:
         body = f"{opener}{detail}"
+    elif is_studio:
+        body = f"{opener}{detail} I run a small studio{city_phrase} and wanted to say hello."
     else:
-        body = (
-            f"{opener}{detail} I run a small studio{city_phrase} and wanted to say hello "
-            f"and {goal_line}."
-        )
+        body = f"{opener}{detail} We'd love to see you at the studio whenever it suits."
     body = " ".join(body.split())
 
     subject = None
@@ -1008,13 +1073,32 @@ def _template_outreach(
             "completion-nudge": f"{first}, finishing your booking",
             "win-back": f"{first}, it's been too long",
             "offer-win-back": f"{first}, it's been too long",
-            "their-positioning": f"Reaching out to {name}",
+            "their-positioning": (
+                f"Reaching out to {name}" if is_studio else f"{first}, came across your work"
+            ),
             "past-work": f"{first}, about your last piece",
-            "shared-craft": f"{first}, kindred {top_interest or 'studio'} folks",
+            # "kindred … folks" asserted mutual affinity from recipient-row data (and,
+            # with a place-bearing interest, implied sender presence) — the subject is
+            # recipient-centered for EVERY audience. "Fellow <city> studio" / "one
+            # studio to another" are peer-studio subjects — customers get customer-safe
+            # ones (65w.13 bug 3; never the recipient's city presented as ours, bug 2).
+            "shared-craft": (
+                f"{first}, about {top_interest}" if top_interest else f"Hello, {first}"
+            ),
             "re-engagement": f"{first}, it's been too long",
             "csv-note": f"A quick hello, {first}",
-            "local": f"Fellow {city} studio saying hi" if city else f"Hello, {first}",
-            "generic": f"An intro, one studio to another, {first}",
+            "local": (
+                # "Fellow <city> studio" only when we genuinely ARE a studio in that
+                # city (sender city known + matching) — rendered with OUR canonical
+                # city string, never the recipient row's raw one (bug 2).
+                f"Fellow {_sender} studio saying hi"
+                if (is_studio and same_city)
+                else (f"Hello, {first}" if is_studio else f"A hello from the studio, {first}")
+            ),
+            "generic": (
+                f"An intro, one studio to another, {first}" if is_studio
+                else f"Hello from the studio, {first}"
+            ),
         }
         subject = (subj_by_key.get(key) or f"Hello, {first}").strip()[:60]
     return subject, body
