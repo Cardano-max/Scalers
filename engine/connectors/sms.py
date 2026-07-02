@@ -205,6 +205,18 @@ class TwilioSmsConnector(GatedConnector):
                 real_to=to,
             )
 
+        # Tenant redirect PIN (fr1.4 AC-4): a pinned tenant (e.g. SDT in test
+        # mode) can never go live until a per-campaign operator flip — the pin
+        # is a tenant-level invariant above the env/live flag. Only checked on a
+        # live request; the redirected sandbox path is unaffected.
+        if live:
+            from ops.redirects import RedirectPinnedError, assert_send_not_pinned_live
+
+            try:
+                assert_send_not_pinned_live(tenant_id, "sms", live, dsn=dsn)
+            except RedirectPinnedError as exc:
+                return SmsSendResult(SmsSendStatus.BLOCKED, None, str(exc), real_to=to)
+
         redirect = os.environ.get("SMS_REDIRECT_TO")
         if live:
             mode, dispatch_to, dispatch_body = "live", to, final_body

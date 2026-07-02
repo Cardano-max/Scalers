@@ -107,6 +107,27 @@ class MemoryStore:
                     ON memories (tenant_id, subject_type, COALESCE(subject_id, ''), content_hash);
                 """
             )
+            # Row-Level Security backstop (fr1.4 §4.4): memories is created here
+            # (not initdb), so its RLS travels with the table. A NOSUPERUSER
+            # scalers_app connection with `app.current_tenant` set sees/writes
+            # only its tenant's rows; superusers bypass by design (the DAL filter
+            # is the always-on guarantee). Idempotent (DROP POLICY IF EXISTS).
+            conn.execute(
+                """
+                DO $$
+                BEGIN
+                    GRANT SELECT, INSERT, UPDATE, DELETE ON memories TO scalers_app;
+                EXCEPTION WHEN insufficient_privilege OR undefined_object THEN
+                    RAISE NOTICE 'skipping memories grant to scalers_app; RLS still enforced';
+                END $$;
+                ALTER TABLE memories ENABLE ROW LEVEL SECURITY;
+                ALTER TABLE memories FORCE ROW LEVEL SECURITY;
+                DROP POLICY IF EXISTS memories_tenant_isolation ON memories;
+                CREATE POLICY memories_tenant_isolation ON memories
+                    USING (tenant_id = current_setting('app.current_tenant', true))
+                    WITH CHECK (tenant_id = current_setting('app.current_tenant', true));
+                """
+            )
 
     def write(
         self,

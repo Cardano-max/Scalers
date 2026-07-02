@@ -44,9 +44,18 @@ def _connect(dsn: str | None = None):
 
 
 def ensure_schema(dsn: str | None = None) -> None:
-    """Idempotently create the ``tenants`` table."""
+    """Idempotently create the ``tenants`` table (+ the fr1.4 redirect-pin
+    columns, added here so the runtime twin matches ``18-tenant-isolation.sql``)."""
     with _connect(dsn) as conn:
         conn.execute(_DDL)
+        conn.execute(
+            "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS"
+            " sms_redirect_pinned boolean NOT NULL DEFAULT false"
+        )
+        conn.execute(
+            "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS"
+            " gmail_redirect_pinned boolean NOT NULL DEFAULT false"
+        )
 
 
 def upsert_tenant(
@@ -55,30 +64,35 @@ def upsert_tenant(
     *,
     test_mode: bool | None = None,
     allowlist: list[str] | None = None,
+    sms_redirect_pinned: bool | None = None,
+    gmail_redirect_pinned: bool | None = None,
     dsn: str | None = None,
 ) -> dict[str, Any]:
-    """Create or update a tenant row. ``test_mode``/``allowlist`` update only when
-    passed (None leaves the persisted value alone — a re-import can never silently
-    un-hold a tenant)."""
+    """Create or update a tenant row. Every optional field updates only when
+    passed (None leaves the persisted value alone — a re-import can never
+    silently un-hold a tenant or un-pin a redirect)."""
     ensure_schema(dsn)
+    allow_json = json.dumps(allowlist) if allowlist is not None else None
     with _connect(dsn) as conn:
         conn.execute(
             """
-            INSERT INTO tenants (id, name, test_mode, test_send_allowlist)
-            VALUES (%s, %s, COALESCE(%s, TRUE), COALESCE(%s::jsonb, '[]'::jsonb))
+            INSERT INTO tenants (id, name, test_mode, test_send_allowlist,
+                sms_redirect_pinned, gmail_redirect_pinned)
+            VALUES (%s, %s, COALESCE(%s, TRUE), COALESCE(%s::jsonb, '[]'::jsonb),
+                COALESCE(%s, FALSE), COALESCE(%s, FALSE))
             ON CONFLICT (id) DO UPDATE SET
                 name = EXCLUDED.name,
                 test_mode = COALESCE(%s, tenants.test_mode),
                 test_send_allowlist = COALESCE(%s::jsonb, tenants.test_send_allowlist),
+                sms_redirect_pinned = COALESCE(%s, tenants.sms_redirect_pinned),
+                gmail_redirect_pinned = COALESCE(%s, tenants.gmail_redirect_pinned),
                 updated_at = now()
             """,
             (
-                tenant_id,
-                name,
-                test_mode,
-                json.dumps(allowlist) if allowlist is not None else None,
-                test_mode,
-                json.dumps(allowlist) if allowlist is not None else None,
+                tenant_id, name, test_mode, allow_json,
+                sms_redirect_pinned, gmail_redirect_pinned,
+                test_mode, allow_json,
+                sms_redirect_pinned, gmail_redirect_pinned,
             ),
         )
     return get_tenant(tenant_id, dsn=dsn)  # type: ignore[return-value]
@@ -91,7 +105,8 @@ def get_tenant(tenant_id: str, dsn: str | None = None) -> dict[str, Any] | None:
     try:
         with _connect(dsn) as conn:
             row = conn.execute(
-                "SELECT id, name, test_mode, test_send_allowlist FROM tenants WHERE id=%s",
+                "SELECT id, name, test_mode, test_send_allowlist,"
+                " sms_redirect_pinned, gmail_redirect_pinned FROM tenants WHERE id=%s",
                 (tenant_id,),
             ).fetchone()
     except Exception:
