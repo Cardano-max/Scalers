@@ -29,6 +29,7 @@ import { StepSpanRow } from './StepSpanRow';
 import { ResearchSourcesRail } from './ResearchSourcesRail';
 import { SpecArtifactCard } from './SpecArtifactCard';
 import { StagedDraftsReview } from './StagedDraftsReview';
+import { CountReconciliationPanel } from './CountReconciliationPanel';
 import { CampaignSendControls } from './CampaignSendControls';
 
 const TEAL = '#0F8A82';
@@ -200,6 +201,12 @@ export function AgencyCanvas({
           nPending={runState.nPending}
           onOpenReview={onOpenReview}
         />
+      )}
+
+      {/* Draft-count reconciliation (sgr): requested vs created / in-queue / skipped /
+          failed with per-row reasons — the same numbers the review queue + voice use. */}
+      {juryDone && runState?.reconciliation && (
+        <CountReconciliationPanel reconciliation={runState.reconciliation} />
       )}
 
       {/* Result / review mode: the run is done — surface each real HELD draft with

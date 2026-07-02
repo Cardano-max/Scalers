@@ -46,6 +46,32 @@ export interface NarrationLine {
   failed: boolean;
 }
 
+/** One row that was NOT drafted, with the exact reason (skipped) or failure. */
+export interface ReconcileRow {
+  row: number | null;
+  lead: string | null;
+  reason: string;
+}
+
+/**
+ * Draft-count reconciliation (sgr): every requested row accounted for as created OR
+ * skipped OR failed — with per-row reasons — so the operator (and voice) sees the same
+ * count the review queue holds. Sourced from campaign_state.reconciliation (DB only).
+ */
+export interface Reconciliation {
+  requested: number;
+  expected: number;
+  created: number;
+  inQueue: number;
+  approved: number;
+  sent: number;
+  rejected: number;
+  skipped: ReconcileRow[];
+  failed: ReconcileRow[];
+  accounted: number;
+  reconciled: boolean;
+}
+
 export interface RunState {
   runId: string;
   status: RunStatus;
@@ -62,6 +88,8 @@ export interface RunState {
   blueprint?: CampaignBlueprint | null;
   /** P1.5: the durable structured progress board for this run (null when none). */
   board?: ProgressBoard | null;
+  /** sgr: draft-count reconciliation (requested vs created/in-queue/skipped/failed). */
+  reconciliation?: Reconciliation | null;
   error: string | null;
 }
 
@@ -111,6 +139,8 @@ export async function fetchRunState(
     archetype?: string | null;
     blueprint?: CampaignBlueprint | null;
     board?: ProgressBoard | null;
+    // campaign_state block (voice/reconciliation live-state surface).
+    state?: { reconciliation?: Reconciliation | null } | null;
     error?: string | null;
   };
   return {
@@ -123,6 +153,8 @@ export async function fetchRunState(
     archetype: d.archetype ?? null,
     blueprint: d.blueprint ?? null,
     board: d.board ?? null,
+    // Reconciliation comes from the campaign_state block the endpoint attaches.
+    reconciliation: d.state?.reconciliation ?? null,
     error: d.error ?? null,
   };
 }
