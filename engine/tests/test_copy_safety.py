@@ -291,3 +291,80 @@ def test_historyless_sms_shaped_draft_has_no_history_or_social_claim() -> None:
     text = f"{draft.get('subject') or ''}\n{draft.get('draft') or ''}"
     # No fabricated "your last tattoo" / "I saw your Instagram" for a contact-only lead.
     assert personalization_violations(text, lead) == []
+
+
+# ── ju1.4 FLAG A: _build_email_prompt must gate peer-studio framing on lead TYPE ──
+# (65w.13 left this: the LLM prompt framed a COLD lead as "a REAL tattoo studio" based
+# only on profile-presence. A cold CONSUMER — every skindesign customer — was mis-framed.)
+
+from studio.customer_research import _build_email_prompt, _choose_angle  # noqa: E402
+
+
+def _prompt_for(customer_type: str) -> str:
+    facts = _customer(customer_type=customer_type, city="Austin")
+    angle = _choose_angle(facts, [])
+    # profile=None -> the COLD path (the one that used to hardcode studio framing).
+    return _build_email_prompt(facts, goal=GOAL, research=[], angle=angle, profile=None)
+
+
+def test_cold_consumer_prompt_is_not_framed_as_a_studio() -> None:
+    # A cold consumer lead (a normal person) must NOT be described to the model as a
+    # tattoo studio / business — it's a prospective client.
+    prompt = _prompt_for("lapsed customer")
+    assert "a REAL tattoo studio" not in prompt
+    assert "NOT a business or studio" in prompt
+    assert "prospective client" in prompt
+
+
+def test_cold_unknown_type_defaults_to_person_framing() -> None:
+    # Blank/unknown customer_type is the fail-safe: person framing, never peer-studio.
+    prompt = _prompt_for("")
+    assert "a REAL tattoo studio" not in prompt
+    assert "REAL PERSON" in prompt
+
+
+def test_cold_explicit_studio_lead_keeps_peer_framing() -> None:
+    # An explicit studio/B2B lead legitimately keeps peer-studio framing.
+    prompt = _prompt_for("studio")
+    assert "a REAL tattoo studio" in prompt
+
+
+def test_flag_a_regression_would_fail_on_old_gate() -> None:
+    # Documents the bug: consumer and studio prompts must DIFFER in framing. On the
+    # unpatched code both took the identical cold branch ("a REAL tattoo studio").
+    assert _prompt_for("lapsed customer") != _prompt_for("studio")
+
+
+# ── ju1.4 FLAG B: sender_city has a real resolver, but is NEVER fabricated ─────
+# (65w.13 left sender_city with no production caller. build_outreach_draft now resolves
+# it from pack config; a MULTI-LOCATION tenant like skindesign has no single city, so it
+# stays omitted — the safe default — and is never derived from the recipient row.)
+
+from studio.customer_research import _resolve_sender_city  # noqa: E402
+
+
+def test_sender_city_omitted_for_multilocation_tenant() -> None:
+    # skindesign is multi-location; no single canonical sender city is configured, so the
+    # resolver returns None (the location phrase is omitted, never fabricated).
+    assert _resolve_sender_city("skindesign") is None
+    assert _resolve_sender_city(None) is None
+
+
+def test_sender_city_forwarded_when_pack_config_carries_one(monkeypatch) -> None:
+    # A genuinely single-location tenant whose pack config carries a real city: the
+    # resolver reads it (giving sender_city a real production caller path).
+    from types import SimpleNamespace as NS
+
+    import studio.customer_research as cr
+
+    monkeypatch.setattr(
+        "config.loader.load_pack", lambda tid: NS(sender_city="Nashville"), raising=False)
+    assert cr._resolve_sender_city("single_loc_tenant") == "Nashville"
+
+
+def test_build_outreach_draft_never_uses_recipient_city_as_sender() -> None:
+    # End-to-end: even with a recipient in Brooklyn, the draft never claims the SENDER is
+    # in Brooklyn (sender_city resolves from config, not facts['city']).
+    lead = _customer(city="Brooklyn", customer_type="lapsed customer")
+    draft = build_outreach_draft(lead, goal=GOAL, plan_channels=["email"])
+    _assert_customer_safe(draft.get("subject"), draft.get("draft") or "")

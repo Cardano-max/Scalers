@@ -746,6 +746,13 @@ def _build_email_prompt(
     voiced is surfaced as context, and any REAL ``offer`` is the ONLY discount that may be
     mentioned. Personalization stays ethical — never 'I looked at your Instagram'."""
     warm = profile is not None
+    # FLAG A fix (65w.13, wired by ju1.4): peer-studio (B2B) framing must gate on the
+    # lead's REAL type, not merely on profile-presence — else a COLD CONSUMER lead (no
+    # psych profile yet, a normal person) was told the model it was writing "to a REAL
+    # tattoo studio". skindesign customers are ALL consumers. Mirrors the deterministic
+    # twin _template_outreach, which already gates on _is_studio_lead. Unknown/blank
+    # customer_type -> False -> person framing (fail-safe).
+    is_studio = _is_studio_lead(facts)
     objection = ""
     if warm:
         objection, _sig, _ = _pf(profile, "primary_objection")
@@ -822,12 +829,21 @@ def _build_email_prompt(
             "someone who previously enquired or visited. Write it as a genuine, human "
             "follow-up that could only have been written to THIS person; never a template."
         )
-    else:
+    elif is_studio:
         intro = (
             "You are writing ONE short, warm cold-outreach EMAIL, in the BRAND VOICE "
             "above, to a REAL tattoo studio (the recipient). Treat this as a genuine first "
             "introduction (purpose = intro), and make it UNMISTAKABLY for this specific "
             "recipient — not a template with the name swapped."
+        )
+    else:
+        intro = (
+            "You are writing ONE short, warm cold-outreach EMAIL, in the BRAND VOICE "
+            "above, to a REAL PERSON — a prospective client (the recipient), NOT a "
+            "business or studio. Treat this as a genuine first introduction (purpose = "
+            "intro), and make it UNMISTAKABLY for this specific person — not a template "
+            "with the name swapped. NEVER address or describe them as a studio/shop/"
+            "business, and never imply they run one."
         )
 
     # Warm-lead context: the objection they voiced + where they sit + the honest angle,
@@ -920,6 +936,29 @@ def _is_studio_lead(facts: dict[str, Any]) -> bool:
     a peer studio is a client-facing embarrassment)."""
     ct = " ".join(str(facts.get("customer_type") or "").strip().lower().split())
     return ct in _STUDIO_LEAD_TYPES
+
+
+def _resolve_sender_city(tenant_id: str | None) -> str | None:
+    """The SENDER studio's real city for location phrasing ("we're local", "fellow
+    {city} studio"), resolved from tenant/pack config — or ``None`` (FLAG B, 65w.13).
+
+    Honest posture, never fabricate: a tenant's sender city is used ONLY when the pack
+    config carries a real single-location city. A MULTI-LOCATION tenant (e.g. skindesign:
+    Spring Mountain / OC / Soho / Hawaii / NY / Nashville) has no single canonical sender
+    city, so this returns ``None`` and the location phrase is omitted (the safe default).
+    This is the one production caller that gives ``_template_outreach``'s ``sender_city``
+    a real resolution path; it is NEVER derived from the recipient row (``facts['city']``,
+    bug 2). When a single-location tenant's real city is added to pack config, read it here."""
+    if not tenant_id:
+        return None
+    try:
+        from config.loader import load_pack
+
+        pack = load_pack(tenant_id)
+        city = getattr(pack, "sender_city", None)
+        return city.strip() if isinstance(city, str) and city.strip() else None
+    except Exception:
+        return None
 
 
 def _template_outreach(
@@ -1222,6 +1261,7 @@ def build_outreach_draft(
     research: list[dict[str, Any]] | None = None,
     profile: Any = None,
     offer: Any = None,
+    sender_city: str | None = None,
 ) -> dict[str, Any]:
     """Build ONE personalized outreach draft for a lead — REAL copywriter-written,
     brand-voiced, and grounded only in facts the system can substantiate.
@@ -1355,7 +1395,10 @@ def build_outreach_draft(
 
     # --- deterministic fallback (no key / non-email channel / cell failed) ------- #
     if body is None:
-        subject, body = _template_outreach(facts, goal=goal, ch=ch, angle=angle, offer=offer)
+        subject, body = _template_outreach(
+            facts, goal=goal, ch=ch, angle=angle, offer=offer,
+            sender_city=sender_city if sender_city is not None else _resolve_sender_city(tenant_id),
+        )
         if not any(g.startswith("copy=") for g in grounding):
             grounding.append("copy=deterministic_template")
         # Truthful provenance: a template wrote this, not a model.
