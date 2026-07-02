@@ -82,10 +82,14 @@ class Calibration:
 
     def apply(self, x: float) -> float:
         x = max(0.0, min(1.0, x))
-        for upper, acc in self.bins:
-            if x <= upper:
-                return acc
-        return x  # identity outside any fitted bin (incl. the default empty map)
+        if not self.bins:
+            return x  # identity default (empty map)
+        # Index EXACTLY as fit() buckets (left-inclusive, last bin closed): a value
+        # on a bin edge (e.g. 0.9) must land in the same bin it was fitted into.
+        # The previous right-inclusive scan (x <= upper) mapped edge values one bin
+        # LOW, silently dropping their fitted correction (rvy.8 QA finding).
+        idx = min(len(self.bins) - 1, int(x * len(self.bins)))
+        return self.bins[idx][1]
 
     @classmethod
     def fit(cls, pairs: Sequence[tuple[float, bool]], *, n_bins: int = 10) -> "Calibration":

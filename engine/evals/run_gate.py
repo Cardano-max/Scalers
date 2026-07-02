@@ -11,16 +11,24 @@ Usage (run inside engine/, with the KB reachable):
 
 No ENGINE_DATABASE_URL -> SKIP (neutral, exit 0): the gate never false-fails when
 the KB is unavailable, mirroring the done-gate's graceful-skip discipline.
+
+Also runs the rvy.8 REAL calibration gate (D2-as-amended, evals/calibration.py)
+additively after the registry gates: exit 1 if EITHER gate FAILs; both messages
+are printed. ``CALIBRATION_GATE=0`` disables it (default on). Today the
+calibration lane SKIPs (neutral): the real jury quality (4jx.2 aggregate) is not
+recorded for gold examples in the eval lane yet and fabricating confidence is
+forbidden — blocking flips live the moment real pairs flow.
 """
 
 from __future__ import annotations
 
 import os
 
+from evals.calibration import deterministic_probe_confidence_fn, run_calibration_gate
 from evals.predictors import cell_predictor, regressed_cell_predictor
 from evals.gate import run_eval_gate
 from evals.smoke_gold_set import SMOKE_TENANT, load_smoke_gold_set
-from kb.schema import RunKind
+from kb.schema import Engine, RunKind
 
 
 def main() -> int:
@@ -43,7 +51,29 @@ def main() -> int:
         run_kind=RunKind.PER_COMMIT, git_sha=os.environ.get("GIT_SHA"),
     )
     print(result.message())
-    return 1 if result.verdict == "FAIL" else 0
+    failed = result.verdict == "FAIL"
+
+    # rvy.8: REAL calibration gate (additive; CALIBRATION_GATE=0 disables).
+    # The confidence source is the real 4jx.3 pipeline (K deterministic predictor
+    # probes -> self-consistency, pooled with jury quality). No real jury quality
+    # is recorded for gold examples in the eval lane yet (4jx.2 integration
+    # pending) and fabricating one is forbidden, so jury_quality_source stays
+    # None -> zero pairs -> SKIP (neutral). A FAIL here reds the build.
+    if os.environ.get("CALIBRATION_GATE", "1") != "0":
+        cal_result = run_calibration_gate(
+            store,
+            tenant_id=SMOKE_TENANT,
+            engine=Engine.ENGAGEMENT,
+            cell="triage",
+            dimension="triage_class",
+            predictor=predictor,
+            confidence_fn=deterministic_probe_confidence_fn(predictor, jury_quality_source=None),
+            git_sha=os.environ.get("GIT_SHA"),
+        )
+        print(cal_result.message())
+        failed = failed or cal_result.verdict == "FAIL"
+
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
