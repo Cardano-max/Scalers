@@ -2153,6 +2153,58 @@ async def run_campaign(ctx: RunContext[StudioDeps]) -> str:
     return _summary_text(summary)
 
 
+@studio_agent.tool
+async def generate_example_campaign(
+    ctx: RunContext[StudioDeps],
+    artist: str,
+    offer_price_usd: int | None = None,
+    payment_plan: str | None = None,
+    spots: int | None = None,
+    follow_up: bool = True,
+) -> str:
+    """Generate an EXAMPLE-GROUNDED campaign for one ARTIST, built on that artist's REAL
+    past campaigns (the ju1.4 generator). Call this when the operator asks to generate /
+    create / write a campaign FOR a specific artist (e.g. "generate an Angel $1200
+    full-day-special campaign", "write a campaign for Bella").
+
+    Produces an SMS opener + scarcity follow-up (plus email variants), each mirroring the
+    artist's real opener/follow-up examples and CITING the real campaign-example ids,
+    staged HELD in the Review Queue — nothing is sent and the test-mode gate still refuses
+    every live send. OFFER DISCIPLINE: pass ``offer_price_usd`` / ``payment_plan`` /
+    ``spots`` ONLY when the operator actually stated them — NEVER invent a price or a spot
+    count; with no offer the copy carries no price. An artist with no examples is generated
+    from the studio's overall patterns, stated honestly. Returns a short honest summary."""
+    from studio.campaign_generator import generate_campaign, stage_campaign
+
+    def _run() -> tuple[Any, str, list[str]]:
+        campaign = generate_campaign(
+            ctx.deps.tenant_id, artist=artist, offer_price_usd=offer_price_usd,
+            payment_plan=payment_plan, spots=spots, follow_up=follow_up, dsn=ctx.deps.dsn,
+        )
+        run_id = f"studio-gen-{ctx.deps.session_id}-{uuid.uuid4().hex[:8]}"
+        staged = stage_campaign(campaign, run_id=run_id, dsn=ctx.deps.dsn)
+        return campaign, run_id, staged
+
+    campaign, run_id, staged = await asyncio.to_thread(_run)
+    await asyncio.to_thread(
+        _log_turn, ctx.deps.dsn, ctx.deps.session_id, "host",
+        f"[generate] {artist} example-grounded campaign: {len(staged)} draft(s) staged "
+        f"HELD (run {run_id}); grounded on examples {campaign.grounded_example_ids}",
+        HOST_AGUI_MODEL,
+    )
+    ex = ", ".join(campaign.grounded_example_ids) or "none on file for this artist"
+    lines = [
+        campaign.pattern_summary,
+        "",
+        f"I staged {len(staged)} draft(s) for {artist} into your Review Queue, HELD for "
+        "your approval — nothing is sent (test mode refuses every live send). Each draft is "
+        f"grounded in {artist}'s real past examples: {ex}.",
+    ]
+    if campaign.notes:
+        lines.append("Notes: " + " ".join(campaign.notes))
+    return "\n".join(lines)
+
+
 @studio_agent.tool(requires_approval=True)
 async def stage_publish(
     ctx: RunContext[StudioDeps], channel: str, draft: str, target: str | None = None

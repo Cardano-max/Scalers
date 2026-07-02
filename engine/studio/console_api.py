@@ -166,6 +166,25 @@ def action_lineage(action_id: str) -> dict:
     customer_id = dossier.get("customer_id")
     source_file, artist, studio = _customer_lineage(action.tenant_id, customer_id, email)
 
+    # Per-draft example provenance (ju1.7 wiring of the ju1.4 generator): a draft staged
+    # by the example-grounded campaign_generator carries the REAL campaign-example ids it
+    # was built on in ``context.grounded_example_ids``. Resolve them to their real names so
+    # the lineage panel shows exactly which past campaigns grounded this draft. Honest-empty
+    # for any other draft (per-lead outreach has no campaign-example provenance).
+    ctx_all: dict[str, Any] = {}
+    if action.context:
+        try:
+            _c = json.loads(action.context)
+            ctx_all = _c if isinstance(_c, dict) else {}
+        except (ValueError, TypeError):
+            ctx_all = {}
+    examples = _resolve_example_lineage(action.tenant_id, ctx_all.get("grounded_example_ids"))
+    # The campaign_generator records the operator's offer on the action context too.
+    if offer is None and ctx_all.get("offer_price_usd"):
+        offer = f"${int(ctx_all['offer_price_usd']):,}"
+    if not artist and ctx_all.get("artist"):
+        artist = ctx_all["artist"]
+
     return {
         "actionId": action.id,
         "runId": action.run_id,
@@ -176,12 +195,49 @@ def action_lineage(action_id: str) -> dict:
         "studio": studio,
         "offer": offer,
         "cta": cta,
-        # Per-draft example provenance is ju1.4's generator wiring; until it lands
-        # this is honestly empty and the console says so.
-        "examples": [],
+        # Real per-draft campaign-example provenance (ju1.7). Empty for non-generator drafts.
+        "examples": examples,
         "limitedPersonalization": dossier.get("limited_personalization"),
         "personalizationNote": dossier.get("personalization_note"),
     }
+
+
+def _resolve_example_lineage(
+    tenant_id: str, example_ids: Any
+) -> list[dict[str, Any]]:
+    """Resolve grounded campaign-example ids to their REAL names for the lineage panel.
+
+    ``example_ids`` is the ``context.grounded_example_ids`` list a campaign_generator draft
+    carries (ju1.4). Returns ``[{id, campaignName, artist}]`` in the given order, dropping
+    any id no longer on file. Honest-empty ``[]`` when there are none or on any store
+    hiccup — never a fabricated example."""
+    if not isinstance(example_ids, (list, tuple)) or not example_ids:
+        return []
+    ids = [str(i) for i in example_ids if str(i or "").strip()]
+    if not ids:
+        return []
+    try:
+        from studio.campaign_examples_store import _connect
+
+        with _connect(None) as conn:
+            rows = conn.execute(
+                "SELECT id, campaign_name, artist_name FROM campaign_examples "
+                "WHERE tenant_id = %s AND id = ANY(%s)",
+                (tenant_id, ids),
+            ).fetchall()
+        by_id = {r["id"]: r for r in rows}
+        out: list[dict[str, Any]] = []
+        for i in ids:  # preserve the draft's grounding order
+            r = by_id.get(i)
+            if r is not None:
+                # Shape matches the ju1.5 LineagePanel contract (id + campaign_name).
+                out.append({
+                    "id": r["id"], "campaign_name": r["campaign_name"],
+                    "artist": r["artist_name"],
+                })
+        return out
+    except Exception:
+        return []
 
 
 def _customer_lineage(
