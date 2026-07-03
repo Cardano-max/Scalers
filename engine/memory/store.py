@@ -48,6 +48,7 @@ class Memory:
     subject_id: str | None
     metadata: dict[str, Any] = field(default_factory=dict)
     similarity: float | None = None
+    is_test: bool = False
 
 
 def _dsn(dsn: str | None) -> str:
@@ -97,8 +98,13 @@ class MemoryStore:
                     embedding     vector(384),
                     metadata      JSONB NOT NULL DEFAULT '{}'::jsonb,
                     content_hash  TEXT NOT NULL,
+                    is_test       BOOLEAN NOT NULL DEFAULT false,
                     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
                 );
+                -- Idempotent additive migration for EXISTING tables (the live
+                -- cluster predates is_test; the CREATE above is a no-op there).
+                ALTER TABLE memories
+                    ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false;
                 CREATE INDEX IF NOT EXISTS memories_tenant_idx
                     ON memories (tenant_id);
                 CREATE INDEX IF NOT EXISTS memories_subject_idx
@@ -116,13 +122,16 @@ class MemoryStore:
         subject_id: str | None,
         text: str,
         metadata: dict[str, Any] | None = None,
+        is_test: bool = False,
     ) -> str:
         """Write (idempotently upsert) one memory and return its id.
 
         Idempotent on the natural key ``(tenant_id, subject_type,
         COALESCE(subject_id,''), content_hash)`` — re-writing the same fact refreshes
         the row instead of duplicating. The text is embedded with the REAL 384-dim
-        model; a dim mismatch raises (never truncates)."""
+        model; a dim mismatch raises (never truncates). ``is_test=True`` marks a
+        synthetic/test artifact that recall excludes by default (wwy.9, mirrors
+        the fr1.3 contact_memories de-pollution)."""
         if subject_type not in VALID_SUBJECT_TYPES:
             raise ValueError(
                 f"subject_type {subject_type!r} not in {sorted(VALID_SUBJECT_TYPES)}"
@@ -141,17 +150,18 @@ class MemoryStore:
                 """
                 INSERT INTO memories
                     (id, tenant_id, subject_type, subject_id, text, embedding,
-                     metadata, content_hash)
-                VALUES (%s, %s, %s, %s, %s, %s::vector, %s, %s)
+                     metadata, content_hash, is_test)
+                VALUES (%s, %s, %s, %s, %s, %s::vector, %s, %s, %s)
                 ON CONFLICT (tenant_id, subject_type, COALESCE(subject_id, ''), content_hash)
                 DO UPDATE SET text = EXCLUDED.text,
                               embedding = EXCLUDED.embedding,
-                              metadata = EXCLUDED.metadata
+                              metadata = EXCLUDED.metadata,
+                              is_test = EXCLUDED.is_test
                 RETURNING id
                 """,
                 (
                     mem_id, tenant_id, subject_type, subject_id, text,
-                    to_pgvector(vec), Json(metadata or {}), chash,
+                    to_pgvector(vec), Json(metadata or {}), chash, is_test,
                 ),
             ).fetchone()
         return row["id"]
@@ -164,21 +174,26 @@ class MemoryStore:
         subject_type: str | None = None,
         subject_id: str | None = None,
         k: int = 5,
+        include_test: bool = False,
     ) -> list[Memory]:
         """Top-``k`` memories nearest to ``query`` by cosine similarity, tenant-scoped
         and optionally filtered to a subject. Empty / new tenant returns ``[]``
-        (never raises). Mirrors :meth:`kb.store.KbStore.voice_exemplars`."""
+        (never raises). Mirrors :meth:`kb.store.KbStore.voice_exemplars`. Recall
+        EXCLUDES ``is_test`` artifacts by default so a ``test_mem_*`` row can never
+        ground a real draft; pass ``include_test=True`` for audit/backfill views."""
         qvec = to_pgvector(self._embedder.embed(query))
+        test_filter = "" if include_test else "AND is_test = false"
         with self._connect() as conn:
             rows = conn.execute(
-                """
-                SELECT text, subject_type, subject_id, metadata,
+                f"""
+                SELECT text, subject_type, subject_id, metadata, is_test,
                        1 - (embedding <=> %s::vector) AS similarity
                 FROM memories
                 WHERE tenant_id = %s
                   AND (%s::text IS NULL OR subject_type = %s)
                   AND (%s::text IS NULL OR subject_id = %s)
                   AND embedding IS NOT NULL
+                  {test_filter}
                 ORDER BY embedding <=> %s::vector ASC
                 LIMIT %s
                 """,
@@ -196,22 +211,31 @@ class MemoryStore:
                 subject_id=r["subject_id"],
                 metadata=r["metadata"] or {},
                 similarity=float(r["similarity"]),
+                is_test=bool(r["is_test"]),
             )
             for r in rows
         ]
 
     def list_for_subject(
-        self, *, tenant_id: str, subject_type: str, subject_id: str | None
+        self,
+        *,
+        tenant_id: str,
+        subject_type: str,
+        subject_id: str | None,
+        include_test: bool = False,
     ) -> list[Memory]:
         """All memories for one subject (newest first) — no similarity ranking. Used
-        by the dynamic-instruction injection and verification reads."""
+        by the dynamic-instruction injection and verification reads. Excludes
+        ``is_test`` artifacts by default (same contract as :meth:`recall`)."""
+        test_filter = "" if include_test else "AND is_test = false"
         with self._connect() as conn:
             rows = conn.execute(
-                """
-                SELECT text, subject_type, subject_id, metadata, created_at
+                f"""
+                SELECT text, subject_type, subject_id, metadata, is_test, created_at
                 FROM memories
                 WHERE tenant_id = %s AND subject_type = %s
                   AND COALESCE(subject_id, '') = COALESCE(%s, '')
+                  {test_filter}
                 ORDER BY created_at DESC
                 """,
                 (tenant_id, subject_type, subject_id),
@@ -222,6 +246,30 @@ class MemoryStore:
                 subject_type=r["subject_type"],
                 subject_id=r["subject_id"],
                 metadata=r["metadata"] or {},
+                is_test=bool(r["is_test"]),
             )
             for r in rows
         ]
+
+    def backfill_test_flags(self, *, tenant_id: str | None = None) -> int:
+        """FLAG (never delete) memories that are test artifacts — a ``test_mem_*``
+        subject, a ``test-stage-*`` staging session, or ``test_mem_`` residue in the
+        text — setting ``is_test=true``. Returns the number of rows newly flagged
+        (idempotent: an already-flagged row is not recounted). One-time live cleanup
+        for the pre-wwy.9 suite runs that wrote into the shared DB; mirrors
+        :func:`suppression.ledger.backfill_test_memories` (fr1.3)."""
+        # '%%' escapes the LIKE wildcard so psycopg does not read it as a placeholder.
+        where = (
+            "is_test = false AND ("
+            "subject_id LIKE 'test_mem_%%'"
+            " OR metadata->>'session_id' LIKE 'test-stage-%%'"
+            " OR text LIKE '%%test_mem_%%')"
+        )
+        params: list[Any] = []
+        if tenant_id is not None:
+            where += " AND tenant_id = %s"
+            params.append(tenant_id)
+        with self._connect() as conn:
+            return conn.execute(
+                f"UPDATE memories SET is_test = true WHERE {where}", params
+            ).rowcount
