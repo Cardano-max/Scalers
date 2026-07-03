@@ -1,0 +1,58 @@
+{
+  "_note": "REAL client tenant skindesign (Skin Design Tattoo). Concrete VoiceDimensions fill emitted from brand-dna.md, matching the arch-locked shape (a9m.1 Decision 3). Authored by writer 2026-07-03 from client-data/ ONLY (artists.csv, customers.csv, campaign-examples.json — 5 real SMS campaigns). No value is invented; gaps live as TODO(operator-verify) in brand-dna.md. Loader consumes raw['dimensions']; the sibling keys below (tenant_id, source, _claim_sources, claims_discipline) are metadata.",
+  "tenant_id": "skindesign",
+  "dimensions": {
+    "tone": [
+      "warm, friendly, upbeat, low-pressure; opens with a greeting ('Hi!', 'Hey!') and often a smile (':)') — SMS-native, direct, concise",
+      "speaks on behalf of a NAMED artist as a warm intermediary ('Angel opened a short booking window', 'Lynn wanted me to personally reach out') — never a faceless corporate 'we', never the artist's own first person",
+      "CTA: a concrete keyword reply/text tied to the artist ('Reply ANGEL to check availability or get a quote', 'Text KEEBS for available dates or payment plan options'); offer the payment-plan option",
+      "not: superlatives, hype-walls, corporate/SaaS sludge, or ladies8391's women-first/neo-traditional positioning (a different, synthetic tenant)"
+    ],
+    "structure": [
+      "short lines, one idea each; a light limited-spots scarcity beat; caps used sparingly for emphasis on the offer ('FULL-DAY SPECIAL', '2 SPOTS LEFT')",
+      "lead with the artist and their opening; state the offer plainly; add the payment-plan option; end with a keyword CTA",
+      "on SMS ALWAYS include the STOP opt-out; never message a suppressed/DND number (DND is a first-class deliverability concern for this client)",
+      "sequence pattern: initial blast then a scarcity follow-up to the same audience 1-6 days later"
+    ],
+    "vocabulary": {
+      "prefer": [
+        "full day", "full-day special", "full-day session", "booking window",
+        "spots", "spots left", "returning clients", "check availability",
+        "get a quote", "payment plan options", "split it up", "Klarna & Affirm",
+        "Hi!", "Hey!"
+      ],
+      "ban": [
+        "any claim outside approved_claims",
+        "price or discount not tied to an approved campaign offer (prices are per-campaign specials, never a standing rate)",
+        "medical / healing claims",
+        "pain or painless promises",
+        "superlatives: best / #1 / world-class",
+        "awards, credentials, years-in-business, or style specialty claims (none are in client-data)",
+        "location city/state, ownership/founder, or any TODO(operator-verify) fact until the operator fills it",
+        "AI-tells: em-dash-as-drama, rule-of-three padding, contrast framing ('it's not just X, it's Y'), generic corporate transitions",
+        "dropping the STOP opt-out on an SMS message",
+        "ladies8391 positioning: women-first, neo-traditional, reclaiming / post-mastectomy framing",
+        "TODO(operator-verify): the client's OWN explicit banned-word list is not in client-data — the bans above are platform-default guardrails, to be replaced/extended with the real don'ts"
+      ],
+      "approved_claims": [
+        "Skin Design Tattoo is a multi-location tattoo studio, with locations at Spring Mountain, Orange County, Soho, Hawaii, New York, and Nashville.",
+        "Offers full-day tattoo sessions.",
+        "Full-day sessions are great for larger pieces, finishing or adding to existing work, or starting a new custom piece.",
+        "Payment plans are available through Klarna and Affirm.",
+        "Check availability, get a quote, or ask about payment-plan options by replying with / texting the artist's name."
+      ],
+      "sensitive_ban": [],
+      "emoji_policy": "0-2, sparing. Observed in real copy: 🔥 (opener) and ':)' smiley. Not a hype-wall.",
+      "hashtag_policy": "TODO(operator-verify): no evidence — the client's real channel is SMS (no hashtags). Default to NONE on any social channel until the operator provides an approved tag set; never invent tags."
+    }
+  },
+  "source": "skills/brand-voice/tenants/skindesign/brand-dna.md (Voice & tone rules + Do/Do-not + Approved claims sections)",
+  "claims_discipline": "approved_claims is the allow-list: a draft MUST block + escalate on any factual/credential/offer claim not in this list. Prices are NOT standing claims — a price appears only when it traces to an approved campaign offer.",
+  "_claim_sources": {
+    "Skin Design Tattoo is a multi-location tattoo studio, with locations at Spring Mountain, Orange County, Soho, Hawaii, New York, and Nashville.": "client-data/artists.csv studio_name column; client-data/campaign-examples.json _provenance.client",
+    "Offers full-day tattoo sessions.": "client-data/campaign-examples.json — Angel (F0BEPFG99HQ.jpg), Bella (F0BFHR5ULJC.png), Keebs (F0BEPFJTMQS.png) campaigns",
+    "Full-day sessions are great for larger pieces, finishing or adding to existing work, or starting a new custom piece.": "client-data/campaign-examples.json — Angel campaign message_copy (F0BEPFG99HQ.jpg)",
+    "Payment plans are available through Klarna and Affirm.": "client-data/campaign-examples.json — Angel campaign message_copy / payment_plans field",
+    "Check availability, get a quote, or ask about payment-plan options by replying with / texting the artist's name.": "client-data/campaign-examples.json — Angel cta ('Reply ANGEL…'), Keebs cta ('Text KEEBS for available dates or payment plan options')"
+  }
+}
