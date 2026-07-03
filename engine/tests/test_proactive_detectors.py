@@ -97,3 +97,93 @@ def test_multi_subdivision_dedupes_shared_federal_holiday():
     opps = holiday_opportunities(today, subdivisions=("NV", "CA", "NY"), window_days=21)
     july4 = [o for o in opps if o.fire_on == date(2026, 7, 4)]
     assert len(july4) == 1, "a shared federal holiday must not triple-fire per state"
+
+
+# --- Detector #1: follow-up-window (AC-8) -----------------------------------
+
+def _sends(today):
+    from proactive.detectors import PriorSend
+
+    from datetime import timedelta
+
+    return [
+        PriorSend("a@x.com", today - timedelta(days=3), "camp1", name="Ana", spots_remaining=2),
+        PriorSend("b@x.com", today - timedelta(days=3), "camp1", name="Bo", spots_remaining=2),
+    ]
+
+
+def test_follow_up_proposes_for_non_responder_in_window():
+    from proactive.detectors import follow_up_opportunities
+
+    today = date(2026, 7, 10)
+    opps = follow_up_opportunities(today, prior_sends=_sends(today))
+    keys = {o.key for o in opps}
+    assert keys == {"follow_up:camp1:a@x.com", "follow_up:camp1:b@x.com"}
+    assert all(o.kind == "follow_up" and o.source_badge == "follow_up_window" for o in opps)
+
+
+def test_follow_up_excludes_opted_out_recipient():
+    from proactive.detectors import follow_up_opportunities
+
+    today = date(2026, 7, 10)
+    opps = follow_up_opportunities(
+        today, prior_sends=_sends(today), opted_out=frozenset({"a@x.com"})
+    )
+    assert {o.facts["recipient"] for o in opps} == {"b@x.com"}
+
+
+def test_follow_up_excludes_responder():
+    from proactive.detectors import follow_up_opportunities
+
+    today = date(2026, 7, 10)
+    opps = follow_up_opportunities(
+        today, prior_sends=_sends(today), responded=frozenset({"b@x.com"})
+    )
+    assert {o.facts["recipient"] for o in opps} == {"a@x.com"}
+
+
+def test_follow_up_excludes_already_followed_up():
+    from proactive.detectors import follow_up_opportunities
+
+    today = date(2026, 7, 10)
+    opps = follow_up_opportunities(
+        today, prior_sends=_sends(today), already_followed_up=frozenset({"a@x.com"})
+    )
+    assert {o.facts["recipient"] for o in opps} == {"b@x.com"}
+
+
+def test_follow_up_window_bounds_and_spots():
+    from datetime import timedelta
+
+    from proactive.detectors import PriorSend, follow_up_opportunities
+
+    today = date(2026, 7, 10)
+    sends = [
+        PriorSend("too-recent@x.com", today - timedelta(days=1), "c", spots_remaining=5),
+        PriorSend("too-old@x.com", today - timedelta(days=6), "c", spots_remaining=5),
+        PriorSend("full@x.com", today - timedelta(days=3), "c", spots_remaining=0),
+        PriorSend("ok@x.com", today - timedelta(days=5), "c", spots_remaining=None),
+    ]
+    got = {o.facts["recipient"] for o in follow_up_opportunities(today, prior_sends=sends)}
+    assert got == {"ok@x.com"}  # only in-window, spots-available send
+
+
+# --- Detector #2: artist-special cadence (AC-2) -----------------------------
+
+def test_artist_special_proposes_overdue_and_never_run_most_overdue_first():
+    from datetime import timedelta
+
+    from proactive.detectors import ArtistSpecial, artist_special_opportunities
+
+    today = date(2026, 7, 10)
+    artists = [
+        ArtistSpecial("nikko", "Nikko", last_special_on=today - timedelta(days=40)),
+        ArtistSpecial("recent", "Recent", last_special_on=today - timedelta(days=10)),
+        ArtistSpecial("newbie", "Newbie", last_special_on=None),
+    ]
+    opps = artist_special_opportunities(today, artists=artists, cadence_days=30)
+    slugs = [o.facts["artist"] for o in opps]
+    assert "recent" not in slugs  # within cadence -> not due
+    assert set(slugs) == {"nikko", "newbie"}
+    assert slugs[0] == "nikko"  # 40d overdue ranks before never-run (cadence+1)
+    assert all(o.archetype_hint == "artist_spotlight" for o in opps)
