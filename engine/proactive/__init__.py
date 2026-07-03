@@ -14,6 +14,26 @@ detector and NO degraded preflight — those are net-new here.
 
 from __future__ import annotations
 
+from proactive.detectors import (
+    ArtistSpecial,
+    Opportunity,
+    PriorSend,
+    artist_special_opportunities,
+    follow_up_opportunities,
+    holiday_opportunities,
+)
+from proactive.orchestrator import ScanReport, run_daily_scan
+from proactive.schedule import CronSchedule, due_fire_dates, parse_cron
 from proactive.schedule_ledger import ClaimResult, ScheduleLedger, ScheduledRun
+from proactive.worker import TickReport, run_due_scans
 
-__all__ = ["ScheduleLedger", "ClaimResult", "ScheduledRun"]
+__all__ = [
+    # scheduling + exactly-once ledger
+    "ScheduleLedger", "ClaimResult", "ScheduledRun",
+    "CronSchedule", "parse_cron", "due_fire_dates",
+    "run_due_scans", "TickReport",
+    # detection + scan
+    "Opportunity", "holiday_opportunities", "PriorSend", "follow_up_opportunities",
+    "ArtistSpecial", "artist_special_opportunities",
+    "run_daily_scan", "ScanReport",
+]
