@@ -14,6 +14,13 @@ Three additive, read-only endpoints the Next.js console binds:
   (the console renders "missing", never a blank fake). ``examples`` is ``[]`` until
   ju1.4 wires per-draft example provenance into the generator.
 
+Plus one write-side ingress (tlv.2 memory loop):
+
+* ``POST /studio/inbound`` — capture a REAL inbound customer reply (email reply /
+  Twilio SMS / IG DM, or a simulated inbound) into ``lead_conversations`` + a
+  structured outcome memory via :mod:`proactive.followup_source`. 404 for an
+  unresolvable sender (nothing written); idempotent on redelivery; nothing sends.
+
 Kept in its own module (not ``studio/agui.py``) so the hot AG-UI module stays
 collision-free for in-flight beads; mounted from ``engine/main.py``.
 """
@@ -29,6 +36,7 @@ from typing import Any
 
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 router = APIRouter()
 
@@ -284,6 +292,55 @@ def _customer_lineage(
         return None, None, None
 
 
+# ── tlv.2: inbound reply capture — the memory loop's write-side ingress ──────── #
+
+
+class InboundSignalBody(BaseModel):
+    """One normalized inbound customer signal (email reply / Twilio SMS / IG DM).
+
+    The webhook handler (or a simulated inbound) posts the verbatim reply plus
+    whatever sender identifier the channel provides; resolution to a REAL customer
+    happens in :func:`proactive.followup_source.capture_inbound`."""
+
+    tenant_id: str = Field(..., min_length=1)
+    channel: str = Field(..., min_length=1)  # gmail | sms | instagram | ...
+    text: str = Field(..., min_length=1)  # the customer's verbatim reply
+    customer_id: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    ig_handle: str | None = None
+    run_id: str | None = None
+
+
+@router.post("/studio/inbound")
+def studio_inbound(body: InboundSignalBody) -> dict:
+    """Capture one inbound customer reply into the persistent memory loop: a REAL
+    ``customer`` turn appended to ``lead_conversations`` + a structured outcome
+    memory (``replied|booked|objected:<type>``). 404 when the sender does not
+    resolve to a real customer — nothing is written for an unknown sender.
+    Idempotent on webhook redelivery. Nothing here sends."""
+    from proactive.followup_source import capture_inbound
+
+    result = capture_inbound(
+        body.tenant_id, text=body.text, channel=body.channel,
+        customer_id=body.customer_id, email=body.email, phone=body.phone,
+        ig_handle=body.ig_handle, run_id=body.run_id,
+    )
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="inbound sender did not resolve to a known customer; nothing recorded",
+        )
+    return {
+        "customer_id": result.customer_id,
+        "outcome": result.outcome,
+        "channel": result.channel,
+        "conversation_id": result.conversation_id,
+        "memory_id": result.memory_id,
+        "turn_appended": result.turn_appended,
+    }
+
+
 def mount_console_api(app: FastAPI) -> None:
-    """Attach the ju1.5 console read endpoints to the portal app."""
+    """Attach the console endpoints (ju1.5 reads + the tlv.2 inbound ingress)."""
     app.include_router(router)

@@ -136,6 +136,70 @@ def upsert_conversation(
     return row["id"] if row else conv_id
 
 
+def append_turn(
+    tenant_id: str,
+    customer_id: str,
+    text: str,
+    *,
+    speaker: str = SPEAKER_CUSTOMER,
+    channel: str | None = None,
+    source: str = "inbound",
+    dsn: str | None = None,
+) -> tuple[str, bool]:
+    """Append ONE real turn to a lead's stored conversation (create the row if absent).
+
+    This is the INBOUND-signal write path (CustomerAcq-tlv.2): unlike
+    :func:`upsert_conversation` (bulk upload, REPLACES turns), this never discards
+    history — it appends exactly one ``{speaker, text}`` turn. Returns
+    ``(conversation_id, appended)``; ``appended`` is False when the row already ends
+    with this exact turn (webhook redelivery), so a retried delivery is idempotent.
+    The append itself is a single atomic UPDATE (no read-modify-write race)."""
+    clean = (text or "").strip()
+    if not clean:
+        raise ValueError("turn text is empty")
+    if speaker not in _VALID_SPEAKERS:
+        raise ValueError(f"speaker {speaker!r} not in {sorted(_VALID_SPEAKERS)}")
+    ensure_schema(dsn)
+    turn = {"speaker": speaker, "text": clean}
+    turn_json = json.dumps(turn)
+    conv_id = "conv_" + uuid.uuid4().hex[:16]
+    with _connect(dsn) as conn:
+        created = conn.execute(
+            """
+            INSERT INTO lead_conversations
+                (id, tenant_id, customer_id, channel, source, turns)
+            VALUES (%s, %s, %s, %s, %s, %s::jsonb)
+            ON CONFLICT (tenant_id, customer_id) DO NOTHING
+            RETURNING id
+            """,
+            (conv_id, tenant_id, customer_id, channel, source, json.dumps([turn])),
+        ).fetchone()
+        if created is not None:
+            return created["id"], True
+        # Row exists: atomic dedupe-append — append ONLY when the thread does not
+        # already end with this exact turn (idempotent on webhook redelivery).
+        appended = conn.execute(
+            """
+            UPDATE lead_conversations
+            SET turns = turns || %s::jsonb,
+                channel = COALESCE(channel, %s),
+                updated_at = now()
+            WHERE tenant_id = %s AND customer_id = %s
+              AND (jsonb_array_length(turns) = 0 OR turns->-1 <> %s::jsonb)
+            RETURNING id
+            """,
+            (turn_json, channel, tenant_id, customer_id, turn_json),
+        ).fetchone()
+        if appended is not None:
+            return appended["id"], True
+        row = conn.execute(
+            "SELECT id FROM lead_conversations "
+            "WHERE tenant_id = %s AND customer_id = %s LIMIT 1",
+            (tenant_id, customer_id),
+        ).fetchone()
+    return (row["id"] if row else conv_id), False
+
+
 def get_conversation(
     tenant_id: str, customer_id: str, *, dsn: str | None = None
 ) -> dict[str, Any] | None:

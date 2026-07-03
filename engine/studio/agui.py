@@ -1308,6 +1308,7 @@ def _execute_provided_leads_sync(
     from cells.offer_guard import offer_violations
     from cells.personalization_guard import facts_view as personalization_facts_view
     from cells.personalization_guard import personalization_violations
+    from proactive.followup_source import is_booked
     from studio.offers import as_substantiated, get_offers, select_offer, substantiate
     from studio.psych_profile import analyze_customer, psych_llm_model
 
@@ -1535,6 +1536,18 @@ def _execute_provided_leads_sync(
             _prior_aid = _prior.get("action_id") if isinstance(_prior, dict) else None
             if _prior_aid:
                 pending.append(_prior_aid)
+            continue
+        # BOOKED -> OFF the cold-outreach path (tlv.2 memory loop): this lead's latest
+        # CAPTURED outcome memory says they already converted. Another cold pitch would
+        # be tone-deaf (their next touch is aftercare/loyalty), so the row is skipped
+        # with a concrete, reconciled reason — never silently dropped.
+        if is_booked(facts.get("memories")):
+            skipped.append({
+                "row": (requested_ids.index(cust_id) + 1) if cust_id in requested_ids else None,
+                "lead": facts.get("name") or cust_id,
+                "reason": "already booked — routed off the cold-outreach path "
+                          "(captured outcome memory)",
+            })
             continue
         research = research_studio(facts, enabled=deep)  # real Firecrawl about THIS studio
         th = facts.get("tattoo_history", []) or []
@@ -1788,8 +1801,13 @@ def _execute_provided_leads_sync(
                     f"Staged {draft['channel']} outreach to {facts.get('name')} for goal "
                     f"'{goal}'. Grounded on: {', '.join(draft.get('grounding', []))}."
                 ),
+                # Structured (not write-only) receipt: the fields the NEXT run's
+                # dossier last-outreach block + angle rotation (#3) read back.
                 metadata={"kind": "outreach", "session_id": session_id,
-                          "action_id": action_id, "run_id": run_id},
+                          "action_id": action_id, "run_id": run_id,
+                          "channel": draft["channel"], "subject": draft.get("subject"),
+                          "angle": draft.get("angle"),
+                          "angle_key": draft.get("angle_key")},
             )
         except Exception:
             pass

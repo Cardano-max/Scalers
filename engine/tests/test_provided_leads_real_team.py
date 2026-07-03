@@ -13,7 +13,6 @@ the strategist's real angle is threaded into the per-lead draft goal (load-beari
 
 from __future__ import annotations
 
-import pytest
 
 import actions.store as store_mod
 import cells.critic as critic_mod
@@ -321,3 +320,67 @@ def test_failed_critic_leaves_conf_honest_none(monkeypatch):
 
     assert captured and len(captured) == 2
     assert all(c is None for c in captured)
+
+
+# ── tlv.2 memory loop: booked routing + structured outreach receipts ─────────── #
+
+_BOOKED_MEMORY = {
+    "text": 'Inbound sms reply -> outcome: booked. Customer said: "book me in!"',
+    "metadata": {"kind": "outcome", "outcome": "booked", "channel": "sms",
+                 "verbatim": "book me in!"},
+}
+
+
+def _lookup_with_memories(memories_by_id):
+    def _fake(tenant, rows, *, dsn=None, memory_store=None):
+        return [
+            {"customer_id": r["customer_id"], "name": f"Lead {r['customer_id']}",
+             "tattoo_history": [], "persona_traits": {}, "interests": [],
+             "memories": memories_by_id.get(r["customer_id"], [])}
+            for r in rows
+        ]
+    return _fake
+
+
+def test_booked_lead_is_routed_off_the_cold_outreach_path(monkeypatch):
+    """A lead whose latest captured outcome is BOOKED converted — the next cold touch
+    must NOT go to them. The loop skips them with a concrete reconciled reason and
+    drafts only for the still-cold lead (tlv.2 AC)."""
+    _wire(monkeypatch)
+    monkeypatch.setattr(
+        cr, "lookup_leads", _lookup_with_memories({"c1": [_BOOKED_MEMORY]})
+    )
+    summary = _execute_provided_leads_sync(_plan(), "sess1", "ladies8391", None, None)
+
+    ledger = summary["output_ledger"]
+    assert ledger["drafted"] == 1
+    assert ledger["reconciled"] is True
+    booked_skips = [s for s in ledger["skipped"] if "booked" in s["reason"]]
+    assert len(booked_skips) == 1 and booked_skips[0]["lead"] == "Lead c1"
+    drafted_for = [ar["input"]["customer_id"] for ar in summary["agent_runs"]
+                   if ar["role"] == "draft"]
+    assert drafted_for == ["c2"]
+
+
+def test_staged_outreach_memory_is_structured_not_a_write_only_receipt(monkeypatch):
+    """The per-lead outreach memory must carry the STRUCTURED fields the next run's
+    dossier/rotation read (kind=outreach + channel/subject/angle), replacing the old
+    write-mostly prose receipt (tlv.2)."""
+    _wire(monkeypatch)
+    writes: list[dict] = []
+
+    class _CapturingMemory(_FakeMemory):
+        def write(self, **kw):
+            writes.append(kw)
+
+    monkeypatch.setattr(memory_mod, "MemoryStore", _CapturingMemory)
+    _execute_provided_leads_sync(_plan(), "sess1", "ladies8391", None, None)
+
+    outreach = [w for w in writes if (w.get("metadata") or {}).get("kind") == "outreach"]
+    assert len(outreach) == 2  # one per staged draft
+    for w in outreach:
+        meta = w["metadata"]
+        assert meta["channel"] == "gmail"
+        assert meta["subject"] == "We miss you"
+        assert "angle" in meta  # present even when the draft has no distinct angle
+        assert w["subject_type"] == "customer"

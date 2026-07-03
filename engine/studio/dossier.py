@@ -83,6 +83,13 @@ class Dossier(BaseModel):
     best_angle: DossierField = Field(default_factory=DossierField)
     recommended_cta: DossierField = Field(default_factory=DossierField)
 
+    # Last outreach + captured outcome (tlv.2 memory loop): what we last sent this
+    # lead and what REALLY happened after (replied/booked/objected:<type>/no_response,
+    # with the customer's verbatim reply). Honest-empty until an outcome is captured.
+    last_outreach: DossierField = Field(default_factory=DossierField)
+    last_outcome: DossierField = Field(default_factory=DossierField)
+    last_outcome_verbatim: str = ""
+
     # The full audit list of what the copy was allowed to use (the draft grounding).
     evidence_used: list[str] = Field(default_factory=list)
 
@@ -100,6 +107,7 @@ class Dossier(BaseModel):
             "conversation_summary": self.conversation_summary,
             "likely_objection": self.likely_objection, "best_angle": self.best_angle,
             "recommended_cta": self.recommended_cta,
+            "last_outreach": self.last_outreach, "last_outcome": self.last_outcome,
         }
 
 
@@ -241,6 +249,28 @@ def build_dossier(
         recommended_cta = _field("Open a genuine reply on the chosen channel", "medium",
                                  f"cta:{channel or 'channel'}")
 
+    # --- last outreach + captured outcome (tlv.2 memory loop) ------------------------ #
+    # ``facts['memories']`` is newest-first (lookup_lead); the first ``kind=outreach``
+    # row is the last thing we sent, the first ``kind=outcome`` row is what REALLY
+    # happened after it (captured by proactive.followup_source). Pure read of stored
+    # rows — honest-empty until the loop has actually captured something.
+    last_outreach = _field(None, "none", "none")
+    last_outcome = _field(None, "none", "none")
+    last_outcome_verbatim = ""
+    for m in facts.get("memories", []) or []:
+        meta = (m.get("metadata") or {}) if isinstance(m, dict) else {}
+        kind = meta.get("kind")
+        if kind == "outreach" and not last_outreach.present:
+            last_outreach = _field(
+                (m.get("text") if isinstance(m, dict) else None), "high",
+                "memory:outreach",
+            )
+        elif kind == "outcome" and meta.get("outcome") and not last_outcome.present:
+            last_outcome = _field(meta.get("outcome"), "high", "memory:outcome")
+            last_outcome_verbatim = str(meta.get("verbatim") or "")
+        if last_outreach.present and last_outcome.present:
+            break
+
     # --- honest personalization posture --------------------------------------------- #
     # Count the HARD (high-confidence) distinguishing signals. A lead with none of these is
     # thin: we flag it and keep the angle brand-safe/generic rather than fake specifics.
@@ -271,6 +301,8 @@ def build_dossier(
         conversation_summary=conversation_summary,
         likely_objection=likely_objection, objection_evidence=objection_evidence,
         best_angle=best_angle, recommended_cta=recommended_cta,
+        last_outreach=last_outreach, last_outcome=last_outcome,
+        last_outcome_verbatim=last_outcome_verbatim,
         evidence_used=list(evidence_used or []),
         limited_personalization=limited, personalization_note=note,
     )
