@@ -19,6 +19,15 @@ from connectors.gmail import GmailSendError, GmailSendResult
 from sideeffects.provider import ProviderResult
 
 
+@pytest.fixture(autouse=True)
+def _legacy_passthrough_env(monkeypatch):
+    # wwy.4: the fail-closed tenant gate refuses an unregistered tenant unless it
+    # is explicitly allowlisted. These suites exercise unrelated send behavior for
+    # the legacy 'ladies8391' tenant, which production lists in
+    # TEST_MODE_LEGACY_PASSTHROUGH — declare the same here.
+    monkeypatch.setenv("TEST_MODE_LEGACY_PASSTHROUGH", "ladies8391,test_safe_send")
+
+
 class _FakeStore:
     """In-memory stand-in for actions.store.get_action / update_status."""
 

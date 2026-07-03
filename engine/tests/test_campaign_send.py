@@ -27,6 +27,14 @@ from actions.store import ActionRow
 from connectors.gmail import GmailSendResult
 
 
+@pytest.fixture(autouse=True)
+def _legacy_passthrough_env(monkeypatch):
+    # wwy.4: declare the legacy 'ladies8391' tenant as passthrough (production
+    # sets TEST_MODE_LEGACY_PASSTHROUGH) so the fail-closed registry gate does
+    # not refuse the campaign-send behavior under test.
+    monkeypatch.setenv("TEST_MODE_LEGACY_PASSTHROUGH", "ladies8391,test_safe_send")
+
+
 # ── eligibility filter (pure, always runs) ──────────────────────────────────────
 def _row(**over) -> ActionRow:
     base = dict(

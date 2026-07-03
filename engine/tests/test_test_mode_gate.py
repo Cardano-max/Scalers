@@ -166,18 +166,37 @@ def test_allowlisted_recipient_may_receive_a_test_send(monkeypatch):
     assert result.status == "sent"
 
 
-def test_unknown_tenant_passes_through_unchanged(monkeypatch):
-    # ladies8391 has no tenants row -> legacy behavior untouched.
-    class _OkGmail:
-        def __init__(self):
-            self.calls = []
+class _OkGmail:
+    def __init__(self):
+        self.calls = []
 
-        def send(self, to, subject, body, *, from_addr=None):
-            self.calls.append((to, subject, body))
-            from connectors.gmail import GmailSendResult
+    def send(self, to, subject, body, *, from_addr=None):
+        self.calls.append((to, subject, body))
+        from connectors.gmail import GmailSendResult
 
-            return GmailSendResult(message_id="m1", deep_link="dl")
+        return GmailSendResult(message_id="m1", deep_link="dl")
 
+
+def test_unknown_tenant_no_row_is_refused_fail_closed(monkeypatch):
+    # wwy.4: a tenant with NO registry row is NOT silent passthrough anymore —
+    # without an explicit legacy allowlist entry it is REFUSED. (Was the
+    # fail-open hole: a typo / fresh-DB tenant went live.)
+    monkeypatch.delenv("TEST_MODE_LEGACY_PASSTHROUGH", raising=False)
+    store = _FakeStore(_action("ladies8391"))
+    ok = _OkGmail()
+    _wire(monkeypatch, store, None)  # no tenants row
+
+    with pytest.raises(TestModeSendBlockedError):
+        approve_and_publish("act_gate1", connectors={"gmail": ok}, dsn=None)
+    assert ok.calls == []
+    assert store.rows["act_gate1"].status == "pending"
+
+
+def test_legacy_passthrough_only_via_explicit_env_allowlist(monkeypatch):
+    # AC(d): ladies8391 stays passthrough — but ONLY because it is explicitly
+    # listed in TEST_MODE_LEGACY_PASSTHROUGH.
+    monkeypatch.setenv("TEST_MODE_LEGACY_PASSTHROUGH", "ladies8391")
+    monkeypatch.setenv("GMAIL_REDIRECT_TO", "qa-inbox@example.com")  # deterministic send
     store = _FakeStore(_action("ladies8391"))
     ok = _OkGmail()
     _wire(monkeypatch, store, None)  # no tenants row
@@ -185,6 +204,73 @@ def test_unknown_tenant_passes_through_unchanged(monkeypatch):
     result = approve_and_publish("act_gate1", connectors={"gmail": ok}, dsn=None)
     assert len(ok.calls) == 1
     assert result.status == "sent"
+
+
+def test_registry_read_error_refuses_fail_closed(monkeypatch):
+    # AC(a): a transient registry read error must REFUSE, never silently pass.
+    import psycopg
+
+    store = _FakeStore(_action("skindesign"))
+    ok = _OkGmail()
+    monkeypatch.setattr(publish, "get_action", store.get_action)
+    monkeypatch.setattr(publish, "update_status", store.update_status)
+    monkeypatch.setattr(publish, "claim_for_send", store.claim_for_send)
+    import tenants.store as tstore
+
+    def _boom(tid, dsn=None):
+        raise psycopg.OperationalError("connection refused")
+
+    monkeypatch.setattr(tstore, "get_tenant", _boom)
+
+    with pytest.raises(TestModeSendBlockedError) as ei:
+        approve_and_publish("act_gate1", connectors={"gmail": ok}, dsn=None)
+    assert "fail closed" in str(ei.value).lower()
+    assert ok.calls == []
+    assert store.rows["act_gate1"].status == "pending"
+
+
+def test_protected_tenant_missing_row_is_refused(monkeypatch):
+    # AC(b): skindesign (PROTECTED) with no registry row is REFUSED even though
+    # the env allowlist would clear an UNPROTECTED no-row tenant.
+    monkeypatch.setenv("TEST_MODE_LEGACY_PASSTHROUGH", "skindesign")  # must NOT help a protected tenant
+    store = _FakeStore(_action("skindesign"))
+    ok = _OkGmail()
+    _wire(monkeypatch, store, None)  # no registry row
+
+    with pytest.raises(TestModeSendBlockedError) as ei:
+        approve_and_publish("act_gate1", connectors={"gmail": ok}, dsn=None)
+    assert "protected" in str(ei.value).lower()
+    assert ok.calls == []
+
+
+def test_fresh_db_no_table_protected_refused_after_ensure_retry(monkeypatch):
+    # AC(c): a fresh DB without the tenants table (UndefinedTable) -> ensure_schema
+    # + retry -> still no row -> skindesign PROTECTED -> refused. The missing
+    # table can never fall through to a live send.
+    import psycopg
+
+    store = _FakeStore(_action("skindesign"))
+    ok = _OkGmail()
+    monkeypatch.setattr(publish, "get_action", store.get_action)
+    monkeypatch.setattr(publish, "update_status", store.update_status)
+    monkeypatch.setattr(publish, "claim_for_send", store.claim_for_send)
+    import tenants.store as tstore
+
+    calls = {"n": 0}
+
+    def _fake_get_tenant(tid, dsn=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise psycopg.errors.UndefinedTable('relation "tenants" does not exist')
+        return None  # after ensure_schema: table exists, still no row
+
+    monkeypatch.setattr(tstore, "get_tenant", _fake_get_tenant)
+    monkeypatch.setattr(tstore, "ensure_schema", lambda dsn=None: None)
+
+    with pytest.raises(TestModeSendBlockedError):
+        approve_and_publish("act_gate1", connectors={"gmail": ok}, dsn=None)
+    assert calls["n"] == 2  # raised once, retried once after ensure_schema
+    assert ok.calls == []
 
 
 def test_test_mode_false_tenant_passes_through(monkeypatch):

@@ -10,7 +10,6 @@ concurrency — an in-memory fake could not prove it).
 
 from __future__ import annotations
 
-import os
 import threading
 import uuid
 
@@ -22,6 +21,14 @@ from actions.store import ActionRow
 from connectors.gmail import GmailConnector, GmailSendResult
 
 _DSN = "postgresql://scalers:scalers@localhost:5432/scalers"
+
+
+@pytest.fixture(autouse=True)
+def _legacy_passthrough_env(monkeypatch):
+    # wwy.4: declare the legacy 'ladies8391'/'test_safe_send' tenants as
+    # passthrough (production sets TEST_MODE_LEGACY_PASSTHROUGH) so the
+    # fail-closed registry gate does not refuse the send behavior under test.
+    monkeypatch.setenv("TEST_MODE_LEGACY_PASSTHROUGH", "ladies8391,test_safe_send")
 
 
 # ── CHANGE 1: SAFE TEST REDIRECT ────────────────────────────────────────────────

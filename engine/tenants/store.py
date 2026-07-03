@@ -18,7 +18,14 @@ import json
 import os
 from typing import Any
 
+import psycopg
+
 _DEFAULT_DSN = "postgresql://scalers:scalers@localhost:5432/scalers"
+
+# Tenants whose sandbox is SAFETY-CRITICAL: a MISSING registry row (fresh DB,
+# missed migration, id typo) must be REFUSED, never treated as legacy
+# passthrough. skindesign holds 1,093 real customers (CustomerAcq-wwy.4).
+PROTECTED_TENANTS: frozenset[str] = frozenset({"skindesign"})
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS tenants (
@@ -84,36 +91,82 @@ def upsert_tenant(
     return get_tenant(tenant_id, dsn=dsn)  # type: ignore[return-value]
 
 
+def _legacy_passthrough_allowlist() -> frozenset[str]:
+    """Tenants explicitly allowed to legacy-passthrough with NO registry row,
+    from ``TEST_MODE_LEGACY_PASSTHROUGH`` (comma-separated). Everything NOT on
+    this list is refused when it has no row — passthrough is opt-in, never the
+    silent default (CustomerAcq-wwy.4)."""
+    raw = os.environ.get("TEST_MODE_LEGACY_PASSTHROUGH", "")
+    return frozenset(t.strip() for t in raw.split(",") if t.strip())
+
+
 def get_tenant(tenant_id: str, dsn: str | None = None) -> dict[str, Any] | None:
-    """The tenant row as a dict, or None (no row = legacy passthrough tenant).
-    Best-effort on a DB without the table yet: returns None rather than raising —
-    an unreachable registry must never make the send path crash open."""
-    try:
-        with _connect(dsn) as conn:
-            row = conn.execute(
-                "SELECT id, name, test_mode, test_send_allowlist FROM tenants WHERE id=%s",
-                (tenant_id,),
-            ).fetchone()
-    except Exception:
-        return None
+    """The tenant row as a dict, or ``None`` ONLY when the row is genuinely
+    absent (the query ran and returned nothing).
+
+    FAIL CLOSED (wwy.4): a read error (unreachable registry, missing table,
+    permission) now PROPAGATES instead of being swallowed to ``None``. The old
+    ``except Exception: return None`` silently turned a transient failure into a
+    "no row -> legacy passthrough" — disabling the sandbox for real customers.
+    The caller (:func:`check_send_allowed`) decides how to fail closed."""
+    with _connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT id, name, test_mode, test_send_allowlist FROM tenants WHERE id=%s",
+            (tenant_id,),
+        ).fetchone()
     return dict(row) if row else None
 
 
 def check_send_allowed(
     tenant_id: str | None, recipient: str | None, dsn: str | None = None
 ) -> tuple[bool, str]:
-    """The server-side TEST-MODE send gate decision.
+    """The server-side TEST-MODE send gate decision — FAIL CLOSED (wwy.4).
 
-    ``(True, reason)`` when the send may proceed; ``(False, reason)`` when it must
-    be refused. Rules: no tenant row -> allowed (legacy tenants unchanged);
-    ``test_mode`` false -> allowed; ``test_mode`` true -> allowed ONLY when the
-    recipient is on the tenant's explicit allowlist (case-insensitive exact match;
-    empty by default, so every real-customer send is refused)."""
+    ``(True, reason)`` only when the send is positively cleared; ``(False,
+    reason)`` otherwise. Rules:
+
+    * registry read error -> REFUSE (never silently pass);
+    * missing table -> ``ensure_schema`` + retry once, then apply the rules;
+    * NO row: a :data:`PROTECTED_TENANTS` tenant is REFUSED; any other tenant is
+      refused UNLESS explicitly listed in ``TEST_MODE_LEGACY_PASSTHROUGH``;
+    * ``test_mode`` false -> allowed;
+    * ``test_mode`` true -> allowed ONLY when the recipient is on the tenant's
+      explicit allowlist (empty by default, so every real-customer send is refused).
+    """
     if not tenant_id:
         return True, "no tenant id on action (legacy passthrough)"
-    row = get_tenant(tenant_id, dsn=dsn)
+    try:
+        row = get_tenant(tenant_id, dsn=dsn)
+    except psycopg.errors.UndefinedTable:
+        # Fresh DB / missed migration: create the table once and retry. If the
+        # retry ALSO fails, refuse — never fall through to passthrough.
+        try:
+            ensure_schema(dsn)
+            row = get_tenant(tenant_id, dsn=dsn)
+        except Exception:
+            return False, (
+                f"tenant registry unreachable for {tenant_id!r} — refusing (fail closed)"
+            )
+    except Exception:
+        return False, (
+            f"tenant registry unreachable for {tenant_id!r} — refusing (fail closed)"
+        )
+
     if row is None:
-        return True, f"tenant {tenant_id!r} has no registry row (legacy passthrough)"
+        if tenant_id in PROTECTED_TENANTS:
+            return False, (
+                f"tenant {tenant_id!r} has NO registry row and is PROTECTED — refusing "
+                "(fail closed; provision the tenant row before sending)"
+            )
+        if tenant_id in _legacy_passthrough_allowlist():
+            return True, (
+                f"tenant {tenant_id!r} legacy passthrough (explicit "
+                "TEST_MODE_LEGACY_PASSTHROUGH allowlist)"
+            )
+        return False, (
+            f"tenant {tenant_id!r} has no registry row — refusing (fail closed); add a "
+            "tenants row, or list it in TEST_MODE_LEGACY_PASSTHROUGH for legacy passthrough"
+        )
     if not row.get("test_mode"):
         return True, f"tenant {tenant_id!r} test_mode off"
     allow = [str(a).strip().lower() for a in (row.get("test_send_allowlist") or [])]

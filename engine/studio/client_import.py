@@ -239,6 +239,18 @@ def import_customers(
     (tenant, lower(email)) via the existing ``upsert_lead``, then the skindesign
     columns in one UPDATE). Returns the parse summary + created/matched counts."""
     from studio.customer_research import upsert_lead
+    from tenants.store import get_tenant, upsert_tenant
+
+    # SANDBOX ON IMPORT (wwy.4): importing real customer PII ALWAYS puts the
+    # tenant in test_mode — a real-PII tenant can never be born live. Force
+    # test_mode=True; preserve any existing display name.
+    try:
+        _existing = get_tenant(tenant_id, dsn=dsn)
+    except Exception:
+        _existing = None
+    upsert_tenant(
+        tenant_id, (_existing or {}).get("name") or tenant_id, test_mode=True, dsn=dsn
+    )
 
     rows, summary = parse_customers_csv(csv_path)
     created = matched = 0
