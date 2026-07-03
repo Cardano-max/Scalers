@@ -224,7 +224,15 @@ def load_smoke_gold_set(store, tenant_id: str = SMOKE_TENANT) -> dict[str, int]:
     Upserts each example (natural key = tenant/engine/cell/content/version, so a
     re-load never duplicates) and writes one ``smoke-oracle`` gold_label carrying
     the deterministic expected payload. Returns per-engine counts.
+
+    Authoritative load (CustomerAcq-wwy.5): after upserting the current set it
+    prunes any stale SMOKE rows left from a previous, differently-labelled or
+    reworded version — so a relabel can't leave orphaned rows that would
+    false-fail the gate on a persistent KB. Tenant + SMOKE-split scoped, so real
+    holdout/train rows and other tenants are never touched.
     """
+    from kb.store import content_hash  # local: keep the DB-free import path light
+
     counts: dict[str, int] = {}
     for ex in _ALL:
         example_id = store.upsert_gold_example(
@@ -247,6 +255,15 @@ def load_smoke_gold_set(store, tenant_id: str = SMOKE_TENANT) -> dict[str, int]:
             label_version=LABEL_VERSION,
         )
         counts[ex.engine.value] = counts.get(ex.engine.value, 0) + 1
+
+    # Drop any SMOKE rows for this tenant that are no longer in the current set
+    # (old content hashes from a prior relabel/rewording) so the loaded dataset is
+    # EXACTLY ``_ALL`` — no stale rows to false-fail the gate on a persistent KB.
+    store.prune_gold_examples(
+        tenant_id=tenant_id,
+        split=SMOKE_SPLIT,
+        keep_content_hashes=[content_hash(ex.input) for ex in _ALL],
+    )
     return counts
 
 
