@@ -195,42 +195,66 @@ def dsn() -> str:
 # code opens internally — reads and writes only that schema. Two processes (or
 # two `with` blocks) cannot see or TRUNCATE each other's rows.
 #
-# Scope note: the private schema is private-ONLY on the search_path (no
-# ``public``), which avoids the ``CREATE TABLE IF NOT EXISTS`` shadow gotcha
-# (a public copy would make the create a no-op). That means SQL needing an
-# extension type in public (e.g. pgvector's ``vector``) must resolve it
-# explicitly; the hygiene schema (16-suppression-consent.sql, actions) does
-# not, so it isolates cleanly. Broad adoption by the vector-using suites is a
-# follow-up.
+# Scope note: by default the private schema is private-ONLY on the search_path
+# (no ``public``). Suites whose DDL needs objects installed in ``public`` —
+# pgvector's ``vector`` type / ``vector_cosine_ops`` opclass — pass
+# ``include_public=True``, which appends ``public`` AFTER the private schema.
+# ``CREATE TABLE IF NOT EXISTS`` still creates into the private schema even
+# when ``public`` holds a same-named live table (verified empirically on the
+# shared cluster: the IF-NOT-EXISTS check is against the creation-target
+# schema, i.e. the FIRST entry of the search_path, not the whole path), and
+# unqualified reads/writes resolve to the private copy first — so the live
+# ``public`` tables stay untouched (CustomerAcq-wwy.9).
 
 _schema_counter = itertools.count()
 
 
-def _dsn_with_search_path(base_dsn: str, schema: str) -> str:
-    """Return ``base_dsn`` with libpq ``options=-c search_path=<schema>`` set,
-    so every connection opened from it lands in the private schema."""
+def _dsn_with_search_path(base_dsn: str, search_path: str) -> str:
+    """Return ``base_dsn`` with libpq ``options=-c search_path=<search_path>``
+    set, so every connection opened from it lands in the private schema."""
     parts = urlsplit(base_dsn)
-    opt = f"-c search_path={schema}"
+    opt = f"-c search_path={search_path}"
     q = f"options={quote(opt)}"
     query = f"{parts.query}&{q}" if parts.query else q
     return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
 
 
 @contextmanager
-def private_schema(*initdb_names: str):
+def private_schema(*initdb_names: str, include_public: bool = False):
     """Context manager yielding ``SimpleNamespace(dsn, schema)`` bound to a
     fresh per-process private schema. ``initdb_names`` are ``infra/initdb``
     SQL files applied INTO that schema (unqualified DDL lands there because the
-    search_path points only at it). The schema is dropped CASCADE on exit."""
+    private schema is FIRST on the search_path). ``include_public=True`` keeps
+    ``public`` on the path AFTER the private schema so extension objects
+    (pgvector) resolve; tables are still created/read privately (see scope note
+    above). The schema is dropped CASCADE on exit."""
     _require_db()
     schema = f"test_p{os.getpid()}_{next(_schema_counter)}"
+    path = f'"{schema}", public' if include_public else f'"{schema}"'
+    dsn_path = f"{schema},public" if include_public else schema
     with psycopg.connect(DB_DSN, autocommit=True) as conn:
         conn.execute(f'CREATE SCHEMA "{schema}"')
-        conn.execute(f'SET search_path TO "{schema}"')
+        conn.execute(f"SET search_path TO {path}")
         for name in initdb_names:
             conn.execute((_INITDB / name).read_text(encoding="utf-8"))
+        if include_public:
+            # RLS suites connect as the non-superuser scalers_app; it needs
+            # USAGE on the private schema to resolve the tables the initdb SQL
+            # just created (and granted) there. Best-effort, like the SQL files.
+            conn.execute(
+                f"""
+                DO $$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'scalers_app') THEN
+                        GRANT USAGE ON SCHEMA "{schema}" TO scalers_app;
+                    END IF;
+                EXCEPTION WHEN insufficient_privilege THEN
+                    NULL;
+                END $$;
+                """
+            )
     try:
-        yield SimpleNamespace(dsn=_dsn_with_search_path(DB_DSN, schema), schema=schema)
+        yield SimpleNamespace(dsn=_dsn_with_search_path(DB_DSN, dsn_path), schema=schema)
     finally:
         with psycopg.connect(DB_DSN, autocommit=True) as conn:
             conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
