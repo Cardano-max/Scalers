@@ -426,6 +426,14 @@ def retrieve(
 _SEED_FILE = Path(__file__).resolve().parent / "seed_docs" / "ladies-first-brand-playbook.md"
 _SEED_NAME = "Ladies First Brand & Campaign Playbook"
 
+# The packaged playbook is the FIXTURE studio's brand doc (Ladies First). It may ONLY
+# ever seed a fixture/demo tenant — never a real client, whose RAG must not be polluted
+# by another studio's playbook. Seeding it into skindesign's document store would make
+# the Ladies First voice retrievable under the real client's name. Gate to this
+# allowlist (r8: kill ladies8391 fixture bleed — seed_tenant_documents('skindesign')
+# returns None).
+_FIXTURE_SEED_TENANTS = frozenset({"ladies8391", "ink-studio"})
+
 
 def _seed_doc_id(tenant_id: str) -> str:
     """A deterministic seed id so re-seeding is a no-op (idempotent ON CONFLICT)."""
@@ -437,9 +445,13 @@ def seed_tenant_documents(tenant_id: str, *, dsn: str | None = None) -> str | No
     first ACTIVE document, so the operator has a real doc to point at immediately.
 
     Idempotent (deterministic id + ``ON CONFLICT DO NOTHING``). Returns the doc id on
-    seed/exists, or None if the packaged file is missing (honest — never fabricates a
-    doc). Marked ``kind='brand'``, ``source='seed'`` so it is clearly the operator's
-    uploaded brand doc."""
+    seed/exists, or None if the tenant is not a fixture (the playbook is the fixture
+    studio's brand doc and must never seed a real client's RAG) or the packaged file is
+    missing (honest — never fabricates a doc). Marked ``kind='brand'``, ``source='seed'``
+    so it is clearly the operator's uploaded brand doc."""
+    if tenant_id not in _FIXTURE_SEED_TENANTS:
+        # Real client (e.g. skindesign): NEVER seed the fixture playbook into its RAG.
+        return None
     if not _SEED_FILE.exists():
         return None
     content = _SEED_FILE.read_text(encoding="utf-8")

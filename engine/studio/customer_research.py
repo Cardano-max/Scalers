@@ -321,17 +321,31 @@ def choose_channel(facts: dict[str, Any], plan_channels: list[str] | None) -> st
 # Brand voice + verified research — the REAL inputs the copywriter cell consumes
 # --------------------------------------------------------------------------- #
 
-# The sending tenant (whose brand voice every outreach draft is written in). The
-# studio Host is single-tenant today; resolved once here so the call-site
-# (studio.agui) does not have to thread it through.
-_DEFAULT_TENANT = os.environ.get("SCALERS_TENANT_ID") or "ladies8391"
-
-
 def _env_flag(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name)
     if raw is None:
         return default
     return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _default_tenant() -> str | None:
+    """Resolve the fallback sending tenant for a call that passed no ``tenant_id``.
+
+    An explicit deploy-configured ``SCALERS_TENANT_ID`` is always honored — that is a
+    real operator choice. The ``ladies8391`` FIXTURE, however, is dev-only: it must
+    NEVER silently stand in for a real tenant, or the fixture's voice/claims bleed into
+    a real client's outreach. So the fixture fallback is gated behind an explicit dev
+    flag (``SCALERS_ALLOW_FIXTURE_TENANT``). With neither set this returns ``None`` and
+    callers degrade honestly (empty voice) rather than borrowing the fixture identity.
+
+    See CustomerAcq-wwy.7 (r8: kill ladies8391 fixture bleed).
+    """
+    configured = os.environ.get("SCALERS_TENANT_ID")
+    if configured:
+        return configured
+    if _env_flag("SCALERS_ALLOW_FIXTURE_TENANT", False):
+        return "ladies8391"
+    return None
 
 
 def _llm_copy_enabled() -> bool:
@@ -377,10 +391,14 @@ def resolve_brand_voice(tenant_id: str | None = None) -> tuple[str, tuple[str, .
     the brand-voice resolver (``config.load_pack`` + ``kb.voice.load_voice_dimensions``).
 
     These describe the SENDER (the artist writing the outreach), never the recipient.
-    Degrades honestly to ``("", ())`` if the pack / dimensions cannot be resolved —
-    the copy then writes from goal + grounded recipient facts only, never a fabricated
-    voice."""
-    tid = tenant_id or _DEFAULT_TENANT
+    Degrades honestly to ``("", ())`` if the pack / dimensions cannot be resolved, OR
+    if no tenant is given and no default resolves (:func:`_default_tenant`) — the copy
+    then writes from goal + grounded recipient facts only, never borrowing a fixture's
+    voice. ``resolve_brand_voice(None)`` is ``("", ())`` unless a real tenant is
+    configured or the fixture dev flag is set (r8: kill ladies8391 fixture bleed)."""
+    tid = tenant_id or _default_tenant()
+    if not tid:
+        return "", ()
     try:
         from config.loader import load_pack
         from kb.voice import load_voice_dimensions
@@ -1384,7 +1402,11 @@ def build_outreach_draft(
             )
             subject, body = copy.subject, copy.body
             if brand_voice_context:
-                grounding.append(f"brand_voice={tenant_id or _DEFAULT_TENANT}")
+                # Record the tenant the voice was ACTUALLY resolved for. brand_voice_context
+                # is only non-empty when a real pack resolved, so (tenant_id or the resolved
+                # default) is guaranteed non-None here — never a fixture stand-in for a real
+                # tenant that passed its own id.
+                grounding.append(f"brand_voice={tenant_id or _default_tenant()}")
             for r in research:
                 grounding.append(f"research:{r['url']}")
             grounding.append("copy=copywriter_email_cell")

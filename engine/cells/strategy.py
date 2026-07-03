@@ -82,11 +82,18 @@ _INSTRUCTIONS = (
 )
 
 
-def build_strategy_prompt(tenant_id: str, brief: str, research: str | None = None) -> str:
+def build_strategy_prompt(descriptor: str, brief: str, research: str | None = None) -> str:
     """Render the per-campaign prompt the strategy cell runs against.
 
     Campaign-level context (one strategy per campaign), composed the same way the
     draft prompt is: account/voice context, then the brief, then the task.
+
+    ``descriptor`` is the REQUIRED, honest account-identity line from
+    :func:`config.loader.describe_tenant` (e.g. ``"@ink-studio — Ink & Iron Tattoo
+    Studio, a Brooklyn fine-line and blackwork tattoo studio"``, or the bare handle
+    when no pack is on file). It replaces the old hardcoded ``"a women-led tattoo
+    studio"`` literal so a tenant's identity is never fabricated. Callers resolve it
+    with ``describe_tenant(tenant_id)``.
 
     When the upstream research step (slice-3 research agent) produced real findings
     grounded in cited web sources, they are composed in between the brief and the
@@ -95,8 +102,7 @@ def build_strategy_prompt(tenant_id: str, brief: str, research: str | None = Non
     proceeds from the brief alone, never from fabricated research.
     """
     parts = [
-        f"Studio/account: @{tenant_id} — a women-led tattoo studio with a warm, "
-        f"concrete, human voice.",
+        f"Studio/account: {descriptor}.",
         f"Campaign brief: {brief}",
     ]
     if research and research.strip():

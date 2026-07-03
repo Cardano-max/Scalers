@@ -45,6 +45,7 @@ from autonomy.confidence import DEFAULT_K, probe_self_consistency
 from autonomy.produce import produce_and_record_decision_real
 from autonomy.store import PostgresDecisionStore
 from cells.content_brief import ContentBrief, Platform, build_content_brief_cell
+from config.loader import describe_tenant
 from harness.router import DEFAULT_THRESHOLD
 from harness.state import AutonomyMode
 from sideeffects.keys import idempotency_key
@@ -95,9 +96,14 @@ def _render_post(brief: ContentBrief) -> str:
 
 
 def _build_prompt(
-    tenant_id: str, brief: str, platform: Platform, strategy: str | None = None
+    descriptor: str, brief: str, platform: Platform, strategy: str | None = None
 ) -> str:
     """Campaign context for the content cell (grounding before task).
+
+    ``descriptor`` is the REQUIRED, honest account-identity line from
+    :func:`config.loader.describe_tenant` — it replaces the old hardcoded
+    ``"a women-led tattoo studio"`` literal so a tenant's identity is never
+    fabricated. Callers resolve it with ``describe_tenant(tenant_id)``.
 
     When a real campaign strategy was produced upstream (slice-2 strategy agent),
     it is composed into the prompt between the brief and the task so the draft is
@@ -105,8 +111,7 @@ def _build_prompt(
     not decoration.
     """
     parts = [
-        f"Studio/account: @{tenant_id} — a women-led tattoo studio with a warm, "
-        f"concrete, human voice.",
+        f"Studio/account: {descriptor}.",
         f"Platform: {platform.value}",
         f"Campaign brief: {brief}",
     ]
@@ -196,7 +201,7 @@ async def run_content_to_review_async(
 
     run_id = f"contentrun-{tenant_id}-{uuid.uuid4().hex[:12]}"
     decision_id = f"{run_id}-decision"
-    prompt = _build_prompt(tenant_id, brief, platform, strategy)
+    prompt = _build_prompt(describe_tenant(tenant_id), brief, platform, strategy)
 
     # 1. REAL draft (temp-0, the decision artifact).
     content_cell = build_content_brief_cell()

@@ -9,6 +9,7 @@ sending_domain = "outreach.inkandiron.example"
 [voice]
 skill = "brand-voice/ink-studio"
 examples_uri = "minio://voice/ink-studio/examples.jsonl"
+positioning = "a Brooklyn fine-line and blackwork tattoo studio"
 
 # --- Channels -------------------------------------------------------------- #
 # Organic posting: confident enough to auto-post above 0.85, else queue.

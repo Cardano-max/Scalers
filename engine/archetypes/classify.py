@@ -45,9 +45,15 @@ class ArchetypeChoice(BaseModel):
         return v.value if hasattr(v, "value") else str(v)
 
 
-def _instructions() -> str:
+def _instructions(descriptor: str) -> str:
     """Render the system instructions, enumerating ONLY the registered types so the
-    model is anchored to the live registry (no stale hard-coded menu)."""
+    model is anchored to the live registry (no stale hard-coded menu).
+
+    ``descriptor`` is the REQUIRED, honest account-identity line from
+    :func:`config.loader.describe_tenant` — it replaces the old hardcoded
+    ``"a women-led tattoo studio"`` literal so the router is never anchored to a
+    fabricated identity. Callers resolve it with ``describe_tenant(tenant_id)``.
+    """
     menu_lines = []
     for spec in registry.REGISTRY.values():
         menu_lines.append(
@@ -56,7 +62,7 @@ def _instructions() -> str:
         )
     menu = "\n".join(menu_lines)
     return (
-        "You are a marketing-campaign router for a women-led tattoo studio. Given an "
+        f"You are a marketing-campaign router for {descriptor}. Given an "
         "operator's free-text campaign brief, choose the SINGLE best-fitting campaign "
         "archetype from the fixed library below. You MUST pick exactly one of these "
         "registered ids — you may not invent a new type, and you may not return a type "
@@ -69,21 +75,29 @@ def _instructions() -> str:
     )
 
 
-def build_classifier_cell(*, model: str = CLASSIFY_MODEL, **overrides) -> Cell[ArchetypeChoice]:
+def build_classifier_cell(
+    descriptor: str, *, model: str = CLASSIFY_MODEL, **overrides
+) -> Cell[ArchetypeChoice]:
     """Build the brief->archetype classifier cell (Haiku 4.5, temp 0).
+
+    ``descriptor`` is the REQUIRED, honest account-identity line from
+    :func:`config.loader.describe_tenant` (never a fabricated niche).
 
     Run with ``cell.run_sync(brief_text)``. The returned :class:`ArchetypeChoice`
     is guaranteed to carry a REGISTERED id (schema-validated)."""
     params = dict(
         name="archetype_classify",
         schema=ArchetypeChoice,
-        instructions=_instructions(),
+        instructions=_instructions(descriptor),
         model=model,
     )
     params.update(overrides)
     return Cell(**params)
 
 
-def classify_brief(brief: str, *, model: str = CLASSIFY_MODEL) -> ArchetypeChoice:
-    """Classify one brief -> a registered :class:`ArchetypeChoice` (real model call)."""
-    return build_classifier_cell(model=model).run_sync(brief)
+def classify_brief(brief: str, descriptor: str, *, model: str = CLASSIFY_MODEL) -> ArchetypeChoice:
+    """Classify one brief -> a registered :class:`ArchetypeChoice` (real model call).
+
+    ``descriptor`` is the REQUIRED honest account-identity from
+    :func:`config.loader.describe_tenant` (never a fabricated niche)."""
+    return build_classifier_cell(descriptor, model=model).run_sync(brief)

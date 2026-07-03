@@ -75,6 +75,15 @@ class VoiceRef(BaseModel):
     examples_uri: str | None = Field(
         default=None, description="Optional URI to a voice-example set for similarity checks."
     )
+    positioning: str | None = Field(
+        default=None,
+        description=(
+            "One-line, honest positioning of the studio (e.g. 'a Brooklyn fine-line "
+            "tattoo studio'). Used by config.loader.describe_tenant to ground prompts "
+            "in the tenant's REAL identity — never a hardcoded fabrication. None (no "
+            "positioning on file) degrades to the bare handle, never an invented niche."
+        ),
+    )
 
 
 class AutonomyConfig(BaseModel):

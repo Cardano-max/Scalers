@@ -454,7 +454,9 @@ def _brand_voice_context(ctx: RunContext[StudioDeps]) -> str:
     try:
         from studio.customer_research import resolve_brand_voice
 
-        brand_voice, _claims = resolve_brand_voice()
+        # Resolve for THIS run's tenant (never a fixture default) so the snippet is the
+        # real tenant's voice or honestly absent — never another studio's (r8).
+        brand_voice, _claims = resolve_brand_voice(ctx.deps.tenant_id)
         if brand_voice.strip():
             snippet = brand_voice.strip()
             if len(snippet) > 1500:
@@ -966,15 +968,14 @@ async def describe_brand_voice(ctx: RunContext[StudioDeps]) -> str:
     Honest: if the pack genuinely cannot resolve, say so and name the tenant."""
 
     def _resolve() -> tuple[str, tuple[str, ...], str]:
-        from studio.customer_research import _DEFAULT_TENANT, resolve_brand_voice
+        from studio.customer_research import resolve_brand_voice
 
-        # Prefer the run's tenant; fall back to the configured default tenant so the
-        # real voice surfaces even when deps carry a placeholder tenant.
+        # Resolve for THIS run's tenant only. We never fall back to the fixture default
+        # here: surfacing another tenant's voice under this tenant's name would be a
+        # fabrication. If it can't resolve, report the failure honestly and NAME the
+        # tenant (r8: kill ladies8391 fixture bleed).
         tid = ctx.deps.tenant_id
         voice, claims = resolve_brand_voice(tid)
-        if not voice.strip():
-            tid = _DEFAULT_TENANT
-            voice, claims = resolve_brand_voice(tid)
         return voice, claims, tid
 
     voice, claims, tid = await asyncio.to_thread(_resolve)
@@ -1467,6 +1468,7 @@ def _execute_provided_leads_sync(
     # `failed` strategist run and the run continues on the base goal — never a crash, and
     # never a fabricated angle.
     from cells.strategy import build_strategy_cell, build_strategy_prompt
+    from config.loader import describe_tenant
 
     # Build the strategist cell OUTSIDE the try so BOTH the success and the honest-failed
     # run record its REAL model (never a hardcoded literal that could drift from the pin).
@@ -1474,7 +1476,9 @@ def _execute_provided_leads_sync(
     strat_model = _cell_model(strat_cell)
     campaign_angle: str | None = None
     try:
-        strategy = strat_cell.run_sync(build_strategy_prompt(tenant_id, _brief_from_plan(plan)))
+        strategy = strat_cell.run_sync(
+            build_strategy_prompt(describe_tenant(tenant_id), _brief_from_plan(plan))
+        )
         campaign_angle = (strategy.target_angle or "").strip() or None
         _rec(
             "strategist", strat_model,
@@ -1632,7 +1636,8 @@ def _execute_provided_leads_sync(
 
         try:
             draft = build_outreach_draft(
-                facts, goal=draft_goal, plan_channels=plan.channels or None,
+                facts, goal=draft_goal, tenant_id=tenant_id,
+                plan_channels=plan.channels or None,
                 deep_research=plan.deep_research, research=research,
                 profile=profile, offer=chosen_offer,
             )
@@ -2336,7 +2341,7 @@ def _research_and_stage_sync(
     staged: list[dict[str, Any]] = []
     for facts in leads:
         draft = build_outreach_draft(
-            facts, goal=goal, plan_channels=plan.channels or None
+            facts, goal=goal, tenant_id=tenant_id, plan_channels=plan.channels or None
         )
         cust_id = facts["customer_id"]
         action_id = record_pending_action(
