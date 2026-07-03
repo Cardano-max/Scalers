@@ -1,0 +1,71 @@
+# REAL client pack — Skin Design Tattoo (the one paying client).
+# Authored by writer 2026-07-03 from client-data/ ONLY (artists.csv, customers.csv,
+# campaign-examples.json). Its own tenant_id/dir — ladies8391 (synthetic smoke) is
+# never edited in place (tenant isolation). Values are real; unverified fields carry
+# TODO(operator-verify). Pack stays DRAFT (approve-first) until BOTH sign-offs exist:
+# operator brand sign-off + human-rater holdout (docs/onboarding/client-onboarding-playbook.md).
+
+tenant_id = "skindesign"
+display_name = "Skin Design Tattoo"
+
+# TODO(operator-verify): real sending domain. No client domain in client-data;
+# placeholder below is NOT a verified value — do not send external mail until set.
+sending_domain = "outreach.skindesign.example"
+
+[voice]
+skill = "brand-voice/skindesign"
+examples_uri = "minio://voice/skindesign/examples.jsonl"
+
+# --- Channels -------------------------------------------------------------------- #
+# NOTE: the client's real, evidenced channel is SMS (sender +17022976079,
+# campaign-examples.json). The engine Channel enum today is instagram/facebook/gmail
+# only — SMS is not yet a modeled channel. TODO(operator-verify)/eng: how skindesign's
+# SMS program maps onto the engine. Until brand sign-off, every channel is REVIEW
+# (approve-first): all external copy is DRAFT.
+
+[channels.instagram]
+enabled = true
+[channels.instagram.autonomy]
+mode = "review"
+threshold = 0.9
+[channels.instagram.limits]
+per_day = 10
+per_hour = 3
+
+[channels.facebook]
+enabled = true
+[channels.facebook.autonomy]
+mode = "review"
+threshold = 0.9
+[channels.facebook.limits]
+per_day = 10
+
+[channels.gmail]
+enabled = true
+[channels.gmail.autonomy]
+mode = "review"
+threshold = 0.9
+[channels.gmail.limits]
+per_day = 40
+per_hour = 10
+
+[suppression]
+source = "minio://suppression/skindesign.csv"
+
+[schedule]
+# TODO(operator-verify): canonical business timezone. Campaign sender is a +1 702
+# (Las Vegas) number and Spring Mountain reads as the flagship, so Pacific is the
+# best-evidenced default — confirm before relying on it for send timing.
+timezone = "America/Los_Angeles"
+posts_per_day = 1
+quiet_hours = [22, 8]
+
+[research]
+sources = ["firecrawl", "meta_ad_library"]
+
+# Secret references (resolved from the environment at access; never stored here).
+[secrets.meta_access_token]
+env = "SKINDESIGN_META_ACCESS_TOKEN"
+
+[secrets.gmail_oauth_refresh]
+env = "SKINDESIGN_GMAIL_OAUTH_REFRESH"
