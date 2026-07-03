@@ -257,15 +257,35 @@ def _publish_gmail(action: ActionRow, connector: Any | None, dsn: str | None) ->
     real_to = action.target or ""
     subject = action.subject or ""
     redirect = os.environ.get("GMAIL_REDIRECT_TO")
-    is_live_send = getattr(action, "worker", None) == "studio_real_send" or not redirect
+    # FAIL CLOSED (wwy.3 — CRITICAL send-safety): a send goes LIVE ONLY on an
+    # EXPLICIT operator live authorization (worker == 'studio_real_send'). A
+    # missing GMAIL_REDIRECT_TO must NEVER be read as "go live" — that one
+    # unset env var (fresh shell / new deploy / unit without the env file) was
+    # the top accidental-send path, turning every routine approve into real
+    # email. Mirrors the SMS invariant in connectors/sms.py.
+    is_live_send = getattr(action, "worker", None) == "studio_real_send"
     if is_live_send:
         mode = "live"
         to_addr = real_to
         # subject stays CLEAN — no [TEST] marker on a real send.
-    else:
+    elif redirect:
         mode = "test_redirect"
         to_addr = redirect
         subject = f"[TEST->{real_to}] {subject}"
+    else:
+        # No redirect target AND no explicit live authorization → REFUSE. The
+        # action was already claimed; mark it failed WITHOUT any external call
+        # (never double-fires; exactly-once unaffected).
+        return _with_mode(
+            update_status(
+                action.id, "failed", dsn=dsn,
+                last_error=(
+                    "GMAIL_REDIRECT_TO not configured and no explicit live "
+                    "authorization — refusing (fail closed)"
+                ),
+            ),
+            "blocked",
+        )
 
     # TOKEN GUARD (honesty): never deliver a raw template placeholder. If the body
     # still carries an unresolved {{...}} token (e.g. the copywriter's {{unsubscribe}}

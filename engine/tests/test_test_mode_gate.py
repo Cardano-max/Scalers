@@ -160,6 +160,7 @@ def test_allowlisted_recipient_may_receive_a_test_send(monkeypatch):
     ok = _OkGmail()
     tenant = {**SD, "test_send_allowlist": ["operator@example.com"]}
     _wire(monkeypatch, store, tenant)
+    monkeypatch.setenv("GMAIL_REDIRECT_TO", "qa-inbox@example.com")  # fail-closed needs a redirect target
 
     result = approve_and_publish("act_gate1", connectors={"gmail": ok}, dsn=None)
     assert len(ok.calls) == 1
@@ -287,6 +288,7 @@ def test_test_mode_false_tenant_passes_through(monkeypatch):
     store = _FakeStore(_action("skindesign"))
     ok = _OkGmail()
     _wire(monkeypatch, store, {**SD, "test_mode": False})
+    monkeypatch.setenv("GMAIL_REDIRECT_TO", "qa-inbox@example.com")  # fail-closed needs a redirect target
 
     result = approve_and_publish("act_gate1", connectors={"gmail": ok}, dsn=None)
     assert len(ok.calls) == 1

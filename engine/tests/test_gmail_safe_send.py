@@ -99,7 +99,11 @@ def test_redirect_routes_to_env_inbox_and_leaves_target_unchanged(monkeypatch):
     assert out.status == "sent"
 
 
-def test_no_redirect_env_sends_to_real_target(monkeypatch):
+def test_no_redirect_env_fails_closed(monkeypatch):
+    # CRITICAL send-safety (wwy.3): a MISSING GMAIL_REDIRECT_TO must NOT turn a
+    # routine approve into a live send to the real recipient. With no redirect
+    # configured and no explicit live authorization, the send is REFUSED
+    # (status=failed, mode=blocked) and ZERO Gmail calls are made.
     monkeypatch.delenv("GMAIL_REDIRECT_TO", raising=False)
     real_to = "client@studio.example"
     row = ActionRow(
@@ -113,9 +117,38 @@ def test_no_redirect_env_sends_to_real_target(monkeypatch):
     monkeypatch.setattr(publish, "claim_for_send", store.claim_for_send)
 
     gmail = _FakeGmail()
-    approve_and_publish("act_noredir", connectors={"gmail": gmail})
-    # Unchanged behaviour: real recipient, no subject prefix.
-    assert gmail.calls == [(real_to, "Your custom piece", "Hi")]
+    out = approve_and_publish("act_noredir", connectors={"gmail": gmail})
+
+    assert gmail.calls == []  # never reached the network — fail closed
+    assert out.status == "failed"
+    assert getattr(out, "mode", None) == "blocked"
+    assert "GMAIL_REDIRECT_TO not configured" in (out.last_error or "")
+    assert out.target == real_to  # the real lead is never mutated
+
+
+def test_no_redirect_but_live_authorized_still_sends(monkeypatch):
+    # The ONLY way a no-redirect send reaches the real recipient: an EXPLICIT
+    # operator live authorization (worker == 'studio_real_send'). Then it sends
+    # live with a CLEAN subject — no [TEST] prefix.
+    monkeypatch.delenv("GMAIL_REDIRECT_TO", raising=False)
+    real_to = "client@studio.example"
+    row = ActionRow(
+        id="act_live", tenant_id="ladies8391", type="outreach", channel="gmail",
+        worker="studio_real_send", draft="Hi", status="pending", target=real_to,
+        subject="Your custom piece",
+        idempotency_key="ladies8391:gmail:client@studio.example:live",
+    )
+    store = _FakeStore(row)
+    monkeypatch.setattr(publish, "get_action", store.get_action)
+    monkeypatch.setattr(publish, "update_status", store.update_status)
+    monkeypatch.setattr(publish, "claim_for_send", store.claim_for_send)
+
+    gmail = _FakeGmail()
+    out = approve_and_publish("act_live", connectors={"gmail": gmail}, live=True)
+
+    assert gmail.calls == [(real_to, "Your custom piece", "Hi")]  # live, clean subject
+    assert out.status == "sent"
+    assert getattr(out, "mode", None) == "live"
 
 
 # ── CHANGE 2: atomic exactly-once CLAIM (real Postgres) ─────────────────────────
@@ -168,7 +201,10 @@ def test_double_approve_sends_exactly_once_second_claims_zero(monkeypatch):
 
     # MOCK the real connector's send — no token exchange, no Google, no real email.
     monkeypatch.setattr(GmailConnector, "send", fake_send)
-    monkeypatch.delenv("GMAIL_REDIRECT_TO", raising=False)
+    # A redirect target so the send actually fires (fail-closed refuses a
+    # no-redirect, non-live send); this test is about the atomic exactly-once
+    # claim, which is identical for a live or a redirected send.
+    monkeypatch.setenv("GMAIL_REDIRECT_TO", "qa-inbox@example.com")
 
     action_id = _seed_pending(_DSN)
     try:
@@ -197,7 +233,10 @@ def test_concurrent_approve_sends_exactly_once(monkeypatch):
         return GmailSendResult(message_id="m_mock", deep_link="dl_mock")
 
     monkeypatch.setattr(GmailConnector, "send", fake_send)
-    monkeypatch.delenv("GMAIL_REDIRECT_TO", raising=False)
+    # A redirect target so the send actually fires (fail-closed refuses a
+    # no-redirect, non-live send); this test is about the atomic exactly-once
+    # claim, which is identical for a live or a redirected send.
+    monkeypatch.setenv("GMAIL_REDIRECT_TO", "qa-inbox@example.com")
 
     action_id = _seed_pending(_DSN)
     results: list[ActionRow] = []

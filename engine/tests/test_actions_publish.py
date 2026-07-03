@@ -134,10 +134,13 @@ def _pending(channel="gmail", **kw) -> ActionRow:
 
 
 def test_gmail_approve_sends_and_marks_sent(patched_store):
+    # An EXPLICIT live authorization reaches the real recipient with a clean
+    # subject (the success path). The fail-closed default — a plain approve with
+    # no redirect and no live auth — is covered by test_no_redirect_env_fails_closed.
     patched_store(_pending())
     gmail = _FakeGmail(result=GmailSendResult(
         message_id="m1", deep_link="https://mail.google.com/mail/u/0/#sent/m1"))
-    out = approve_and_publish("act_test1", connectors={"gmail": gmail})
+    out = approve_and_publish("act_test1", connectors={"gmail": gmail}, live=True)
 
     assert gmail.calls == [("client@studio.example", "Your custom piece", "Hello from Ladies First")]
     assert out.status == "sent"
@@ -155,9 +158,9 @@ def test_exactly_once_does_not_resend_a_sent_action(patched_store):
     patched_store(_pending())
     gmail = _FakeGmail(result=GmailSendResult(message_id="m1", deep_link="dl"))
 
-    first = approve_and_publish("act_test1", connectors={"gmail": gmail})
+    first = approve_and_publish("act_test1", connectors={"gmail": gmail}, live=True)
     assert first.status == "sent"
-    second = approve_and_publish("act_test1", connectors={"gmail": gmail})  # replay
+    second = approve_and_publish("act_test1", connectors={"gmail": gmail}, live=True)  # replay
 
     assert second.status == "sent"
     assert len(gmail.calls) == 1  # the external effect happened exactly once
@@ -166,7 +169,8 @@ def test_exactly_once_does_not_resend_a_sent_action(patched_store):
 # ── failure handling: real error, never a fake success ──────────────────────────
 
 
-def test_gmail_send_failure_marks_failed_with_real_error(patched_store):
+def test_gmail_send_failure_marks_failed_with_real_error(patched_store, monkeypatch):
+    monkeypatch.setenv("GMAIL_REDIRECT_TO", "ops@inbox.example")  # safe path so the send is reached
     patched_store(_pending())
     gmail = _FakeGmail(exc=GmailSendError("gmail send failed: HTTP 403 insufficient scope"))
     out = approve_and_publish("act_test1", connectors={"gmail": gmail})
@@ -251,7 +255,8 @@ class _MockGmail:
         return types.SimpleNamespace(deep_link="dl")
 
 
-def test_live_path_refuses_mock_connector_never_fake_send(patched_store):
+def test_live_path_refuses_mock_connector_never_fake_send(patched_store, monkeypatch):
+    monkeypatch.setenv("GMAIL_REDIRECT_TO", "ops@inbox.example")  # reach the send path; mock still refused
     patched_store(_pending())
     mock = _MockGmail()
     out = approve_and_publish("act_test1", connectors={"gmail": mock})
@@ -262,9 +267,10 @@ def test_live_path_refuses_mock_connector_never_fake_send(patched_store):
     assert out.outcome_kind != "success"
 
 
-def test_real_test_fake_is_not_treated_as_mock(patched_store):
+def test_real_test_fake_is_not_treated_as_mock(patched_store, monkeypatch):
     # The unit-test fakes do NOT set is_mock, so the guard leaves them alone and
     # the normal send path runs (regression guard for the is_mock check).
+    monkeypatch.setenv("GMAIL_REDIRECT_TO", "ops@inbox.example")  # safe path so the send is reached
     patched_store(_pending())
     gmail = _FakeGmail(result=GmailSendResult(message_id="m1", deep_link="dl"))
     out = approve_and_publish("act_test1", connectors={"gmail": gmail})
@@ -307,16 +313,20 @@ def test_default_redirects_with_test_marker_when_redirect_set(patched_store, mon
     assert store.rows["act_test1"].worker != "studio_real_send"
 
 
-def test_no_redirect_env_sends_clean_live_mode(patched_store, monkeypatch):
-    # With no GMAIL_REDIRECT_TO configured at all, a send is live by construction
-    # (clean subject, real recipient) and reports mode 'live'.
+def test_no_redirect_env_fails_closed(patched_store, monkeypatch):
+    # CRITICAL send-safety (wwy.3): with NO GMAIL_REDIRECT_TO and no explicit
+    # live authorization, the send is REFUSED (fail closed) — a missing env var
+    # can never turn a routine approve into live email. Was the accidental-send
+    # bug (previously "live by construction").
     monkeypatch.delenv("GMAIL_REDIRECT_TO", raising=False)
     patched_store(_pending())
     gmail = _FakeGmail(result=GmailSendResult(message_id="m1", deep_link="dl"))
     out = approve_and_publish("act_test1", connectors={"gmail": gmail})
 
-    assert gmail.calls == [("client@studio.example", "Your custom piece", "Hello from Ladies First")]
-    assert out.mode == "live"
+    assert gmail.calls == []  # never reached the network
+    assert out.status == "failed"
+    assert out.mode == "blocked"
+    assert "GMAIL_REDIRECT_TO not configured" in (out.last_error or "")
 
 
 def test_unresolved_placeholder_blocks_send_and_does_not_double_fire(patched_store, monkeypatch):
