@@ -99,6 +99,14 @@ def test_crash_after_claim_is_stale_then_redriven(ledger):
     it — the fire_date was never silently consumed (AC-9)."""
     fd = date(2026, 7, 3)
     claim = ledger.claim(TENANT, JOB, fd)
+    # Backdate the claim to a fixed time so staleness is wall-clock-independent.
+    import psycopg
+
+    with psycopg.connect(ledger._conninfo, autocommit=True) as conn:
+        conn.execute(
+            "UPDATE scheduled_job_runs SET claimed_at = %s WHERE id = %s",
+            (datetime(2026, 7, 3, 9, 5, tzinfo=timezone.utc), claim.run_id),
+        )
 
     # Two hours later, still 'claimed' => stale.
     later = datetime(2026, 7, 3, 11, 0, tzinfo=timezone.utc)

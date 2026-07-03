@@ -125,10 +125,7 @@ def test_degraded_when_llm_unfunded_still_stages(scan_env, monkeypatch):
 def test_scan_excludes_opted_out_followup(scan_env, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "funded")
     today = date(2026, 7, 1)
-    detail = _run(
-        scan_env, today, prior_sends=_sends(today),
-        opted_out=frozenset({"c@x.com"}),
-    )
+    _run(scan_env, today, prior_sends=_sends(today), opted_out=frozenset({"c@x.com"}))
     with psycopg.connect(scan_env.dsn) as conn:
         follow = conn.execute(
             "SELECT count(*) FROM actions WHERE type = 'follow_up'"
