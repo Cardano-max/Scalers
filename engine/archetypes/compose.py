@@ -29,13 +29,13 @@ from __future__ import annotations
 
 import operator
 import os
+import re
 import uuid
 from typing import Annotated, Any
 
 from pydantic import BaseModel, Field
 
 from archetypes import registry, router
-from archetypes.spec import ArchetypeSpec, StepKind
 
 
 def _brand_voice_block(tenant_id: str) -> str:
@@ -128,6 +128,14 @@ class CampaignState(BaseModel):
     # Per-worker channel, set on the Send payload for a draft_one worker. Workers
     # never write it back, so there is no concurrent-write conflict at fan-in.
     channel: str = ""
+    # Per-worker DRAFT VARIATION (wwy.8): so N requested drafts are N DISTINCT
+    # drafts, each same-channel Send carries a distinct variant slot (index within
+    # its channel group, of the total for that channel) and, when the strategy
+    # exposes them, a distinct key-message angle. Ride on the Send payload like
+    # ``channel``; workers never write them back.
+    variant_index: int = 0
+    variant_total: int = 1
+    variant_angle: str = ""
     # additive reducer so parallel draft_one workers accumulate without clobbering.
     assets: Annotated[list[dict[str, Any]], operator.add] = Field(default_factory=list)
     critiques: Annotated[list[dict[str, Any]], operator.add] = Field(default_factory=list)
@@ -273,21 +281,46 @@ def _draft_dispatch_node(state: CampaignState) -> dict[str, Any]:
     return {"step_log": [f"draft_dispatch: fan-out {len(chans)} draft(s): {', '.join(chans)}"]}
 
 
+_KEY_MESSAGE_RE = re.compile(r"^\s*-\s+(.+?)\s*$", re.MULTILINE)
+
+
+def _extract_key_messages(strategy_text: str) -> list[str]:
+    """The strategy's key-message bullets, parsed from the rendered strategy text
+    (``cells.strategy`` renders each as ``  - {message}``). These become the
+    per-variant angles so each same-channel draft leads with a DIFFERENT message.
+    Empty list when the strategy has no bullets — the variant-index directive
+    alone still forces distinctness."""
+    return [m.strip() for m in _KEY_MESSAGE_RE.findall(strategy_text or "") if m.strip()]
+
+
 def _draft_fanout(state: CampaignState):
     """B7 fan-out: one Send per planned draft, HARD-capped. Worker logic is FIXED;
-    only cardinality + content vary (cardinality driven by the agreed plan)."""
+    only cardinality + content vary (cardinality driven by the agreed plan).
+
+    Each Send also carries a DISTINCT variant slot (wwy.8): same-channel drafts are
+    numbered ``index of total`` within their channel group and assigned a distinct
+    key-message angle, so N requested drafts produce N distinct prompts."""
     from langgraph.types import Send
 
-    return [
-        Send("draft_one", {
+    channels = _planned_channels(state)
+    angles = _extract_key_messages(state.strategy_text)
+    per_channel_total = {ch: channels.count(ch) for ch in set(channels)}
+    seen: dict[str, int] = {}
+    sends = []
+    for i, channel in enumerate(channels):
+        idx = seen.get(channel, 0)
+        seen[channel] = idx + 1
+        sends.append(Send("draft_one", {
             "campaign_id": state.campaign_id, "run_id": state.run_id,
             "tenant_id": state.tenant_id, "archetype_id": state.archetype_id,
             "brief": state.brief, "strategy_text": state.strategy_text,
             "research_text": state.research_text,
             "channel": channel,
-        })
-        for channel in _planned_channels(state)
-    ]
+            "variant_index": idx,
+            "variant_total": per_channel_total[channel],
+            "variant_angle": angles[i % len(angles)] if angles else "",
+        }))
+    return sends
 
 
 def _make_draft_one_node(team_store, dsn=None):
@@ -315,12 +348,28 @@ def _make_draft_one_node(team_store, dsn=None):
             f"{state.brief} {state.strategy_text} {channel} voice tone hook call to action",
             k=3, dsn=dsn,
         )
+        # Per-worker VARIATION directive (wwy.8): when this channel produced more
+        # than one draft, each Send gets a distinct slot so N requested drafts are
+        # N DISTINCT drafts — a different hook/opening and value-prop angle per
+        # variant (deterministic; same-channel prompts differ). The fan-in dedupe
+        # in _route_node is the backstop if the model still repeats.
+        variant_directive = ""
+        if state.variant_total > 1:
+            variant_directive = (
+                f"VARIANT {state.variant_index + 1} OF {state.variant_total} for channel "
+                f"'{channel}': this MUST be a DISTINCT draft — use a different hook and "
+                f"opening structure AND a different value-proposition angle from the other "
+                f"{state.variant_total} variants. Never reuse an opening line."
+            )
+            if state.variant_angle:
+                variant_directive += f" Lead with this angle: {state.variant_angle}."
         prompt = "\n".join(
             p for p in [
                 voice_block,
                 docs_block,
                 f"Campaign brief: {state.brief or state.archetype_id}",
                 f"Strategy:\n{state.strategy_text}",
+                variant_directive,
                 f"Produce one organic post for channel '{channel}'. Write the caption "
                 "in the BRAND VOICE above" + (
                     ", using ONLY the approved claims." if voice_block
@@ -430,12 +479,29 @@ def _make_route_node(team_store, dsn):
                     role="jury", model=DEFAULT_MODEL,
                     inp={"confidences": confs}, out={"aggregate": agg, "decision": decision.value})
 
+        # Fan-in DEDUPE (wwy.8): N requested drafts must be N DISTINCT drafts. The
+        # per-worker variation directive makes prompts differ; this is the backstop
+        # if the model still repeats. Normalize each caption (same normalizer the
+        # copywriter's anti-over-templating validator uses) and SKIP a duplicate
+        # with a concrete reason BEFORE staging — a repeated draft never becomes a
+        # second PENDING row.
+        from cells.copywriter import _normalize
+
         pending: list[str] = []
+        skips: list[str] = []
+        seen: dict[str, str] = {}
         try:
             from actions import store as actions_store
             for asset in state.assets:
                 content = asset.get("content", {})
                 draft = content.get("caption") or content.get("headline") or ""
+                norm = _normalize(str(draft))
+                if norm and norm in seen:
+                    skips.append(
+                        f"SKIPPED duplicate draft (asset {asset['id']}) — normalized "
+                        f"caption matches asset {seen[norm]}"
+                    )
+                    continue
                 channel = asset.get("channel", "ig")
                 aid = actions_store.record_pending_action(
                     tenant_id=state.tenant_id, decision_id=None, type="post",
@@ -445,11 +511,16 @@ def _make_route_node(team_store, dsn):
                     idempotency_key=f"{state.run_id}:{asset['id']}", run_id=state.run_id,
                     dsn=dsn,
                 )
+                if norm:
+                    seen[norm] = asset["id"]
                 pending.append(aid)
-            note = f"route: decision={decision.value}; {len(pending)} action(s) PENDING (HELD)"
+            note = (
+                f"route: decision={decision.value}; {len(pending)} action(s) PENDING (HELD)"
+                + (f"; {len(skips)} duplicate(s) skipped" if skips else "")
+            )
         except Exception as exc:
             note = f"route: decision={decision.value}; actions store unavailable ({type(exc).__name__})"
-        return {"pending_action_ids": pending, "step_log": [note]}
+        return {"pending_action_ids": pending, "step_log": [note, *skips]}
 
     return _route_node
 
