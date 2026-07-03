@@ -39,12 +39,14 @@
   Soho, Hawaii, New York, and Nashville**
   `[source: client-data/artists.csv studio_name column; client-data/campaign-examples.json _provenance.client]`.
   Each location carries its own artist roster (`client-data/artists.csv`); several
-  artists (e.g. Robert Pho, Amanda, Reena, Lynn, Nigel) appear across multiple
-  locations.
+  artists appear across multiple locations (see that file for the per-location
+  roster — not reproduced here to keep individuals' contact PII off this
+  prompt-prepended surface).
   - TODO(operator-verify): studio ownership / founder identity and how copy may
-    reference them. Robert Pho (`grandmasterpho`, `client-data/artists.csv`) recurs
-    across most locations, which is *consistent with* a founder/principal, but this
-    is **not stated** in client-data — do not assert it.
+    reference them. One roster name recurs across most locations (see
+    `client-data/artists.csv`), which is *consistent with* a founder/principal, but
+    this is **not stated** in client-data — do not assert it, and confirm with the
+    operator before naming any individual as owner in copy.
   - TODO(operator-verify): city/state for each location name (e.g. is "Spring
     Mountain" the Las Vegas flagship? the campaign sender is a +1 **702** number,
     which is the Las Vegas area code — suggestive, not confirmed). Do not print a
