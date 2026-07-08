@@ -13,12 +13,14 @@ and never let one dimension leak into another.
 > not a draft:
 > - **Rubric:** this file (`pmm/positioning/jury-rubric-voice-appropriateness.md`).
 > - **Anchor corpus:** `pmm/positioning/jury-rubric-anchors.gold.jsonl` — writer's
->   canonical anchors in the rvy.1 `gold_label` schema, `split=rubric`, coverage
->   **voice 0/2/3/4 + appropriateness 1/2** (+ a 4), each with `expected.{on_voice,
->   scores,anchors,hard_fail_codes,soft_cap_codes}` and a `content_hash`.
+>   canonical anchors in the rvy.1 `gold_example` schema, `split=RUBRIC` (enum),
+>   `label_version` int, `input` as `{kind,text}` — **31 anchors** (12 canonical +
+>   19 dual-verified calibration edge-cases), coverage **voice 0/1/2/3/4 +
+>   appropriateness 1/2/3/4**, every hard-fail/soft-cap code exemplified, each with
+>   `expected.{on_voice,scores,anchors,hard_fail_codes,soft_cap_codes}` and a `content_hash`.
 > - **Hard-fail registry:** `pmm/positioning/jury-hard-fails.json` (machine-detectable codes).
 > The same rubric + anchors drive **both** the human raters and every cross-family
-> juror. `split=rubric` keeps the corpus out of grounding and **disjoint from the
+> juror. `split=RUBRIC` keeps the corpus out of grounding and **disjoint from the
 > rvy.4 holdout** (KNOW-02) — content hashes enable the overlap=0 check when the real
 > holdout lands at onboarding (the holdout does not exist yet, so overlap is ∅ now).
 
@@ -71,7 +73,7 @@ deterministic ESCALATE floor (§Deterministic floor):**
 - `[HARD-FAIL · VOICE_HF_WRONG_POV]` **wrong POV** (faceless corporate "we" when the artist is first-person "I");
 - `[HARD-FAIL · VOICE_HF_EMOJI_HASHTAG_POLICY]` **hype emoji** or **hashtag-spam wall** (emoji/hashtag policy violation).
 
-**Exemplars (ladies8391 — canonical corpus, lift verbatim as jury few-shot; `split=rubric` ⇒ not grounding, disjoint from the rvy.4 holdout):**
+**Exemplars (ladies8391 — canonical corpus, lift verbatim as jury few-shot; `split=RUBRIC` ⇒ not grounding, disjoint from the rvy.4 holdout):**
 - **4** (`onv-001`) — "She came in wanting to cover a scar she never chose. We spent the consult picking flowers that actually meant something to her. Now it's hers. 🌸 DM me to start your design." (client-first, approved consult claim, one approved emoji, soft CTA.)
 - **3** (`rub-v3-001`) — "Drew a peony piece for someone reclaiming a scar this week. It came out beautiful and I'm really happy with it. Consults are free if you're thinking about yours. 🌸" (on-voice, minor drift — slightly flatter than her best, no hard violation.)
 - **2** (`rub-v2-001/002/003`) — "I do custom floral and neo-traditional pieces here in Austin. Book a free consult to get started." · "Neo-traditional color is my specialty. I take my time with every piece and always do a consult first. Reach out if you're thinking about something new." (right topic, **no hard-fail**, but generic register / weak opener — the near-miss band the gate must catch.)
@@ -119,7 +121,7 @@ a sensitive subject without crossing into harm/policy (sec's lane).
 **Soft cap (review, NOT an escalate floor):**
 - `[SOFT-CAP · APPR_SC_OUT_OF_SCOPE]` promoting an **out-of-scope** service the artist doesn't offer (off-positioning) — caps the score at anchor 2 and warrants review; not insensitive, so not a deterministic escalate.
 
-**Exemplars (ladies8391 — canonical corpus, `split=rubric`):**
+**Exemplars (ladies8391 — canonical corpus, `split=RUBRIC`):**
 - **4** (`onv-001`) — the scar-reclaim post: on-strategy (reclaim pillar), sensitive
   subject handled with dignity, client-first, no sell-pressure.
 - **1 — voice is HIGH here (the teaching case: score the dims separately).** Two
@@ -158,6 +160,11 @@ sec owns safety codes). Contract for the aggregator:
   non-averageable.
 - **Soft caps** (e.g. `APPR_SC_OUT_OF_SCOPE`) cap a dimension score and route to
   review, but are **not** an escalate floor.
+- **Stable code catalog:** the codes are a **frozen, append-only enum**
+  (`jury-hard-fails.json` → `code_catalog`, `catalog_version`). The jury cell emits
+  codes **only** from the catalog; the aggregator matches it as a **closed set** (an
+  unknown code is a bug, not a silent pass). Full jury code space = these
+  (`VOICE_*`/`APPR_*`) ∪ sec's `SAFE_*` (`safety-hard-fails.json`).
 
 ## Judge protocol (consistency / κ≥0.6)
 

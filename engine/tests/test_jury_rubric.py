@@ -60,8 +60,20 @@ def test_no_codes_is_clean():
 
 def test_rubric_anchors_load_and_are_all_rubric_split():
     anchors = load_rubric_anchors()
-    assert len(anchors) == 12  # the committed #80 corpus
+    assert len(anchors) == 31  # 12 canonical (#80) + 19 dual-verified edge-cases (0cf4e4b)
     assert all(a.tenant_id == "ladies8391" for a in anchors)
     # at least one anchor carries hard-fail codes (the off-voice/inappropriate band)
     hf = [a for a in anchors if a.expected.get("hard_fail_codes")]
     assert hf and all(c in load_hard_fail_catalog().codes for a in hf for c in a.expected["hard_fail_codes"])
+
+
+def test_rubric_anchor_corpus_coverage():
+    """The expanded corpus must exemplify the full anchor bands and every catalog code
+    (pmm calibration contract, 0cf4e4b) — a regression guard on coverage, not a count."""
+    anchors = load_rubric_anchors()
+    voice = {a.expected["anchors"].get("voice") for a in anchors if "voice" in a.expected.get("anchors", {})}
+    appr = {a.expected["anchors"].get("appropriateness") for a in anchors if "appropriateness" in a.expected.get("anchors", {})}
+    assert voice == {0, 1, 2, 3, 4}, f"voice band coverage gap: {sorted(voice)}"
+    assert appr == {1, 2, 3, 4}, f"appropriateness band coverage gap: {sorted(appr)}"
+    used = {c for a in anchors for c in a.expected.get("hard_fail_codes", []) + a.expected.get("soft_cap_codes", [])}
+    assert used == set(load_hard_fail_catalog().codes), f"code coverage != catalog: {used ^ set(load_hard_fail_catalog().codes)}"
