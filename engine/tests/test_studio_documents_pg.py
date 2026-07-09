@@ -87,8 +87,34 @@ def test_csv_chunks_per_row_and_retrieves_a_specific_row(tenant) -> None:
     assert d.retrieve(tenant, "Monolith cover-ups", k=3) == []
 
 
-def test_seed_is_idempotent(tenant) -> None:
-    a = d.seed_tenant_documents(tenant)
-    b = d.seed_tenant_documents(tenant)
-    assert a == b  # deterministic id
-    assert len(d.active_docs_index(tenant)) == 1  # no duplicate row
+def test_seed_is_idempotent() -> None:
+    # The seed is the FIXTURE demo playbook — gated to fixture tenants only so it can
+    # never seed a real client's RAG (CustomerAcq-wwy.7). A non-fixture tenant now gets
+    # None (that path is asserted in test_fixture_bleed). Verify idempotency on a
+    # fixture tenant ('demo', the studio default), scoped to the seed doc id so the
+    # assertion is exact regardless of any other docs the tenant may hold.
+    tid = "demo"
+    d.ensure_schema()
+    seed_id = d._seed_doc_id(tid)
+
+    def _drop_seed():
+        with d._connect() as c:
+            c.execute("DELETE FROM tenant_documents WHERE tenant_id=%s AND id=%s",
+                      (tid, seed_id))
+
+    _drop_seed()
+    try:
+        a = d.seed_tenant_documents(tid)
+        b = d.seed_tenant_documents(tid)
+        assert a == b == seed_id                       # deterministic id, seed succeeded
+        seeded = [x for x in d.active_docs_index(tid) if x["id"] == seed_id]
+        assert len(seeded) == 1                         # no duplicate row
+    finally:
+        _drop_seed()
+
+
+def test_seed_refuses_non_fixture_tenant(tenant) -> None:
+    # The gate: a non-fixture tenant (the itest_docs_* random tenant) is NEVER seeded
+    # with the fixture playbook — returns None and writes nothing.
+    assert d.seed_tenant_documents(tenant) is None
+    assert d.active_docs_index(tenant) == []
