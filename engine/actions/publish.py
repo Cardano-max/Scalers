@@ -81,6 +81,14 @@ class MockOnLivePathError(RuntimeError):
 SANDBOX_CHANNELS = frozenset({"demo"})
 
 
+def _sandbox_delivery_tenants() -> frozenset[str]:
+    """Tenants whose approved actions execute on the sandbox channel instead of any
+    real provider (tlv.6 demo). Read from ``SANDBOX_DELIVERY_TENANTS`` (comma-sep);
+    EMPTY by default so no real tenant is ever redirected without explicit opt-in."""
+    raw = os.environ.get("SANDBOX_DELIVERY_TENANTS", "")
+    return frozenset(t.strip() for t in raw.split(",") if t.strip())
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -175,6 +183,16 @@ def approve_and_publish(
         return action
 
     channel = (action.channel or "").lower()
+
+    # tlv.6 SANDBOX DELIVERY REDIRECT: a designated demo tenant's approved actions
+    # execute on the credential-free sandbox channel instead of any real provider, so
+    # the demo's approve -> deliver loop closes end-to-end with zero external auth. The
+    # draft keeps its real channel/copy; only the EXECUTION is sinked (labeled
+    # 'Delivered (sandbox)'). Fail-safe: only tenants explicitly listed in
+    # SANDBOX_DELIVERY_TENANTS redirect (empty by default), and a redirect can ONLY
+    # make a send safer — the sandbox never reaches a provider.
+    if channel not in SANDBOX_CHANNELS and action.tenant_id in _sandbox_delivery_tenants():
+        channel = "demo"
 
     # SERVER-SIDE TEST-MODE GATE (ju1.1) — the hard sandbox for tenants holding real
     # client PII (skindesign): if the tenant is in test_mode, refuse EVERY send whose
