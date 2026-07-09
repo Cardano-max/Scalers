@@ -39,8 +39,15 @@ The whole product now runs from a fresh clone: `scripts/run-local.sh` (PG → in
 - **PR #124** (draft, branch `claude/supervisor-state-recovery-4mp2vg` → main). CI was driven green across 5 rounds of fixes; every class was a fresh-clone/lane-hygiene issue, never product code: (1) ruff sweep; (2) integration lane ran on a bare DB → ci.yml now applies initdb + bootstrap_db.py; (3) four modules wrote ENGINE_DATABASE_URL into os.environ at import, un-skipping every skipif-guarded PG module in the DB-free unit lane → resolve-from-env; (4) smoke-gold-set autouse fixture no-ops without a DB; (5) done-gate: seed-dependent tests (hardcoded dev-machine cust ids / never-committed 60-customer seed) made self-seeding + by-email; the nmh.2 distinct-goals test re-pinned to the nmh.11 one-pending-per-recipient DDL contract (SEMANTIC DECISION: nmh.11's phantom-duplicate fix supersedes both-goals-land; to re-target a recipient, resolve their pending draft first).
 - Operator's standing orders: (a) **merge all PRs** once CI is green (main is branch-protected: 5 required checks incl. done-gate, enforce_admins on); (b) keep THIS handoff file updated; (c) operator will supply Meta page token + real artwork images "in a while". OPENAI + SMTP creds received 07-09 and installed in engine/.env.
 
+## 4b. MERGE OUTCOME (2026-07-09 ~15:15 UTC)
+- **PR #124 MERGED to main** (merge commit 1d912a3) after 5 green checks incl. done-gate. The merge-commit method carried all constituent branch tips into main's history, auto-resolving 14 open PRs.
+- **#111 (wwy.5 gold prune) MERGED** separately.
+- **#94 (65w15) + #76 (a9m9 fixtures) CLOSED as superseded** (content already on main / base branch never merged) — comments on each explain.
+- **#107 (fr1.4 RLS hardening) is the ONE remaining open PR**: retargeted to main, conflicts need a real resolution pass + a non-superuser role for the local bring-up before it can land (comment on the PR has details).
+- Meta user token received (7 perms incl. instagram_content_publish) and stored in engine/.env; graph.facebook.com is BLOCKED from this sandbox, so run `python3 scripts/meta_mint_page_token.py` ON THE OPERATOR'S MACHINE within ~1h of token mint to exchange + save the permanent PAGE token / IG business id. api.openai.com is likewise blocked here — voice mint verified only as far as the egress wall; test voice locally.
+
 ## 5. Next steps (in order)
-1. Push the CI fixes; watch PR #124 checks; iterate until green; then **mark ready-for-review and merge** (operator-ordered). Check for any other open PRs and merge them too if green (list was empty apart from #124 at last check — re-verify).
+1. DONE — #124 merged; see §4b.
 2. After merge: re-point the local stack at main, re-run `scripts/run-local.sh` sanity.
 3. When the operator provides real artwork images → upload via Artists tab → verify VLM tags are real (style/motif/color) → re-run the artwork-pause scenario with real tags matching (e.g. "lion linework" query should rank the lion piece first).
 4. When Meta page token with perms arrives → set in `engine/.env` → test IG publish to the studio's own account (app-tester scope), using `PUBLIC_ASSET_BASE_URL` or tunnel for media.
