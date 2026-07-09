@@ -3579,6 +3579,58 @@ def parse_customers_csv(content: str, filename: str = "upload.csv") -> dict[str,
 # --------------------------------------------------------------------------- #
 
 
+def _evidence_links(action_id: str, dsn: str | None) -> dict[str, Any]:
+    """ADDITIVE evidence keys for one staged action (engine-core item 7): the
+    ARTWORK it carries (with a raw-bytes link), the ARTIST it fronts (with the
+    artist-API link), and the CUSTOMER dossier link. Everything is read off the
+    action's OWN context / dossier — a key appears ONLY when the underlying fact
+    exists (real-only; never a fabricated link). Empty dict on any read failure."""
+    from actions.store import get_action
+
+    row = get_action(action_id, dsn=dsn)
+    if row is None:
+        return {}
+    try:
+        ctx = json.loads(row.context) if row.context else {}
+    except Exception:
+        ctx = {}
+    if not isinstance(ctx, dict):
+        ctx = {}
+    out: dict[str, Any] = {}
+
+    artwork = ctx.get("artwork")
+    if isinstance(artwork, dict) and artwork.get("assetId"):
+        link = dict(artwork)
+        if artwork.get("artifactId"):
+            link["rawUrl"] = f"/studio/artifacts/{artwork['artifactId']}/raw"
+        out["artwork"] = link
+    if ctx.get("attachment_artifact_id"):
+        out["attachmentArtifactId"] = ctx["attachment_artifact_id"]
+
+    artist_name = ctx.get("artist")
+    dossier = ctx.get("dossier") if isinstance(ctx.get("dossier"), dict) else {}
+    if artist_name:
+        try:
+            from studio.artists_directory import resolve_artist
+
+            resolved = resolve_artist(row.tenant_id, str(artist_name), dsn=dsn)
+        except Exception:
+            resolved = None
+        out["artist"] = {
+            "name": resolved["name"] if resolved else str(artist_name),
+            "slug": resolved["slug"] if resolved else None,
+            "url": f"/studio/artists/{resolved['slug']}" if resolved else None,
+        }
+
+    customer_id = dossier.get("customer_id")
+    if customer_id:
+        out["customerDossier"] = {
+            "customerId": customer_id,
+            "url": f"/studio/customer/{customer_id}/dossier?tenant_id={row.tenant_id}",
+        }
+    return out
+
+
 def _load_plan(session_id: str, dsn: str | None) -> CampaignPlan:
     """Load this session's most recent persisted plan, if any, so edits accumulate."""
     try:
@@ -4516,7 +4568,15 @@ def mount_studio_agui(app) -> None:
             return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
         if ev is None:
             return JSONResponse({"error": "no such action"}, status_code=404)
-        return JSONResponse(ev.model_dump(by_alias=True))
+        payload = ev.model_dump(by_alias=True)
+        # Engine-core item 7 (additive): ARTWORK + ARTIST + CUSTOMER-DOSSIER links,
+        # read off the action's own context (the run wrote them) — real-only, each
+        # key present ONLY when the underlying fact exists (never a fabricated link).
+        try:
+            payload.update(await asyncio.to_thread(_evidence_links, action_id, dsn))
+        except Exception:
+            pass
+        return JSONResponse(payload)
 
     @app.get("/studio/campaign/{run_id}/classify")
     async def studio_campaign_classify_route(run_id: str):  # noqa: ANN202
