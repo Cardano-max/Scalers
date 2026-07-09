@@ -1120,7 +1120,20 @@ def _brief_from_plan(plan: CampaignPlan) -> str:
     return brief
 
 
+def _campaign_id_from_run_id(run_id: str | None) -> str | None:
+    """Recover the ``camp_...`` id embedded in a ``team-{campaign_id}-{hex}`` run id
+    (mirrors the parse in ``_execute_provided_leads_sync``), or None when unavailable."""
+    if not run_id:
+        return None
+    parts = run_id.split("-")
+    return parts[1] if len(parts) >= 2 and parts[1].startswith("camp_") else None
+
+
 def _summary_text(summary: dict[str, Any]) -> str:
+    # Honest not-built (nmh.9): a channel with no pipeline yet returns its truthful
+    # message, never a fabricated "ran the campaign / 0 drafts" line.
+    if summary.get("run_status") == "not_built":
+        return str(summary.get("message") or "That pipeline isn't built yet — nothing ran.")
     chans = ", ".join(summary.get("channels", [])) or "the selected channels"
     runs_note = (
         " You can watch each agent's step in the Runs tab."
@@ -1224,19 +1237,53 @@ def _execute_campaign_sync(
     leads, research each one); otherwise the web-sourcing Phase-A spine runs."""
     blueprint = plan_campaign(plan, tenant_id, dsn)
 
-    if _use_provided_leads(plan):
-        return _execute_provided_leads_sync(
+    # CHANNEL ROUTING (nmh.9 / spec §16): pick the workflow from the operator's REQUEST
+    # — 'send emails' → email, 'create an Instagram post' → the IG spine, 'Facebook
+    # campaign' / 'artist with attachments' → an HONEST "not built yet" (no fake run) —
+    # instead of always running the email agents. Runs BEFORE the lead-source branch so
+    # it fronts both the voice GO-gate and the /studio/run button.
+    from studio.channel_router import Pipeline, not_built_summary, route_pipeline
+
+    decision = route_pipeline(plan)
+
+    # A channel with no real supervisor-invoked pipeline yet returns an honest not-built
+    # response: nothing runs, zero agent_runs, no runs row — the DB/trace proves no fake
+    # run happened. NEVER a fabricated email run dressed up as the requested channel.
+    if not decision.built:
+        campaign_id = _campaign_id_from_run_id(run_id)
+        summary = not_built_summary(decision, run_id=run_id, campaign_id=campaign_id)
+        try:
+            _log_turn(dsn, session_id, "host", summary["message"], None)
+        except Exception:
+            pass
+        return summary
+
+    # Email + the operator's OWN uploaded leads → the per-lead outreach compliance path
+    # (unchanged). Instagram deliberately does NOT take this branch — an IG post is a
+    # posting campaign, not per-lead email outreach.
+    if decision.pipeline == Pipeline.EMAIL and _use_provided_leads(plan):
+        summary = _execute_provided_leads_sync(
             plan, session_id, tenant_id, dsn, run_id, blueprint=blueprint
         )
+        summary.setdefault("routed_channel", decision.channel)
+        summary["pipeline_built"] = True
+        return summary
 
     from studio.campaign_runner import run_and_trace
 
+    # Instagram pins the IG-first archetype so the traced run is genuinely the IG
+    # workflow (archetype + channels prove it), not the email path. Email/default keeps
+    # today's campaign_type-driven archetype selection.
+    force_archetype = decision.archetype_id if decision.pipeline is Pipeline.INSTAGRAM else None
     summary = run_and_trace(
         brief=_brief_from_plan(plan), tenant_id=tenant_id, dsn=dsn, run_id=run_id,
+        archetype_id=force_archetype,
         force_research=bool(plan.deep_research),
         output_count=plan.output_count or 0,
         campaign_type=plan.campaign_type or None,
     )
+    summary["routed_channel"] = decision.channel
+    summary["pipeline_built"] = True
     # Record the planner into the SAME compose run so the plan step is not decorative for
     # the compose spine either (the provided path records it inline as its first step).
     if summary.get("run_id"):
@@ -2111,10 +2158,12 @@ async def launch_studio_run(
             # its surfaced failure_summary — NEVER a hardcoded 'completed' over an errored run.
             _run_status = summary.get("run_status") or "completed"
             _failures = summary.get("failure_summary") or []
+            # 'not_built' (nmh.9) is an HONEST terminal, not a failure — a routed
+            # channel with no pipeline yet. It carries no error (the message explains).
             runs_registry[run_id] = {
                 "status": _run_status,
                 "summary": summary,
-                "error": (None if _run_status == "completed"
+                "error": (None if _run_status in ("completed", "not_built")
                           else "; ".join(f"{f['agent']}: {f['error']}" for f in _failures)
                           or "required step failed"),
             }
