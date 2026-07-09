@@ -240,3 +240,113 @@ def test_research_and_stage_writes_pending_drafts_and_memory(monkeypatch) -> Non
             tenant_id=tenant, subject_type="customer", subject_id=cust_id
         )
         assert any(m.metadata.get("session_id") == sid for m in mems)
+
+
+# ── nmh.2: Review-Queue reliability — all drafts land + real lineage ─────────── #
+# Regression for CustomerAcq-nmh.2: the research/stage path keyed idempotency on
+# ``studio:{session}:{cust}:outreach`` — no run/goal discriminator — so a SECOND
+# staging in the same session for the same customer (e.g. a different campaign
+# goal) collided on the key and was SILENTLY dropped by ON CONFLICT DO NOTHING,
+# and every staged row carried run_id=NULL (no campaign/run/evidence deep-link).
+
+
+def _pending_for_customer(tenant: str, cust_id: str) -> list[dict]:
+    with psycopg.connect(DSN, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT id, run_id, subject FROM actions "
+            "WHERE tenant_id=%s AND status='pending' "
+            "AND idempotency_key LIKE %s ORDER BY created_at",
+            (tenant, f"%{cust_id}%"),
+        ).fetchall()
+    return [{"id": r[0], "run_id": r[1], "subject": r[2]} for r in rows]
+
+
+def test_research_stage_distinct_goals_both_land_with_run_id(monkeypatch) -> None:
+    """Two stagings in ONE session for the SAME customer under DIFFERENT goals must
+    BOTH land as distinct pending rows (no silent collision-drop), and each row must
+    carry a real run_id so its campaign/run/evidence deep-links resolve (§15)."""
+    monkeypatch.setenv("SCALERS_EMBEDDER", "deterministic")
+    from studio.agui import CampaignPlan, _research_and_stage_sync
+
+    with _throwaway_tenant() as tenant:
+        email = f"lead-{tenant}@example.invalid"
+        ingest_leads(
+            tenant,
+            [{"name": "Rex Return", "email": email, "location": "Queens, NY",
+              "interests": "blackwork", "notes": "lapsed"}],
+            dsn=DSN,
+        )
+        sid = "test-stage-" + uuid.uuid4().hex[:10]
+
+        s1 = _research_and_stage_sync(
+            CampaignPlan(goal="win back lapsed clients", channels=["instagram"]),
+            sid, tenant, DSN, emails=[email], limit=10,
+        )
+        s2 = _research_and_stage_sync(
+            CampaignPlan(goal="holiday flash promo", channels=["instagram"]),
+            sid, tenant, DSN, emails=[email], limit=10,
+        )
+        assert s1["n_drafts"] == 1 and s2["n_drafts"] == 1
+        cust_id = s1["staged"][0]["customer_id"]
+
+        rows = _pending_for_customer(tenant, cust_id)
+        # BOTH distinct-goal stagings landed — the second was NOT dropped.
+        assert len(rows) == 2, f"expected 2 landed drafts, got {len(rows)}"
+        # Every staged row carries a real run_id (non-null) so evidence deep-links work.
+        assert all(r["run_id"] for r in rows), f"null run_id on: {rows}"
+        # The two runs are distinct (different campaign intent → different run_id).
+        assert rows[0]["run_id"] != rows[1]["run_id"]
+
+
+def test_research_stage_same_batch_is_idempotent_no_double_stage(monkeypatch) -> None:
+    """Re-driving the SAME request (same session, emails, goal) must be idempotent —
+    the run_id is batch-stable, so a crash-then-re-drive re-stages ZERO duplicates
+    (exactly-once STAGING; nothing is ever sent here regardless)."""
+    monkeypatch.setenv("SCALERS_EMBEDDER", "deterministic")
+    from studio.agui import CampaignPlan, _research_and_stage_sync
+
+    with _throwaway_tenant() as tenant:
+        email = f"lead-{tenant}@example.invalid"
+        ingest_leads(
+            tenant,
+            [{"name": "Ida Idem", "email": email, "location": "Bronx, NY",
+              "interests": "fineline", "notes": "lapsed"}],
+            dsn=DSN,
+        )
+        sid = "test-stage-" + uuid.uuid4().hex[:10]
+        plan = CampaignPlan(goal="win back lapsed clients", channels=["instagram"])
+
+        _research_and_stage_sync(plan, sid, tenant, DSN, emails=[email], limit=10)
+        _research_and_stage_sync(plan, sid, tenant, DSN, emails=[email], limit=10)
+
+        cust_id = lookup_lead(tenant, email=email, dsn=DSN)["customer_id"]
+        rows = _pending_for_customer(tenant, cust_id)
+        assert len(rows) == 1, f"identical re-drive must not double-stage, got {len(rows)}"
+
+
+def test_research_stage_dup_lead_counts_once(monkeypatch) -> None:
+    """A lead repeated in one batch resolves to ONE action row (ON CONFLICT); the
+    reported n_drafts must equal rows-in-queue, not the raw loop count (nmh.2 honesty:
+    'exactly N appear')."""
+    monkeypatch.setenv("SCALERS_EMBEDDER", "deterministic")
+    from studio.agui import CampaignPlan, _research_and_stage_sync
+
+    with _throwaway_tenant() as tenant:
+        email = f"lead-{tenant}@example.invalid"
+        ingest_leads(
+            tenant,
+            [{"name": "Uno Once", "email": email, "location": "Harlem, NY",
+              "interests": "script", "notes": "lapsed"}],
+            dsn=DSN,
+        )
+        sid = "test-stage-" + uuid.uuid4().hex[:10]
+        # SAME email twice in the batch.
+        summary = _research_and_stage_sync(
+            CampaignPlan(goal="win back", channels=["instagram"]),
+            sid, tenant, DSN, emails=[email, email], limit=10,
+        )
+        cust_id = lookup_lead(tenant, email=email, dsn=DSN)["customer_id"]
+        rows = _pending_for_customer(tenant, cust_id)
+        assert len(rows) == 1, f"dup lead must stage one row, got {len(rows)}"
+        # reported count matches what actually landed — no over-count.
+        assert summary["n_drafts"] == 1, f"n_drafts over-counted: {summary['n_drafts']}"

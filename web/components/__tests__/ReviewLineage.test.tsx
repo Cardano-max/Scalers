@@ -64,6 +64,22 @@ describe('groupDraftsByCampaign — newest campaign on top, no orphans', () => {
     expect(campaignLabel(draft({ id: 'x', campaignId: 'nw-summer-tuneup', createdAt: '2026-06-29T10:00:00Z' }))).toBe('Summer Tuneup');
     expect(campaignLabel(draft({ id: 'y', createdAt: '2026-06-29T10:00:00Z' }))).toBe('Unassigned drafts');
   });
+
+  // CustomerAcq-nmh.2: a freshly research-staged draft now carries a real run_id
+  // (engine fix), so it groups as a real campaign/run and sorts NEWEST-FIRST — it is
+  // no longer dumped into the always-last "Unassigned" bucket (the "new drafts not
+  // clearly on top" symptom). This locks that contract on the render side.
+  it('a newest research-staged draft WITH a run id sorts on top, not into Unassigned-last', () => {
+    const items = [
+      draft({ id: 'older', campaignId: 'nw-holiday', runId: 'run-holiday', createdAt: '2026-07-08T10:00:00Z' }),
+      // freshly staged research draft — has a run id (post-fix), newest of all
+      draft({ id: 'fresh', runId: 'studio-stage-abc123', createdAt: '2026-07-09T12:00:00Z' }),
+    ];
+    const groups = groupDraftsByCampaign(items);
+    expect(groups[0].drafts.map((d) => d.id)).toEqual(['fresh']); // newest run-group on top
+    expect(groups[0].label).not.toBe('Unassigned drafts');
+    expect(groups.some((g) => g.label === 'Unassigned drafts')).toBe(false);
+  });
 });
 
 function renderReview() {
