@@ -86,7 +86,7 @@ export function AgencyInterview({
     <section aria-label="Campaign scoping interview" style={panelStyle}>
       <header style={{ display: 'flex', flexDirection: 'column', gap: 4, textAlign: 'center', alignItems: 'center' }}>
         <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600, letterSpacing: '-0.01em', color: 'var(--ink)' }}>
-          Let's scope your campaign
+          Let&apos;s scope your campaign
         </h2>
         <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: 'var(--text-secondary)', maxWidth: 460 }}>
           The supervisor gathers what it needs before the team starts — it never runs blindly.
