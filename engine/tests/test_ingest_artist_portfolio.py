@@ -81,6 +81,73 @@ def test_missing_folder_raises():
         ip.ingest_portfolio("skindesign", "keebs", "/no/such/folder")
 
 
+def test_media_type_is_sniffed_from_content_not_extension(monkeypatch, tmp_path):
+    """The vision API 400s on a media-type/extension mismatch. Real assets carry
+    misnamed files (a JPEG saved as .PNG; a HEIC saved as .jpg), so the true type must
+    come from the file's MAGIC BYTES, not its extension: the JPEG-as-.png is sent as
+    image/jpeg and ingested; the HEIC-as-.jpg is an honest skip, never a 400. Regression
+    guard for the 3 Flash-Tattoos files that 400'd (IMG_3426/3427.PNG, IMG_1585.jpg)."""
+    (tmp_path / "mislabeled.png").write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 64)      # JPEG bytes
+    (tmp_path / "apple.jpg").write_bytes(b"\x00\x00\x00\x20ftypheic" + b"\x00" * 64)   # HEIC bytes
+    _wire_store(monkeypatch)
+    seen: dict = {}
+
+    def _capture(data, *, media_type=None, filename=None, **k):
+        seen[filename] = media_type
+        return _ANALYSIS
+    rep = ip.ingest_portfolio("skindesign", "natalie", tmp_path, analyze_fn=_capture).to_dict()
+    # content wins over the .png extension -> analyzed as image/jpeg (what the bytes are)
+    assert seen.get("mislabeled.png") == "image/jpeg"
+    assert {r["file"] for r in rep["ingested"]} == {"mislabeled.png"}
+    # HEIC-bytes-as-.jpg is caught by the content sniff -> honest skip, not an API 400
+    skip = [s for s in rep["skipped"] if s["file"] == "apple.jpg"]
+    assert skip and "convert" in skip[0]["reason"].lower()
+    assert "apple.jpg" not in seen  # never sent to the API
+
+
+@pytest.fixture
+def nested_portfolio(tmp_path):
+    """The real Flash-Tattoos shape: themed SUBFOLDERS, a basename that COLLIDES across
+    two folders, and one unsupported (.heif) export."""
+    (tmp_path / "top.jpg").write_bytes(b"\xff\xd8\xff\xe0top")
+    pride = tmp_path / "Pride Flash"
+    pride.mkdir()
+    (pride / "IMG_1.jpg").write_bytes(b"\xff\xd8\xff\xe0pride1")
+    (pride / "dup.png").write_bytes(b"\x89PNGpride")        # collides with july/dup.png
+    july = tmp_path / "4th of July Flash"
+    july.mkdir()
+    (july / "dup.png").write_bytes(b"\x89PNGjuly")          # same name, different folder
+    (july / "IMG_1585.heif").write_bytes(b"heic-bytes")     # unsupported -> honest skip
+    return tmp_path
+
+
+def test_ingest_recurses_subfolders_with_collision_safe_refs(monkeypatch, nested_portfolio):
+    """Themed subfolders are one catalog (recurse); same-named files in different folders
+    stay DISTINCT rows (relative-path image_ref, not bare basename); an unsupported format
+    is an honest skip, not a silent drop. Regression guard for the 157-flash real ingest."""
+    stored = _wire_store(monkeypatch)
+    rep = ip.ingest_portfolio(
+        "skindesign", "natalie", nested_portfolio, is_test=False,
+        analyze_fn=lambda *a, **k: _ANALYSIS,
+    )
+    d = rep.to_dict()
+    # 5 image-like files found recursively; 4 supported ingested; the .heif skipped.
+    assert d["scanned"] == 5
+    assert d["n_ingested"] == 4
+    assert d["n_skipped"] == 1
+    heif = d["skipped"][0]
+    assert heif["file"] == "4th of July Flash/IMG_1585.heif"
+    assert "unsupported" in heif["reason"].lower()
+    # the two colliding 'dup.png' resolve to DISTINCT, subfolder-qualified refs — no
+    # ON CONFLICT overwrite, so every catalog image is its own row.
+    refs = {r["image_ref"] for r in stored}
+    assert "upload://natalie/Pride Flash/dup.png" in refs
+    assert "upload://natalie/4th of July Flash/dup.png" in refs
+    assert len(refs) == 4
+    # report 'file' fields are subfolder-qualified relative paths, never bare basenames.
+    assert "Pride Flash/IMG_1.jpg" in {r["file"] for r in d["ingested"]}
+
+
 # --- top-4 selection + mid-run pause (search injected) --------------------- #
 def _hit(image_ref, summary, tags, sim):
     from studio.artwork_memory import ArtworkHit, ArtworkRecord

@@ -36,11 +36,50 @@ from studio.ingest_vlm import NotConfiguredError, guess_media_type
 
 # The Anthropic vision API decodes these; HEIC (Apple) must be converted to JPEG first.
 SUPPORTED_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif")
+# Image formats we RECOGNISE but the vision API cannot decode (Apple exports, print
+# formats, vector/PDF). These are surfaced as an explicit, honest per-image skip
+# ("convert first") rather than dropped silently, so ``scanned`` reconciles with what
+# is actually in the folder.
+UNSUPPORTED_IMAGE_EXTS = (".heic", ".heif", ".tif", ".tiff", ".bmp", ".svg", ".avif", ".pdf")
+_CANDIDATE_EXTS = frozenset(SUPPORTED_EXTS + UNSUPPORTED_IMAGE_EXTS)
 # Per-image byte ceiling — the vision API caps ~5MB/image (base64); larger is skipped
 # with an honest reason rather than silently truncated.
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
 AnalyzeFn = Callable[..., ArtworkAnalysis]
+
+# Media types the Anthropic vision API can actually decode.
+_API_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+
+
+def sniff_media_type(data: bytes) -> str | None:
+    """The TRUE image media type from a file's magic bytes (content), not its filename.
+
+    Real portfolios carry misnamed files — a JPEG saved as ``.PNG``, an Apple HEIC saved
+    as ``.jpg`` — and the vision API rejects a media-type/extension mismatch (or an
+    undecodable container) with a 400. Sniffing the content lets us send the correct type
+    for a decodable image, and honestly skip an undecodable one, instead of trusting the
+    extension. Returns ``image/{png,jpeg,gif,webp}`` for a decodable format,
+    ``image/heic`` / ``image/avif`` for a recognised-but-undecodable container, or
+    ``None`` when unrecognised."""
+    b = bytes(data[:16])
+    if len(b) < 12:
+        return None
+    if b[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if b[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if b[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if b[:4] == b"RIFF" and b[8:12] == b"WEBP":
+        return "image/webp"
+    if b[4:8] == b"ftyp":  # ISO-BMFF; the brand distinguishes HEIC/AVIF from MP4
+        brand = b[8:12]
+        if brand in (b"heic", b"heix", b"heif", b"mif1", b"msf1", b"hevc", b"hevx"):
+            return "image/heic"
+        if brand in (b"avif", b"avis"):
+            return "image/avif"
+    return None
 
 
 @dataclass
@@ -64,9 +103,15 @@ class PortfolioIngestReport:
 
 
 def _image_files(folder: Path) -> list[Path]:
+    """Every image-like file under ``folder`` — RECURSIVELY, so an artist's themed
+    subfolders (``Pride Flash/``, ``4th of July Flash/`` …) are one catalog, not just
+    the top level. Returns supported AND known-unsupported image formats (the caller
+    skips the latter with an honest reason); non-image files are ignored. Sorted by
+    relative path so a run is deterministic and reads folder-by-folder."""
     return sorted(
-        p for p in folder.iterdir()
-        if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS
+        (p for p in folder.rglob("*")
+         if p.is_file() and p.suffix.lower() in _CANDIDATE_EXTS),
+        key=lambda p: p.relative_to(folder).as_posix().lower(),
     )
 
 
@@ -100,15 +145,34 @@ def ingest_portfolio(
     report = PortfolioIngestReport(tenant_id=tenant_id, artist_id=artist_id)
     for path in _image_files(folder):
         report.scanned += 1
-        image_ref = f"{source}://{artist_id}/{path.name}"
+        # The image_ref carries the RELATIVE path (not just the basename) so two files
+        # that share a name in different themed subfolders get distinct, collision-free
+        # ids (record ids derive from image_ref) — every catalog image is its own row.
+        rel = path.relative_to(folder).as_posix()
+        image_ref = f"{source}://{artist_id}/{rel}"
         try:
+            if path.suffix.lower() not in SUPPORTED_EXTS:
+                raise ValueError(
+                    f"unsupported image format {path.suffix.lower()!r} — convert "
+                    "HEIC/HEIF/TIFF/BMP/SVG/PDF to PNG or JPEG first"
+                )
             size = path.stat().st_size
             if size > MAX_IMAGE_BYTES:
                 raise ValueError(
                     f"image is {size} bytes > {MAX_IMAGE_BYTES} cap (downscale/convert first)"
                 )
             data = path.read_bytes()
-            media_type = guess_media_type(path.name)
+            # Trust CONTENT over the filename extension: the vision API 400s on a
+            # media-type mismatch (a .PNG that is really JPEG) or an undecodable
+            # container (a .jpg that is really HEIC). Sniff the real type from magic
+            # bytes; if the bytes are not a vision-decodable image, skip honestly.
+            media_type = sniff_media_type(data) or guess_media_type(path.name)
+            if media_type not in _API_IMAGE_TYPES:
+                raise ValueError(
+                    f"unsupported image content {media_type or 'unknown'!r} — the real "
+                    "bytes are not a vision-decodable PNG/JPEG/WebP/GIF (e.g. a HEIC/AVIF "
+                    "misnamed .jpg); convert to PNG or JPEG first"
+                )
             analysis = analyze_fn(data, media_type=media_type, filename=path.name,
                                   model=model, client=client)
             rid = record_artwork(
@@ -117,16 +181,16 @@ def ingest_portfolio(
                 embedder=embedder, dsn=dsn,
             )
             report.ingested.append({
-                "file": path.name, "id": rid,
+                "file": rel, "id": rid,
                 "summary": analysis_summary(analysis),
                 "tags": analysis.model_dump(),
             })
         except SensitiveAttributeError as exc:
-            report.skipped.append({"file": path.name, "reason": f"sensitive-attribute rejected: {exc}"})
+            report.skipped.append({"file": rel, "reason": f"sensitive-attribute rejected: {exc}"})
         except NotConfiguredError as exc:
-            report.skipped.append({"file": path.name, "reason": f"VLM unconfigured: {exc}"})
+            report.skipped.append({"file": rel, "reason": f"VLM unconfigured: {exc}"})
         except Exception as exc:  # honest per-image skip; never a fabricated row
-            report.skipped.append({"file": path.name, "reason": f"{type(exc).__name__}: {exc}"})
+            report.skipped.append({"file": rel, "reason": f"{type(exc).__name__}: {exc}"})
     return report
 
 
