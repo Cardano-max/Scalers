@@ -31,7 +31,7 @@ def ledger():
     """A ScheduleLedger bound to a fresh private schema with the ledger DDL applied."""
     from proactive.schedule_ledger import ScheduleLedger
 
-    with private_schema("18-scheduled-job-runs.sql") as sch:
+    with private_schema("19-scheduled-job-runs.sql") as sch:
         yield ScheduleLedger(sch.dsn)
 
 

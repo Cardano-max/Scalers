@@ -1,4 +1,4 @@
--- 18-scheduled-job-runs.sql — exactly-once-per-day CLAIM-THEN-TRANSITION ledger
+-- 19-scheduled-job-runs.sql — exactly-once-per-day CLAIM-THEN-TRANSITION ledger
 -- for the proactive daily scanner (CustomerAcq-fr1.1 AC-1 + AC-9).
 --
 -- One row per (tenant_id, job_id, fire_date). The worker CLAIMS a fire_date with

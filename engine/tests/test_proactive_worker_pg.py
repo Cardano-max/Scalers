@@ -27,7 +27,7 @@ TZ = "America/Los_Angeles"
 def env():
     from proactive.schedule_ledger import ScheduleLedger
 
-    with private_schema("18-scheduled-job-runs.sql") as sch:
+    with private_schema("19-scheduled-job-runs.sql") as sch:
         yield SimpleNamespace(ledger=ScheduleLedger(sch.dsn), dsn=sch.dsn)
 
 

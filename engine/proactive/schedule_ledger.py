@@ -12,7 +12,7 @@ is never silently consumed (AC-9). This is distinct from catch-up (a fire_date t
 was NEVER claimed), which the claim itself guards.
 
 Connection conventions mirror :mod:`actions.store` (autocommit, ``dict_row``, lazy
-``psycopg``). DDL is ``infra/initdb/18-scheduled-job-runs.sql``.
+``psycopg``). DDL is ``infra/initdb/19-scheduled-job-runs.sql``.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from typing import Any
 
 _DEFAULT_DSN = "postgresql://scalers:scalers@localhost:5432/scalers"
 _INITDB = Path(__file__).resolve().parents[2] / "infra" / "initdb"
-_LEDGER_SQL = _INITDB / "18-scheduled-job-runs.sql"
+_LEDGER_SQL = _INITDB / "19-scheduled-job-runs.sql"
 
 # Valid job-run states. 'claimed' is transient (a run in flight); the terminals are
 # 'completed' and 'failed'. A row is NEVER updated back out of a terminal state.
@@ -91,7 +91,7 @@ class ScheduleLedger:
         return psycopg.connect(self._conninfo, autocommit=True, row_factory=dict_row)
 
     def ensure_schema(self) -> None:
-        """Apply ``18-scheduled-job-runs.sql`` (idempotent ``CREATE TABLE IF NOT EXISTS``)."""
+        """Apply ``19-scheduled-job-runs.sql`` (idempotent ``CREATE TABLE IF NOT EXISTS``)."""
         with self._connect() as conn:
             conn.execute(_LEDGER_SQL.read_text(encoding="utf-8"))
 
