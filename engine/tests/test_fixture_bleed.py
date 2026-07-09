@@ -540,28 +540,63 @@ def test_smoking_gun_draft_is_refused_not_staged(monkeypatch):
     assert "ladies8391" in summary["skipped"][0]["reason"]
 
 
-def test_skindesign_three_customer_run_stages_clean_drafts(monkeypatch):
-    """The Accept line: staging the same 3-customer run for skindesign produces
-    drafts with ZERO Ladies First identity/claims and ZERO implied-history phrasing
-    (deterministic path — no Anthropic key)."""
+# The operator's live-drive customers (name+email ONLY — the smoking-gun condition).
+_ACCEPT_LEADS = [
+    {"customer_id": "sd_carlos", "name": "Carlos Mendoza",
+     "email": "carlos@example.com", "email_opt_in": True},
+    {"customer_id": "sd_shaq", "name": "Shaquille Brooks",
+     "email": "shaquille@example.com", "email_opt_in": True},
+    {"customer_id": "sd_isabella", "name": "Isabella Rossi",
+     "email": "isabella@example.com", "email_opt_in": True},
+]
+
+
+def test_accept_run_skindesign_three_customers_are_clean(monkeypatch):
+    """MONEY PROOF (super's accept line): stage the exact 3-customer skindesign run
+    (Carlos / Shaquille / Isabella, name+email only) through the REAL staging path and
+    prove every staged draft has ZERO Ladies First identity and ZERO invented history —
+    the deterministic honest-copy layer. (A fabricating-model attempt is blocked by
+    :func:`test_accept_run_blocks_the_exact_smoking_gun_for_all_three`.)"""
     _clear_tenant_env(monkeypatch)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("SCALERS_OUTREACH_LLM", raising=False)
 
-    leads = [
-        {"customer_id": f"sd{i}", "name": n, "email": f"{n.lower()}@example.com",
-         "email_opt_in": True}
-        for i, n in enumerate(["Dana", "Priya", "Mel"], 1)
-    ]
-    summary, staged_rows = _stage_run(monkeypatch, leads)
+    summary, staged_rows = _stage_run(monkeypatch, [dict(x) for x in _ACCEPT_LEADS])
 
     assert summary["n_drafts"] == 3, summary
     for row in staged_rows:
         copy = f"{row.get('subject') or ''}\n{row['draft']}"
-        assert foreign_identity_violations(copy, "skindesign") == [], copy
-        assert personalization_violations(copy, facts_view({})) == [], copy
         low = copy.lower()
-        assert "ladies first" not in low and "rae" not in low, copy
+        # ZERO foreign identity (studio name, artist name, handle).
+        assert foreign_identity_violations(copy, "skindesign") == [], copy
+        assert "ladies first" not in low and "ladiesfirst" not in low, copy
+        assert "rae" not in low and "maya" not in low and "noor" not in low, copy
+        # ZERO invented history for a name+email-only lead.
+        assert personalization_violations(copy, facts_view({})) == [], copy
+
+
+def test_accept_run_blocks_the_exact_smoking_gun_for_all_three(monkeypatch):
+    """MONEY PROOF (adversarial): even if the copywriter LLM produces the EXACT live
+    fabrication ("it's Rae from Ladies First … work with you again") for all three
+    skindesign customers, the staging gate REFUSES all three — zero reach the queue."""
+    _clear_tenant_env(monkeypatch)
+
+    def _gun_draft(facts, **kw):
+        return {
+            "channel": "gmail", "target": facts["email"],
+            "subject": _SMOKING_GUN_SUBJECT, "draft": _SMOKING_GUN_BODY,
+            "grounding": [f"name={facts['name']}"], "customer_id": facts["customer_id"],
+        }
+
+    summary, staged_rows = _stage_run(
+        monkeypatch, [dict(x) for x in _ACCEPT_LEADS], draft_fn=_gun_draft
+    )
+
+    assert summary["n_drafts"] == 0, summary
+    assert staged_rows == []
+    assert len(summary["skipped"]) == 3
+    # Refused on the foreign identity (the studio name is the first-caught violation).
+    assert all("ladies8391" in s["reason"] for s in summary["skipped"]), summary["skipped"]
 
 
 def test_fixture_winback_cohort_still_stages(monkeypatch):

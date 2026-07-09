@@ -2231,6 +2231,19 @@ async def stage_publish(
     auto-fires. Even after approval this only writes a PENDING ``actions`` row; the
     real send stays held on the existing approve-first path. NOTHING is sent here."""
     from actions.store import ensure_schema, record_pending_action
+    from cells.identity_guard import foreign_identity_violations
+
+    # FOREIGN-IDENTITY GATE (wwy.7 r8): this stages SUPERVISOR-authored free text. Refuse
+    # to stage a draft that names ANOTHER tenant's studio/handle for this tenant — the
+    # exact "it's Rae from Ladies First" bleed, one composition path removed from the
+    # per-lead loops. Refuse honestly rather than silently staging a fabricated identity.
+    _id_viol = foreign_identity_violations(draft, ctx.deps.tenant_id)
+    if _id_viol:
+        return (
+            "REFUSED (not staged): the draft names another studio's identity — "
+            f"{_id_viol[0]}. Rewrite it in THIS tenant's own voice (no other studio's "
+            "name or handle) and stage again. Nothing was written."
+        )
 
     dsn = ctx.deps.dsn or os.environ.get("ENGINE_DATABASE_URL")
     await asyncio.to_thread(ensure_schema, dsn)
