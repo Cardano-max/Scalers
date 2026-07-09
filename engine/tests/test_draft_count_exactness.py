@@ -128,11 +128,16 @@ def test_cohort_shortfall_is_reconciled_with_a_counted_reason() -> None:
         _teardown(tenant)
 
 
-def test_request_above_output_cap_reconciles_with_an_honest_cap_reason() -> None:
-    """A request above the output hard cap (12) is clipped BY THE CAP, not falsely
+def test_request_above_output_cap_reconciles_with_an_honest_cap_reason(monkeypatch) -> None:
+    """A request above the output hard cap is clipped BY THE CAP, not falsely
     reported as a contact shortage: 20 contactable + request 20 -> 12 drafts + a skip
-    that says 8 are beyond the cap (honest cause), and the ledger reconciles."""
-    from archetypes.compose import _OUTPUT_HARD_CAP
+    that says 8 are beyond the cap (honest cause), and the ledger reconciles.
+
+    nmh.11 decoupled the provided-leads bound from the compose spine's cap
+    (ENGINE_COHORT_HARD_CAP, default 1000) — pin it to 12 so the honest-cap-reason
+    contract stays exactly verified without seeding 1000+ contacts."""
+    _OUTPUT_HARD_CAP = 12
+    monkeypatch.setenv("ENGINE_COHORT_HARD_CAP", str(_OUTPUT_HARD_CAP))
 
     tenant = _seed_tenant(n_contactable=_OUTPUT_HARD_CAP + 8, n_warm=2)
     try:

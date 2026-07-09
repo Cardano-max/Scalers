@@ -157,3 +157,7 @@ async def test_stage_publish_is_approval_gated_and_does_not_fire() -> None:
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+# Whole module needs a live Postgres (ENGINE_DATABASE_URL): it runs in the CI
+# integration lane (schema applied via initdb + bootstrap), not the DB-free unit lane.
+pytestmark = pytest.mark.integration

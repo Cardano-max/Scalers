@@ -262,3 +262,7 @@ def test_concurrent_approve_sends_exactly_once(monkeypatch):
         assert _get(action_id, dsn=_DSN).status == "sent"
     finally:
         _cleanup(_DSN, action_id)
+
+# Whole module needs a live Postgres (ENGINE_DATABASE_URL): it runs in the CI
+# integration lane (schema applied via initdb + bootstrap), not the DB-free unit lane.
+pytestmark = pytest.mark.integration

@@ -421,3 +421,7 @@ def test_fallback_still_respects_placeholder_and_failclosed_gates(patched_store,
     assert out2.status == "failed"
     assert out2.mode == "blocked"
     assert smtp.calls == []  # fail-closed refusal happens before ANY transport
+
+# Whole module needs a live Postgres (ENGINE_DATABASE_URL): it runs in the CI
+# integration lane (schema applied via initdb + bootstrap), not the DB-free unit lane.
+pytestmark = pytest.mark.integration

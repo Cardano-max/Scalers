@@ -212,3 +212,7 @@ def test_graph_error_with_per_action_media_marks_failed_with_real_error(
     failed = [a for a in audit_rows if a["result"] == "failed"]
     assert failed[0]["transport"] == "instagram-graph"
     assert "public_asset_base" in failed[0]["detail"]
+
+# Whole module needs a live Postgres (ENGINE_DATABASE_URL): it runs in the CI
+# integration lane (schema applied via initdb + bootstrap), not the DB-free unit lane.
+pytestmark = pytest.mark.integration

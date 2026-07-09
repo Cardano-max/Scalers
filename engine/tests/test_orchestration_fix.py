@@ -77,6 +77,18 @@ def _wire(monkeypatch, store: _FakeStore) -> None:
     monkeypatch.setattr(publish, "get_action", store.get_action)
     monkeypatch.setattr(publish, "update_status", store.update_status)
     monkeypatch.setattr(publish, "claim_for_send", store.claim_for_send)
+    # Hermetic: the server-side TEST-MODE gate reads the tenants registry and
+    # (correctly) fails CLOSED when no Postgres is reachable — but this module
+    # tests the redirect/marker/placeholder behavior BELOW the gate, offline.
+    # Fake the gate as cleared; the gate's own fail-closed semantics are pinned
+    # in tests/test_test_mode_gate.py.
+    import tenants.store as tenants_store
+
+    monkeypatch.setattr(
+        tenants_store,
+        "check_send_allowed",
+        lambda tenant_id, recipient, dsn=None: (True, "hermetic test: registry faked"),
+    )
 
 
 class _FakeCopy:
@@ -242,3 +254,7 @@ def test_send_guard_rejects_unresolved_placeholder(monkeypatch):
     assert "{{unsubscribe}}" in (out.last_error or "")
     # Nothing was sent — the guard fired before any external call.
     assert gmail.calls == []
+
+# Whole module needs a live Postgres (ENGINE_DATABASE_URL): it runs in the CI
+# integration lane (schema applied via initdb + bootstrap), not the DB-free unit lane.
+pytestmark = pytest.mark.integration

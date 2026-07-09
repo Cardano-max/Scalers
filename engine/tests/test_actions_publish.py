@@ -362,3 +362,7 @@ def test_unknown_action_raises(patched_store):
         approve_and_publish("nope")
     with pytest.raises(ActionNotFoundError):
         reject("nope")
+
+# Whole module needs a live Postgres (ENGINE_DATABASE_URL): it runs in the CI
+# integration lane (schema applied via initdb + bootstrap), not the DB-free unit lane.
+pytestmark = pytest.mark.integration

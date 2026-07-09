@@ -259,3 +259,7 @@ def test_send_audit_row_roundtrips_through_postgres():
     assert note["transport"] == "gmail-api" and note["provider_id"] == "m123"
     assert "art.png" in note["attachments"][0]
     assert receipts[0].sha256_prefix in note["attachments"][0]
+
+# Whole module needs a live Postgres (ENGINE_DATABASE_URL): it runs in the CI
+# integration lane (schema applied via initdb + bootstrap), not the DB-free unit lane.
+pytestmark = pytest.mark.integration

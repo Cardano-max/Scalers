@@ -263,3 +263,7 @@ def test_override_audits_then_sends_through_approve_path(monkeypatch):
     # And it sent through the real approve path.
     assert gmail.calls == [("vip@lead.com", "Hi", "Body")]
     assert out["result"] == "sent" and out["was_eligible"] is False
+
+# Whole module needs a live Postgres (ENGINE_DATABASE_URL): it runs in the CI
+# integration lane (schema applied via initdb + bootstrap), not the DB-free unit lane.
+pytestmark = pytest.mark.integration

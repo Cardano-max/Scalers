@@ -165,8 +165,12 @@ def test_provided_leads_records_strategist_once_and_critic_per_draft(monkeypatch
 
 def test_huge_csv_is_capped_never_fans_out(monkeypatch):
     # BLOCKER 2: a 5000-row uploaded CSV must NOT fan out 5000×(analyst+draft+critic).
-    # The blueprint's hard cap bounds it: at most _OUTPUT_HARD_CAP staged actions.
-    from archetypes.compose import _OUTPUT_HARD_CAP
+    # nmh.11 decoupled the provided-leads bound from the compose spine's cap: the
+    # executor now caps at ENGINE_COHORT_HARD_CAP (default 1000). Pin it small here
+    # so the test stays fast while the intent (bounded fan-out, never 5000x) stays
+    # exactly verified.
+    _OUTPUT_HARD_CAP = 12
+    monkeypatch.setenv("ENGINE_COHORT_HARD_CAP", str(_OUTPUT_HARD_CAP))
 
     _wire(monkeypatch)
     plan = CampaignPlan(
@@ -323,3 +327,4 @@ def test_failed_critic_leaves_conf_honest_none(monkeypatch):
 
     assert captured and len(captured) == 2
     assert all(c is None for c in captured)
+import pytest

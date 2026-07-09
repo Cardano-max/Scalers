@@ -459,3 +459,7 @@ def test_malformed_context_json_is_graceful_noop(patched_store, monkeypatch):
     out = approve_and_publish("act_del1", connectors={"gmail": gmail})
     assert out.status == "sent"
     assert gmail.calls[0]["attachments"] is None
+
+# Whole module needs a live Postgres (ENGINE_DATABASE_URL): it runs in the CI
+# integration lane (schema applied via initdb + bootstrap), not the DB-free unit lane.
+pytestmark = pytest.mark.integration
