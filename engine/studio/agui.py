@@ -2505,6 +2505,31 @@ def _execute_provided_leads_sync(
     except Exception:
         pass
 
+    # CAMPAIGN MEMORY (nmh.6, spec §18): record THIS run as durable campaign memory so
+    # the next campaign for the same artist can reuse it ("last time we ran X"). A HELD
+    # run has staged (not sent) drafts, so recipient_count = drafts staged and delivered
+    # stays 0 — an honest record of what the run PRODUCED. Best-effort: a memory-write
+    # hiccup must never break the real run.
+    try:
+        from studio.campaign_memory import record_run_campaign
+
+        _artists = [f.get("artist") for f in leads if f.get("artist")]
+        _dominant_artist = max(set(_artists), key=_artists.count) if _artists else None
+        record_run_campaign(
+            tenant_id,
+            campaign_name=f"{goal} ({campaign_id})",
+            artist=_dominant_artist,
+            recipient_count=len(pending),
+            delivered_count=0,
+            failed_count=len(skipped),
+            categories=list(channels) or None,
+            status=run_status,
+            run_id=run_id,
+            dsn=dsn,
+        )
+    except Exception:
+        pass
+
     return {
         "run_id": run_id,
         "campaign_id": campaign_id,
