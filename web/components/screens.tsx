@@ -16,6 +16,7 @@ import { RunsScreen } from './RunsScreen';
 import { FeedScreen } from './FeedScreen';
 import { VoiceScreen } from './studio/VoiceScreen';
 import { AgencyScreen } from './studio/AgencyScreen';
+import { ArtistsScreen } from './studio/ArtistsScreen';
 import { StepDetailScreen } from './StepDetailScreen';
 import { MemoryScreen } from './MemoryScreen';
 
@@ -25,6 +26,8 @@ export const SCREENS: Record<ScreenId, ComponentType> = {
   // (StudioRunProvider in AppShell) so a voice-launched run plays in both, real-only.
   voice: VoiceScreen,
   agency: AgencyScreen,
+  // Artist roster + profile (spec section 4/20) — real /studio/artists data.
+  artists: ArtistsScreen,
   overview: SmokeScreen,
   review: ReviewScreen,
   activity: ActivityScreen,

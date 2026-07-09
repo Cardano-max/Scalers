@@ -18,6 +18,7 @@ import {
 export type ScreenId =
   | 'voice'
   | 'agency'
+  | 'artists'
   | 'overview'
   | 'review'
   | 'activity'
@@ -41,6 +42,8 @@ export interface NavItemDef {
 export const NAV_ITEMS: NavItemDef[] = [
   { id: 'voice', label: 'Voice' },
   { id: 'agency', label: 'Agency' },
+  // Artist roster + per-artist profiles (spec section 4/20).
+  { id: 'artists', label: 'Artists' },
   { id: 'overview', label: 'Overview' },
   { id: 'review', label: 'Review queue' },
   { id: 'activity', label: 'Activity' },

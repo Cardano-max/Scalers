@@ -6,10 +6,12 @@ describe('console store — nav + edit reset', () => {
 
   it('leads with the voice-first headline modes then the real-data tabs', () => {
     // The separate Command chat tab was removed — Voice is the one conversation.
-    // ju1.5 appends the Campaign memory tab (real past-campaign example library).
+    // ju1.5 appends the Campaign memory tab (real past-campaign example library);
+    // the Artists roster (spec section 4/20) sits with the studio-family tabs.
     expect(NAV_ITEMS.map((n) => n.id)).toEqual([
       'voice',
       'agency',
+      'artists',
       'overview',
       'review',
       'activity',

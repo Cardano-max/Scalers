@@ -36,6 +36,15 @@ export function NavIcon({ id }: { id: ScreenId }) {
           <path d="M12 7.4v3.2M12 12.6 6.4 16M12 12.6 17.6 16" />
         </svg>
       );
+    case 'artists':
+      return (
+        <svg {...base} aria-hidden>
+          <circle cx="9" cy="8" r="3.4" />
+          <path d="M3.5 20a5.5 5.5 0 0 1 11 0" />
+          <path d="M16 4.5a3.2 3.2 0 0 1 0 7" />
+          <path d="M17.5 14.6a5.5 5.5 0 0 1 3 4.9" />
+        </svg>
+      );
     case 'overview':
       return (
         <svg {...base} aria-hidden>
