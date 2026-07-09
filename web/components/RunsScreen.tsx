@@ -4,8 +4,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { useData } from '@/lib/data/DataProvider';
 import { useAsync } from '@/lib/useAsync';
 import { useConsole } from '@/state/console-store';
+import { useSharedStudioOptional } from '@/lib/studio/StudioRunProvider';
 import { Dot } from './icons';
 import { Chip, clockTime } from './console-bits';
+import { Skeleton, EmptyState, ErrorState } from './states';
 import { WORKER_COLOR } from '@/lib/tokens';
 import type { Run, CampaignSpec } from '@/lib/data/models';
 import { SpanTree } from './trace/SpanTree';
@@ -17,6 +19,9 @@ import { LineageChips } from './trace/LineageChips';
 export function RunsScreen() {
   const { adapter, tenantId } = useData();
   const console = useConsole();
+  // Optional: the shared studio run (present under AppShell). Lets a run row
+  // click through to the live agent panel by attaching its runId to the poller.
+  const studio = useSharedStudioOptional();
   const runs = useAsync<Run[]>(() => adapter.getRuns(tenantId), [tenantId]);
 
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -94,6 +99,16 @@ export function RunsScreen() {
           <span style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: '#A8A299' }}>durable · checkpointed · exactly-once</span>
         </div>
 
+        {/* Mandatory async states — never a blank canvas. */}
+        {runs.loading && runs.data === undefined && <Skeleton rows={5} label="Loading runs…" />}
+        {runs.error && !runs.loading && <ErrorState error={runs.error} onRetry={runs.reload} />}
+        {!runs.loading && !runs.error && items.length === 0 && (
+          <EmptyState
+            title="No runs yet"
+            hint="Campaign runs appear here as the engine executes them — start one from the Voice or Agency tab."
+          />
+        )}
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           {items.map((r) => {
             const isSelected = r.id === selectedRunId;
@@ -136,6 +151,16 @@ export function RunsScreen() {
                     <span>{clockTime(r.startedAt)}</span>
                     <span style={{ color: '#D8D3C9' }}>·</span>
                     <span>{r.duration || 'pending'}</span>
+                    {r.channels.length > 0 && (
+                      <>
+                        <span style={{ color: '#D8D3C9' }}>·</span>
+                        <span>{r.channels.join(' / ')}</span>
+                      </>
+                    )}
+                    <span style={{ color: '#D8D3C9' }}>·</span>
+                    <span>
+                      {r.reviewCount} staged · {r.autoCount} auto
+                    </span>
                   </div>
                 </div>
                 <Chip tone={r.status === 'SUCCESS' ? 'success' : r.status === 'FAILED' ? 'danger' : 'neutral'}>{r.status}</Chip>
@@ -205,8 +230,32 @@ export function RunsScreen() {
             </div>
           </div>
 
-          {/* Spec doc + Langfuse trace link */}
+          {/* Spec doc + live agent panel + Langfuse trace link */}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
+            {studio && (
+              <button
+                type="button"
+                onClick={() => {
+                  // Attach this run to the shared studio poller and open the live
+                  // agent panel — completed runs render all landed steps; a live
+                  // run keeps streaming.
+                  studio.attachRun(selected.id);
+                  console.navigate('agency');
+                }}
+                style={{
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  color: '#fff',
+                  background: '#0F8A82',
+                  border: '1px solid #0F8A82',
+                  padding: '8px 13px',
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                }}
+              >
+                View agents →
+              </button>
+            )}
             <button
               type="button"
               onClick={() => loadSpec(selected.id)}

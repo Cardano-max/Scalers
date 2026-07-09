@@ -57,3 +57,9 @@ export function useSharedStudio(): StudioRunContext {
   if (!ctx) throw new Error('useSharedStudio must be used within a <StudioRunProvider>');
   return ctx;
 }
+
+/** Non-throwing read for screens that must also render OUTSIDE the provider
+ *  (unit tests render them bare). Returns null when no provider is mounted. */
+export function useSharedStudioOptional(): StudioRunContext | null {
+  return useContext(Ctx);
+}
