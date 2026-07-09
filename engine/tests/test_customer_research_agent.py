@@ -18,8 +18,13 @@ import uuid
 import psycopg
 import pytest
 
-DSN = "postgresql://scalers:scalers@localhost:5432/scalers"
-os.environ.setdefault("ENGINE_DATABASE_URL", DSN)
+# Resolve the DSN FROM the environment — never write it INTO os.environ:
+# pytest imports every module at collection time, and a setdefault here
+# un-skips every other module whose skipif guards on ENGINE_DATABASE_URL
+# being unset (the DB-free unit lane then dies with connection errors).
+DSN = os.environ.get(
+    "ENGINE_DATABASE_URL", "postgresql://scalers:scalers@localhost:5432/scalers"
+)
 os.environ.setdefault("SCALERS_EMBEDDER", "deterministic")
 
 from studio.customer_research_agent import (  # noqa: E402
