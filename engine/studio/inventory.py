@@ -211,5 +211,18 @@ def build_data_inventory(tenant_id: str, *, dsn: str | None = None) -> str:
     """Read the tenant's real inventory and render the honest readback. The single
     entry point both the chat host and the voice supervisor call so their readback can
     never diverge. Best-effort: an unreadable store yields the honest can't-read line,
-    never a fabricated count."""
-    return build_inventory_readback(read_inventory(tenant_id, dsn=dsn))
+    never a fabricated count.
+
+    Appends the UNIVERSAL uploaded-FILES readback (nmh.4) — the real counts of every
+    uploaded artifact (customer CSV, brand voice, documents, images, artwork) by type
+    — so BOTH surfaces answer "can you see the CSV / brand voice / artwork — how many
+    images?" from the same real state. Best-effort: the file registry being
+    unreadable adds nothing (never a fabricated file)."""
+    readback = build_inventory_readback(read_inventory(tenant_id, dsn=dsn))
+    try:
+        from studio.artifacts import artifact_inventory, build_artifacts_readback
+
+        files = build_artifacts_readback(artifact_inventory(tenant_id, dsn=dsn))
+    except Exception:
+        files = ""
+    return f"{readback}\n\n{files}" if files else readback
