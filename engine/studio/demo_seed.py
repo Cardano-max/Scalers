@@ -147,3 +147,11 @@ def _notes_with_last_visit(p: Persona) -> str:
     schema has no dedicated column, without dropping writer's note content."""
     parts = [x for x in (p.notes, f"last visit {p.last_visit}" if p.last_visit else None) if x]
     return " — ".join(parts)
+
+
+if __name__ == "__main__":  # pragma: no cover — runbook entry (python -m studio.demo_seed)
+    import json
+    import os
+
+    out = seed_demo_studio(os.environ.get("DEMO_TENANT_ID", DEMO_TENANT))
+    print(json.dumps(out, indent=2))
