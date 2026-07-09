@@ -151,7 +151,16 @@ _ISO_SCHEMA = f"smoke_gel_{os.getpid()}_{uuid.uuid4().hex[:8]}"
 @pytest.fixture(scope="module", autouse=True)
 def _isolated_schema():
     """Create (and drop) a private schema so this module's eval-KB never collides
-    with a concurrent worker's ``public`` gold tables on the shared Postgres."""
+    with a concurrent worker's ``public`` gold tables on the shared Postgres.
+
+    DB-FREE LANE: this fixture is autouse, so it also wraps the module's pure
+    dataset-shape tests. With no ENGINE_DATABASE_URL (the CI unit lane) it must
+    not touch Postgres at all — the DB-backed tests are separately guarded by
+    the ``_pg`` skipif and never run there."""
+    if not os.getenv("ENGINE_DATABASE_URL"):
+        yield
+        return
+
     import psycopg
 
     from tests.conftest import DB_DSN
