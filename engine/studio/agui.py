@@ -856,6 +856,112 @@ def run_narration(steps: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     return out
 
 
+def _mirror_failed(run: dict[str, Any]) -> bool:
+    """True when one recorded agent_run failed (verdict=error/failed OR an explicit
+    failed status on the output)."""
+    out = run.get("output") if isinstance(run.get("output"), dict) else {}
+    return _step_failed(out) or str(out.get("status") or "").lower() == "failed"
+
+
+def _mirror_text(role: str, runs: list[dict[str, Any]]) -> str:
+    """The ONE client-readable line for all of a role's recorded steps in a run —
+    agency voice, real counts, honest failures; never raw JSON, never a stack trace."""
+    n = len(runs)
+    failed = sum(1 for r in runs if _mirror_failed(r))
+    outputs = [r.get("output") if isinstance(r.get("output"), dict) else {} for r in runs]
+    fail_note = f" {failed} step(s) hit an error — details in the Runs tab." if failed else ""
+
+    if role == "planner":
+        base = next((o for o in outputs if o.get("phase") != "replan"), None)
+        parts: list[str] = []
+        if base is not None:
+            targets = base.get("targets") if isinstance(base.get("targets"), dict) else {}
+            who = str(targets.get("description") or targets.get("category") or "").strip()
+            quota = (base.get("stop_conditions") or {}).get("total_quota") if isinstance(
+                base.get("stop_conditions"), dict) else None
+            angle = str(base.get("angle") or "").strip()
+            line = f"Planned the campaign — targeting {who or 'the selected audience'}"
+            if quota:
+                line += f", up to {quota} message(s)"
+            if angle:
+                line += f"; angle: “{angle}”"
+            parts.append(line + ".")
+        for o in outputs:
+            if o.get("phase") == "replan":
+                reason = str((o.get("replan") or {}).get("contradiction") or "").strip()
+                parts.append(f"Adjusted the plan mid-run: {reason}." if reason
+                             else "Adjusted the plan mid-run from what the leads showed.")
+        return " ".join(parts) or "Planned the campaign — the full blueprint is in the Runs tab."
+    if role == "strategist":
+        if failed == n:
+            return "The strategy step hit an error — details in the Runs tab."
+        last = outputs[-1]
+        angle = str(last.get("primary_angle") or last.get("angle")
+                    or last.get("big_idea") or "").strip()
+        return (f"Set the campaign angle: “{angle}”." if angle
+                else "Set the campaign strategy for the team.") + fail_note
+    if role == "researcher":
+        cited = sum(int(o.get("cited") or 0) for o in outputs)
+        src = f" — {cited} source(s) cited" if cited else ""
+        return f"Researched {n} lead(s){src}.{fail_note}"
+    if role == "analyst":
+        objections = sum(
+            1 for o in outputs
+            if str(o.get("primary_objection") or "").strip() not in ("", "none-found")
+            and str(o.get("status") or "") != "failed"
+        )
+        obj_note = f"{objections} objection(s) found" if objections else "no objections found"
+        return f"Analyzed {n} lead(s) — {obj_note}.{fail_note}"
+    if role == "draft":
+        chans = sorted({
+            str((r.get("input") or {}).get("channel") or "").strip()
+            for r in runs if isinstance(r.get("input"), dict)
+        } - {""})
+        across = f" across {', '.join(chans)}" if chans else ""
+        return f"Drafted {n} personalized message(s){across} — all held for your review.{fail_note}"
+    if role == "critic":
+        if failed:
+            return (f"Reviewed {n} draft(s) — {n - failed} passed; {failed} check(s) "
+                    f"failed and are flagged for your review (details in the Runs tab).")
+        return f"Reviewed {n} draft(s) — all passed."
+    if role == "jury":
+        note = str(outputs[-1].get("note") or "").strip()
+        return note or ("Aggregated confidence across the drafts — everything is held "
+                        "for your approval.")
+    # Honest fallback: an unmapped role is still narrated, not dropped.
+    return f"{role.capitalize()}: {n} step(s) completed.{fail_note}"
+
+
+def chat_mirror_turns(
+    agent_runs: list[dict[str, Any]] | None,
+) -> list[tuple[str, str, str | None]]:
+    """Collapse a run's recorded ``agent_runs`` into client-readable chat turns —
+    ONE turn per role, in first-appearance order, as ``(role, text, model)``.
+
+    This is what the studio conversation shows for a run (tlv.3): the live drive
+    proved that mirroring every per-lead agent_run verbatim floods the client
+    transcript with internals (24x analyst rows, raw planner JSON, CellExecutionError
+    text). The full per-step detail intentionally REMAINS on the run's ``agent_runs``
+    (Runs tab / lineage); the conversation carries only the summary a studio owner
+    should read. Pure + DB-free, so it is unit-testable."""
+    groups: dict[str, list[dict[str, Any]]] = {}
+    order: list[str] = []
+    for ar in agent_runs or []:
+        if not isinstance(ar, dict):
+            continue
+        role = str(ar.get("role") or "").strip().lower() or "host"
+        if role not in groups:
+            groups[role] = []
+            order.append(role)
+        groups[role].append(ar)
+    turns: list[tuple[str, str, str | None]] = []
+    for role in order:
+        runs = groups[role]
+        model = next((str(r.get("model")) for r in runs if r.get("model")), None)
+        turns.append((role, _mirror_text(role, runs), model))
+    return turns
+
+
 # --------------------------------------------------------------------------- #
 # Persistence helpers (sync psycopg, offloaded to threads from the async tools)
 # --------------------------------------------------------------------------- #
@@ -871,6 +977,20 @@ def _chat_store(dsn: str | None) -> PostgresChatStore:
 
 def _log_turn(dsn: str | None, session_id: str, role: str, text: str, model: str | None) -> None:
     _chat_store(dsn).append_turn(session_id, role, text, model)
+
+
+def _operator_turn_text(messages: list[dict[str, Any]] | None) -> str:
+    """The operator turn to persist for ONE ``POST /studio/agui`` dispatch: the final
+    message's text iff that final message is a USER turn, else ``''``.
+
+    The approval resume re-POSTs the SAME thread with an assistant tool-call message
+    appended — the operator said nothing new, so persisting the (stale) last user
+    message again double-writes it (the live duplicate-operator-turn bug, tlv.3)."""
+    msgs = [m for m in (messages or []) if isinstance(m, dict)]
+    if not msgs or msgs[-1].get("role") != "user":
+        return ""
+    content = msgs[-1].get("content")
+    return content if isinstance(content, str) else str(content or "")
 
 
 def _persist_plan(dsn: str | None, session_id: str, plan: CampaignPlan) -> str:
@@ -942,8 +1062,9 @@ async def revise_plan(
         ctx.deps.dsn,
         ctx.deps.session_id,
         "host",
-        f"[plan] revised: goal={plan.goal!r} audience={plan.audience!r} "
-        f"channels={plan.channels}",
+        f"Updated the plan — goal: {plan.goal or 'not set yet'}; "
+        f"audience: {plan.audience or 'not set yet'}; "
+        f"channels: {', '.join(plan.channels) if plan.channels else 'not set yet'}.",
         HOST_AGUI_MODEL,
     )
 
@@ -1120,6 +1241,28 @@ def _brief_from_plan(plan: CampaignPlan) -> str:
     return brief
 
 
+def _zero_draft_reason(summary: dict[str, Any]) -> str:
+    """WHY a run staged nothing, read from the run's own recorded evidence — the
+    failure summary (a required gate failed), else the output ledger's per-row skip
+    reasons, else an honest 'no reason recorded' pointer to the Runs trace. Never
+    invents a cause."""
+    failures = summary.get("failure_summary") or []
+    if failures:
+        first = failures[0] if isinstance(failures[0], dict) else {}
+        more = f" (+{len(failures) - 1} more)" if len(failures) > 1 else ""
+        return (f"the {first.get('agent', 'required')} step failed: "
+                f"{str(first.get('error', ''))[:160]}{more}")
+    skipped = (summary.get("output_ledger") or {}).get("skipped") or []
+    reasons = "; ".join(sorted({
+        str(s.get("reason", "")).strip() for s in skipped
+        if isinstance(s, dict) and s.get("reason")
+    }))
+    if reasons:
+        return f"every lead was skipped ({reasons})"
+    return ("no skip reason was recorded — the step-by-step trace in the Runs tab "
+            "shows what each agent did")
+
+
 def _summary_text(summary: dict[str, Any]) -> str:
     chans = ", ".join(summary.get("channels", [])) or "the selected channels"
     runs_note = (
@@ -1127,6 +1270,15 @@ def _summary_text(summary: dict[str, Any]) -> str:
         if summary.get("runs_row")
         else " (Per-agent traces are in this thread; the Runs-tab row was unavailable.)"
     )
+    # A 0-draft run must explain itself in the host line (tlv.3): silence here read
+    # as a broken product in the live drive. The reason comes from the run's own
+    # recorded evidence — never invented.
+    if not summary.get("n_queued", 0) and not summary.get("n_pending", 0):
+        return (
+            f"The '{summary.get('archetype_id')}' run finished without staging any "
+            f"drafts — {_zero_draft_reason(summary)}.{runs_note} "
+            "Want me to adjust the plan and try again?"
+        )
     return (
         f"Ran the '{summary.get('archetype_id')}' campaign (run {summary.get('run_id')}). "
         f"The team produced {summary.get('n_queued', 0)} draft(s) across {chans} and staged "
@@ -1244,10 +1396,11 @@ def _execute_campaign_sync(
             dsn, str(summary["run_id"]), str(summary.get("campaign_id") or ""),
             tenant_id, blueprint,
         )
-    for ar in summary.get("agent_runs", []):
-        role = str(ar.get("role") or "host")
+    # ONE collapsed, client-readable turn per role (tlv.3) — never the raw per-lead
+    # output_summary spam; the full detail stays on agent_runs (Runs tab).
+    for role, text, model in chat_mirror_turns(summary.get("agent_runs", [])):
         role = role if role in VALID_ROLES else "host"
-        _log_turn(dsn, session_id, role, f"[{role}] {ar.get('output_summary', '')}", ar.get("model"))
+        _log_turn(dsn, session_id, role, text, model)
     if summary.get("agent_runs"):
         plan.tasks_per_role = {
             str(ar.get("role")): [str(ar.get("output_summary", ""))[:160]]
@@ -1937,11 +2090,11 @@ def _execute_provided_leads_sync(
         terminal_status=run_status,
     )
 
-    # Mirror each per-role trace into the chat thread (same as the spine path).
-    for ar in agent_runs:
-        role = str(ar.get("role") or "host")
+    # Mirror the run into the chat thread as ONE collapsed, client-readable turn per
+    # role (tlv.3; same as the spine path) — the per-lead detail stays on agent_runs.
+    for role, text, model in chat_mirror_turns(agent_runs):
         role = role if role in VALID_ROLES else "host"
-        _log_turn(dsn, session_id, role, f"[{role}] {ar.get('output_summary', '')}", ar.get("model"))
+        _log_turn(dsn, session_id, role, text, model)
 
     channels = sorted({str(ar["input"].get("channel")) for ar in agent_runs if ar["role"] == "draft" and ar["input"].get("channel")})
     n_critics = sum(1 for ar in agent_runs if ar["role"] == "critic")
@@ -2188,8 +2341,9 @@ async def generate_example_campaign(
     campaign, run_id, staged = await asyncio.to_thread(_run)
     await asyncio.to_thread(
         _log_turn, ctx.deps.dsn, ctx.deps.session_id, "host",
-        f"[generate] {artist} example-grounded campaign: {len(staged)} draft(s) staged "
-        f"HELD (run {run_id}); grounded on examples {campaign.grounded_example_ids}",
+        f"Generated {artist}'s example-grounded campaign — {len(staged)} draft(s) staged "
+        f"HELD for your review, grounded on {len(campaign.grounded_example_ids)} real past "
+        f"campaign example(s). Details in the Runs tab.",
         HOST_AGUI_MODEL,
     )
     ex = ", ".join(campaign.grounded_example_ids) or "none on file for this artist"
@@ -2575,12 +2729,10 @@ def mount_studio_agui(app) -> None:
             or "studio-default"
         )
 
-        # Persist the operator's latest message as an 'operator' turn.
-        last_user = ""
-        for msg in payload.get("messages", []) or []:
-            if msg.get("role") == "user":
-                content = msg.get("content")
-                last_user = content if isinstance(content, str) else str(content)
+        # Persist the operator's latest message as an 'operator' turn — ONLY when this
+        # dispatch actually carries a NEW user turn (see _operator_turn_text: the
+        # approval resume re-POSTs the same thread, which double-wrote the turn).
+        last_user = _operator_turn_text(payload.get("messages"))
         if last_user:
             try:
                 await asyncio.to_thread(

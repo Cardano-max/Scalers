@@ -115,9 +115,14 @@ async def test_revise_plan_persists_shared_state() -> None:
     # persisted to campaign_plans
     rows = latest_plans(1, session_id=sid)
     assert rows and rows[0]["state"]["goal"] == "fill Tuesdays"
-    # a labeled host turn was logged
+    # a labeled host turn was logged — HUMAN text, never the old "[plan] …" internals
+    # (tlv.3: the client transcript must not carry bracketed tags or repr fields)
     hist = PostgresChatStore(get_dsn()).history(sid)
-    assert any(t.role == "host" and "[plan]" in t.text for t in hist)
+    assert any(
+        t.role == "host" and "Updated the plan" in t.text and "fill Tuesdays" in t.text
+        for t in hist
+    )
+    assert not any("[plan]" in t.text for t in hist)
 
 
 @pytest.mark.anyio

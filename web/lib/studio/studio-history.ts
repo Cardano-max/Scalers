@@ -14,7 +14,7 @@
  */
 import type { ChatTurn, StudioRole } from '@/lib/data/studio-adapter';
 
-interface BackendChatTurn {
+export interface BackendChatTurn {
   id: string;
   sessionId: string;
   seq: number;
@@ -46,9 +46,134 @@ function mapRole(role: string): { role: StudioRole; label: string } {
       return { role: 'STRATEGIST', label: 'Strategist' };
     case 'draft':
       return { role: 'COPYWRITER', label: 'Draft' };
+    // Pipeline roles the engine persists but the client convo must not treat as
+    // "Studio" system bubbles (tlv.3): mapping them to pipeline roles keeps them
+    // out of the operator/host center thread and in the reasoning rail.
+    case 'planner':
+      return { role: 'STRATEGIST', label: 'Planner' };
+    case 'analyst':
+      return { role: 'RESEARCHER', label: 'Analyst' };
     default:
       return { role: 'SYSTEM', label: role || 'Studio' };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Transcript sanitizer (tlv.3) — the defensive FE gate over PERSISTED rows.
+//
+// The live 672-turn history proved old rows carry internals the client must not
+// see: role='thinking' chain-of-thought, "[planner] {…" raw JSON, 24x duplicate
+// per-lead analyst rows, raw CellExecutionError text, and double-persisted
+// operator turns. The engine now writes clean summaries for NEW runs; this pure
+// pass makes OLD rows render professionally too. The raw data stays available in
+// the Runs tab / GraphQL — this only shapes the conversation surface.
+// ---------------------------------------------------------------------------
+
+/** Legacy per-lead pipeline roles the old engine mirrored once PER LEAD. */
+const PER_LEAD_ROLES = new Set(['researcher', 'analyst', 'draft', 'critic']);
+
+const CELL_ERROR_RE =
+  /CellExecutionError|ModelHTTPError|Traceback \(most recent|cell '.*' failed|verdict=error/i;
+
+/** True for OLD-format rows ("[role] raw output_summary…") that predate the
+ *  engine-side collapse — only these are eligible for spam-collapse/rewrite. */
+function isLegacyRow(t: BackendChatTurn): boolean {
+  return t.text.startsWith(`[${t.role}]`);
+}
+
+function stripRolePrefix(t: BackendChatTurn): string {
+  return t.text.slice(`[${t.role}]`.length).replace(/^\s+/, '');
+}
+
+function collapseText(role: string, n: number, failed: number): string {
+  const failNote = failed > 0 ? ` ${failed} step(s) hit an error — details in the Runs tab.` : '';
+  switch (role) {
+    case 'researcher':
+      return `Researched ${n} leads — details in the Runs tab.${failNote}`;
+    case 'analyst':
+      return `Analyzed ${n} leads — categories and objections read from each lead's history; details in the Runs tab.${failNote}`;
+    case 'draft':
+      return `Drafted ${n} personalized messages — all held for your review.${failNote}`;
+    case 'critic':
+      return failed > 0
+        ? `Reviewed ${n} drafts — ${n - failed} passed; ${failed} check(s) failed and are flagged for review (details in the Runs tab).`
+        : `Reviewed ${n} drafts — details in the Runs tab.`;
+    default:
+      return `${n} ${role} steps completed — details in the Runs tab.${failNote}`;
+  }
+}
+
+const PLAN_REVISED_RE =
+  /^\[plan\] revised: goal=(['"])(.*?)\1 audience=(['"])(.*?)\3 channels=\[(.*?)\]\s*$/;
+
+/** Rewrite OLD engine-authored host rows ("[plan] revised: goal='…'",
+ *  "[generate] …") into the human lines the engine now writes directly. */
+function rewriteLegacyHostRow(t: BackendChatTurn): BackendChatTurn {
+  if (t.role !== 'host') return t;
+  if (t.text.startsWith('[plan] revised:')) {
+    const m = t.text.match(PLAN_REVISED_RE);
+    const text = m
+      ? `Updated the plan — goal: ${m[2]}; audience: ${m[4]}; channels: ${m[5].replace(/['"]/g, '')}.`
+      : 'Updated the campaign plan.';
+    return { ...t, text };
+  }
+  if (t.text.startsWith('[generate] ')) {
+    return { ...t, text: t.text.slice('[generate] '.length) };
+  }
+  return t;
+}
+
+/** Rewrite ONE legacy row's text into a client-readable line (pure). */
+function rewriteLegacyRow(t: BackendChatTurn): BackendChatTurn {
+  let text = stripRolePrefix(t);
+  if (t.role === 'planner' && text.startsWith('{')) {
+    text = 'Planned the campaign — the full blueprint is in the Runs tab.';
+  } else if (CELL_ERROR_RE.test(text)) {
+    text = `The ${t.role} check failed on this step — flagged for review (details in the Runs tab).`;
+  } else {
+    text = text.replace(/\s·\s/g, ', ');
+  }
+  return text === t.text ? t : { ...t, text };
+}
+
+/**
+ * Clean the persisted transcript for the client conversation (pure):
+ *  1. drop role='thinking' rows (raw chain-of-thought is never client-facing);
+ *  2. collapse consecutive LEGACY per-lead spam rows (same role, "[role] …"
+ *     format) into one turn carrying the REAL row count;
+ *  3. rewrite remaining legacy rows (strip "[role]" prefix, humanize raw planner
+ *     JSON, turn raw cell errors into an honest one-line flag);
+ *  4. dedupe adjacent identical turns (double-persisted operator rows).
+ */
+export function sanitizeBackendTurns(rows: BackendChatTurn[]): BackendChatTurn[] {
+  const kept = rows.filter((r) => r.role !== 'thinking');
+
+  // Collapse consecutive legacy per-lead rows of the same role.
+  const collapsed: BackendChatTurn[] = [];
+  let i = 0;
+  while (i < kept.length) {
+    const t = kept[i];
+    if (PER_LEAD_ROLES.has(t.role) && isLegacyRow(t)) {
+      let j = i;
+      while (j < kept.length && kept[j].role === t.role && isLegacyRow(kept[j])) j += 1;
+      const group = kept.slice(i, j);
+      if (group.length >= 2) {
+        const failed = group.filter((g) => CELL_ERROR_RE.test(g.text)).length;
+        collapsed.push({ ...t, text: collapseText(t.role, group.length, failed) });
+      } else {
+        collapsed.push(rewriteLegacyRow(t));
+      }
+      i = j;
+      continue;
+    }
+    collapsed.push(isLegacyRow(t) ? rewriteLegacyRow(t) : rewriteLegacyHostRow(t));
+    i += 1;
+  }
+
+  // Dedupe adjacent identical turns (the double-persisted operator rows).
+  return collapsed.filter(
+    (t, idx) => idx === 0 || t.role !== collapsed[idx - 1].role || t.text !== collapsed[idx - 1].text,
+  );
 }
 
 function toChatTurn(t: BackendChatTurn): ChatTurn {
@@ -81,5 +206,5 @@ export async function fetchStudioHistory(
     errors?: Array<{ message?: string }>;
   };
   if (json.errors?.length) throw new Error(json.errors[0]?.message ?? 'studio history error');
-  return (json.data?.studioChatHistory ?? []).map(toChatTurn);
+  return sanitizeBackendTurns(json.data?.studioChatHistory ?? []).map(toChatTurn);
 }
