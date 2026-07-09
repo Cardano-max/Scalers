@@ -13,8 +13,6 @@ the strategist's real angle is threaded into the per-lead draft goal (load-beari
 
 from __future__ import annotations
 
-import pytest
-
 import actions.store as store_mod
 import cells.critic as critic_mod
 import cells.strategy as strategy_mod
@@ -109,8 +107,12 @@ def _wire(monkeypatch, *, strat_exc=None, crit_exc=None):
     def _fake_draft(facts, *, goal="", **kw):
         seen_goals.append(goal)
         return {
+            # Honest first-contact copy: these leads carry name-only (no history), so the
+            # staged draft must not imply a prior relationship or the anti-fabrication
+            # gate (CustomerAcq-wwy.7) correctly refuses it. This fixture tests the
+            # strategist/critic RECORDING mechanics, not copy content.
             "channel": "gmail", "target": f"{facts['customer_id']}@lead.example",
-            "subject": "We miss you", "draft": "Come back for a fresh piece.",
+            "subject": "Hello from the studio", "draft": "Wanted to reach out and say hello.",
             "grounding": ["name=" + facts["name"], "copy=copywriter_email_cell"],
             "customer_id": facts["customer_id"],
             # The REAL model the cell wrote with — the run must record THIS verbatim,

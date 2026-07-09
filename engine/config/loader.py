@@ -117,3 +117,38 @@ def load_pack(tenant_id: str, *, reload: bool = False) -> TenantPack:
 def available_tenants() -> tuple[str, ...]:
     """Tenant ids available in the default packs directory."""
     return _default_loader.available()
+
+
+def describe_tenant(tenant_id: str) -> str:
+    """Render an HONEST one-line studio descriptor for grounding prompts.
+
+    The descriptor is the *account identity* line every prompt-builder leads with
+    (``build_strategy_prompt``, ``contentrun._build_prompt``, the research prompts,
+    the archetype router). It replaces the old hardcoded ``"a women-led tattoo
+    studio"`` literal that fabricated an identity for whatever tenant happened to be
+    running.
+
+    Resolution is REAL-pack-only:
+
+    * pack resolves with ``voice.positioning`` → ``"@{tenant_id} — {display_name}, {positioning}"``
+    * pack resolves without positioning → ``"@{tenant_id} — {display_name}"``
+    * no pack, or the pack fails to load → the bare handle ``"@{tenant_id}"``
+
+    The no-pack case is deliberately empty of any niche/voice claim: a tenant with no
+    pack on file (e.g. a real client not yet onboarded) gets ONLY its handle, never an
+    invented studio description. This never raises — a corrupt/invalid pack degrades to
+    the bare handle exactly like a missing one.
+    """
+    handle = f"@{tenant_id}"
+    try:
+        pack = load_pack(tenant_id)
+    except PackError:
+        return handle
+
+    display = (pack.display_name or "").strip()
+    positioning = (pack.voice.positioning or "").strip()
+    if display and positioning:
+        return f"{handle} — {display}, {positioning}"
+    if display:
+        return f"{handle} — {display}"
+    return handle

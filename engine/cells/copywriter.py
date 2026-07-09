@@ -238,15 +238,36 @@ def build_copywriter_instructions(brand_voice_context: str = "", approved_claims
     ``brand_voice_context`` is what the brand-voice resolver
     (skills/brand-voice) produced for the tenant; it is placed BEFORE the rules so
     the cell reads the artist's voice before it writes.
+
+    HONEST-EMPTY HARDENING (wwy.7 r8): with no resolved voice / claims, the
+    instructions explicitly forbid inventing a sender identity or studio claims —
+    mirrors :func:`build_copywriter_email_instructions` (where the fixture-identity
+    smoking gun was observed) so the social path can never fabricate one either.
     """
     parts: list[str] = []
     if brand_voice_context.strip():
         parts += ["# BRAND VOICE (source of truth — write as this artist):",
                   brand_voice_context.strip(), ""]
+    else:
+        parts += [
+            "# SENDER IDENTITY: NONE ON FILE.",
+            "No brand voice or artist identity is configured for this studio. Write "
+            "as 'we' from the studio WITHOUT naming it: do NOT sign with, mention, or "
+            "invent ANY artist name, personal name, or studio name — not even a "
+            "plausible one.",
+            "",
+        ]
     if approved_claims:
         parts += ["# Approved claims (the ONLY claims you may state):"]
         parts += [f"- {c}" for c in approved_claims]
         parts += [""]
+    else:
+        parts += [
+            "# Approved claims: NONE on file.",
+            "You may make NO specific claim about the studio or artist — no "
+            "specialties, no style claims, no awards, no history, no client stories.",
+            "",
+        ]
     parts += [_BASE_RULES]
     return "\n".join(parts)
 
@@ -439,15 +460,43 @@ _EMAIL_RULES = (
 
 
 def build_copywriter_email_instructions(brand_voice_context: str = "", approved_claims: tuple[str, ...] = ()) -> str:
-    """Assemble EMAIL-mode instructions, composing the S2 brand-voice context in."""
+    """Assemble EMAIL-mode instructions, composing the S2 brand-voice context in.
+
+    HONEST-EMPTY HARDENING (wwy.7 r8, the smoking gun): a tenant with NO resolved
+    brand voice / approved claims (e.g. a real client not yet onboarded) must not
+    leave the model unconstrained — the observed failure was drafts signed with a
+    FIXTURE studio's artist name ("it's Rae from Ladies First") on a real client's
+    customers. With no voice on file the instructions explicitly forbid inventing
+    any sender identity; with no approved claims they explicitly forbid any specific
+    claim about the studio.
+    """
     parts: list[str] = []
     if brand_voice_context.strip():
         parts += ["# BRAND VOICE (source of truth — write as this artist):",
                   brand_voice_context.strip(), ""]
+    else:
+        parts += [
+            "# SENDER IDENTITY: NONE ON FILE.",
+            "No brand voice or artist identity is configured for this studio. Write "
+            "as 'we' from the studio WITHOUT naming it: do NOT sign with, mention, or "
+            "invent ANY artist name, personal name, or studio name — not even a "
+            "plausible one. A deterministic guard rejects drafts that assert an "
+            "identity that is not on file.",
+            "",
+        ]
     if approved_claims:
         parts += ["# Approved claims (the ONLY claims you may state):"]
         parts += [f"- {c}" for c in approved_claims]
         parts += [""]
+    else:
+        parts += [
+            "# Approved claims: NONE on file.",
+            "You may make NO specific claim about the studio or sender — no "
+            "specialties, no style claims, no awards, no history, no client stories, "
+            "no 'the people I have tattooed'. Stay with the recipient-grounded facts "
+            "in the run prompt.",
+            "",
+        ]
     parts += [_EMAIL_RULES]
     return "\n".join(parts)
 

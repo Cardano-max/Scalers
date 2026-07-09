@@ -11,6 +11,7 @@ sending_domain = "outreach.ladiesfirst.example"
 [voice]
 skill = "brand-voice/ladies8391"
 examples_uri = "minio://voice/ladies8391/examples.jsonl"
+positioning = "a woman-owned Austin studio specializing in neo-traditional color and fine-line tattoos"
 
 # --- Channels -------------------------------------------------------------- #
 [channels.instagram]

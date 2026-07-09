@@ -152,8 +152,12 @@ def _wire(monkeypatch, drafted: list[str], *, crash_on: str | None = None):
     def _fake_draft(facts, *, goal="", **kw):
         drafted.append(facts["customer_id"])
         return {
+            # Honest first-contact copy: these leads carry name+email ONLY (no history),
+            # so the draft must not imply a prior relationship or the anti-fabrication
+            # gate (CustomerAcq-wwy.7) correctly refuses it. This fixture tests the
+            # EXACTLY-ONCE / durable-crash machinery, not copy content.
             "channel": "gmail", "target": f"{facts['customer_id']}@lead.example",
-            "subject": "We miss you", "draft": "Come back for a fresh piece.",
+            "subject": "Hello from the studio", "draft": "Wanted to reach out and say hello.",
             "grounding": [f"name={facts['name']}"], "customer_id": facts["customer_id"],
             "copy_model": "anthropic:claude-haiku-4-5",
         }
@@ -258,7 +262,7 @@ def test_kill_mid_lead_between_staged_row_and_ledger_never_refires(monkeypatch, 
     pre_existing = record_pending_action(
         tenant_id=tenant, decision_id=None, type="outreach", channel="gmail",
         worker="studio_provided_leads", target="c2@lead.example",
-        draft="Come back for a fresh piece.", subject="We miss you", context=None,
+        draft="Wanted to reach out and say hello.", subject="Hello from the studio", context=None,
         conf=0.9, threshold=None, esc_kind="approval_required",
         esc_label="Provided-lead outreach — operator approval required",
         idempotency_key=f"{run_id}:c2", run_id=run_id, dsn=DSN,

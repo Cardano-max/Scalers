@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from pydantic import BaseModel, Field
 
 from cells.base import Cell
+from config.loader import describe_tenant
 from cells.validators import (
     ValidatorBank,
     max_items,
@@ -145,11 +146,16 @@ def build_research_findings_cell(**overrides) -> Cell[ResearchFindings]:
     return Cell(**params)
 
 
-def build_queries_prompt(tenant_id: str, brief: str) -> str:
-    """Render the prompt the query-derivation cell runs against."""
+def build_queries_prompt(descriptor: str, brief: str) -> str:
+    """Render the prompt the query-derivation cell runs against.
+
+    ``descriptor`` is the REQUIRED, honest account-identity line from
+    :func:`config.loader.describe_tenant` — it replaces the old hardcoded
+    ``"a women-led tattoo studio"`` literal so a tenant's identity is never
+    fabricated. Callers resolve it with ``describe_tenant(tenant_id)``.
+    """
     return (
-        f"Studio/account: @{tenant_id} — a women-led tattoo studio with a warm, "
-        f"concrete, human voice.\n"
+        f"Studio/account: {descriptor}.\n"
         f"Campaign brief: {brief}\n"
         "Propose the few best web search queries (at most 3) that would surface "
         "real, current evidence to ground THIS campaign. Be specific to this studio "
@@ -157,10 +163,14 @@ def build_queries_prompt(tenant_id: str, brief: str) -> str:
     )
 
 
-def build_findings_prompt(tenant_id: str, brief: str, sources: list[dict]) -> str:
-    """Render the synthesis prompt from the brief + the REAL collected sources."""
+def build_findings_prompt(descriptor: str, brief: str, sources: list[dict]) -> str:
+    """Render the synthesis prompt from the brief + the REAL collected sources.
+
+    ``descriptor`` is the REQUIRED honest account-identity line from
+    :func:`config.loader.describe_tenant` (never a fabricated niche).
+    """
     lines = [
-        f"Studio/account: @{tenant_id} — a women-led tattoo studio.",
+        f"Studio/account: {descriptor}.",
         f"Campaign brief: {brief}",
         "",
         "Real web search results to synthesize from (cite by URL):",
@@ -222,11 +232,14 @@ def run_research(
     at least one REAL persisted source.
     """
     notes: list[str] = []
+    # Honest account-identity for every research prompt — from the tenant's REAL pack,
+    # or the bare handle when no pack is on file (never a fabricated niche).
+    descriptor = describe_tenant(tenant_id)
 
     # 1. Derive the real search queries (real LLM cell).
     qcell = queries_cell or build_research_queries_cell()
     try:
-        plan = qcell.run_sync(build_queries_prompt(tenant_id, brief))
+        plan = qcell.run_sync(build_queries_prompt(descriptor, brief))
         queries = [q.strip() for q in plan.queries if q and q.strip()][:max_queries]
     except Exception as exc:  # noqa: BLE001 — honest fail, no fabricated queries
         return ResearchOutcome(
@@ -294,7 +307,7 @@ def run_research(
     findings: str | None = None
     cited: list[str] = []
     try:
-        synth = fcell.run_sync(build_findings_prompt(tenant_id, brief, sources))
+        synth = fcell.run_sync(build_findings_prompt(descriptor, brief, sources))
         findings = synth.findings.strip()
         # Drop any URL the model cited that is not in the REAL source set (no
         # hallucinated citations). If none survive, cite the real set itself —

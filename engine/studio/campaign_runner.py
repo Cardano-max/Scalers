@@ -57,8 +57,12 @@ def archetype_for_campaign_type(campaign_type: str | None) -> str | None:
 _MAX_IO = 2000
 
 
-def pick_archetype(brief: str) -> str:
+def pick_archetype(brief: str, descriptor: str) -> str:
     """Classify ``brief`` to a registered archetype id (real model call).
+
+    ``descriptor`` is the REQUIRED, honest account-identity line from
+    :func:`config.loader.describe_tenant` — passed through to the classifier so the
+    router is anchored to the tenant's REAL identity, never a fabricated niche.
 
     Falls back to :data:`_DEFAULT_ARCHETYPE` on any failure or an unknown id, so a
     transient classifier error never blocks the run."""
@@ -67,7 +71,7 @@ def pick_archetype(brief: str) -> str:
     try:
         from archetypes.classify import classify_brief
 
-        choice = classify_brief(brief)
+        choice = classify_brief(brief, descriptor)
         aid = getattr(choice, "archetype_id", None) or getattr(choice, "archetype", None)
         aid = aid.value if hasattr(aid, "value") else aid
         if isinstance(aid, str) and aid in registry.REGISTRY:
@@ -448,10 +452,12 @@ def run_and_trace(
     """
     from archetypes import registry
     from archetypes.compose import run_campaign as _compose_run
+    from config.loader import describe_tenant
 
-    aid = archetype_id or archetype_for_campaign_type(campaign_type) or pick_archetype(brief)
+    descriptor = describe_tenant(tenant_id)
+    aid = archetype_id or archetype_for_campaign_type(campaign_type) or pick_archetype(brief, descriptor)
     if aid not in registry.REGISTRY:
-        aid = pick_archetype(brief)
+        aid = pick_archetype(brief, descriptor)
 
     state = _compose_run(
         archetype_id=aid, tenant_id=tenant_id, brief=brief, dsn=dsn, persist=True,

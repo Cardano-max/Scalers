@@ -128,9 +128,13 @@ def test_cell_is_temperature_zero_and_pinned_by_default():
 # --------------------------------------------------------------------------- #
 
 
-def test_build_strategy_prompt_includes_tenant_and_brief():
-    prompt = build_strategy_prompt("inkhaven", "Spring booking push; warm voice")
-    assert "@inkhaven" in prompt
+def test_build_strategy_prompt_includes_descriptor_and_brief():
+    # build_strategy_prompt now takes the honest descriptor (from describe_tenant),
+    # not a raw tenant_id — callers resolve it so identity is never fabricated.
+    prompt = build_strategy_prompt(
+        "@inkhaven — Inkhaven, a fine-line studio", "Spring booking push; warm voice"
+    )
+    assert "@inkhaven — Inkhaven, a fine-line studio" in prompt
     assert "Spring booking push" in prompt
 
 
