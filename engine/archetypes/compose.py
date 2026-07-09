@@ -258,7 +258,46 @@ def _make_strategy_node(team_store, dsn=None):
 # A hard ceiling on how many drafts one run can fan out, independent of the plan, so
 # an absurd interview answer ("make 5000 emails") can never spawn a runaway of real
 # model calls. The interview-chosen ``output_count`` is honored up to this cap.
+#
+# _OUTPUT_HARD_CAP is the DEFAULT (kept as a module constant for back-compat
+# importers); the EFFECTIVE cap is read at call time by :func:`output_hard_cap`,
+# overridable via the ``SCALERS_OUTPUT_HARD_CAP`` env var (spec §14 — ask-25-get-25
+# up to 500-lead cohorts) within hard bounds [1..500].
 _OUTPUT_HARD_CAP = 12
+_OUTPUT_CAP_ENV = "SCALERS_OUTPUT_HARD_CAP"
+_OUTPUT_CAP_MIN = 1
+_OUTPUT_CAP_MAX = 500
+
+
+def output_hard_cap() -> int:
+    """The EFFECTIVE per-run draft cap, resolved at call time.
+
+    ``SCALERS_OUTPUT_HARD_CAP`` unset/blank → the default (:data:`_OUTPUT_HARD_CAP`,
+    12). A non-integer value → the default, with a WARNING (config mistakes never
+    silently change the fan-out). An integer outside [1..500] → clamped into
+    bounds, with a WARNING (the absolute runaway ceiling stays 500 no matter what
+    the env says)."""
+    import logging
+
+    raw = os.environ.get(_OUTPUT_CAP_ENV)
+    if raw is None or not raw.strip():
+        return _OUTPUT_HARD_CAP
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        logging.getLogger(__name__).warning(
+            "invalid %s=%r (not an integer) — using the default cap %d",
+            _OUTPUT_CAP_ENV, raw, _OUTPUT_HARD_CAP,
+        )
+        return _OUTPUT_HARD_CAP
+    if value < _OUTPUT_CAP_MIN or value > _OUTPUT_CAP_MAX:
+        clamped = max(_OUTPUT_CAP_MIN, min(value, _OUTPUT_CAP_MAX))
+        logging.getLogger(__name__).warning(
+            "%s=%d outside bounds [%d..%d] — clamped to %d",
+            _OUTPUT_CAP_ENV, value, _OUTPUT_CAP_MIN, _OUTPUT_CAP_MAX, clamped,
+        )
+        return clamped
+    return value
 
 
 def _planned_channels(state: CampaignState) -> list[str]:
@@ -267,12 +306,13 @@ def _planned_channels(state: CampaignState) -> list[str]:
     Default (no ``output_count``): one draft per spec channel, capped at fanout_cap —
     the original behavior. With ``output_count`` set (the operator asked for N drafts
     in the interview): exactly N drafts, round-robined across the spec's channels and
-    bounded by :data:`_OUTPUT_HARD_CAP`. So "10 emails" on an email-only plan yields
-    10 email drafts; "10" across IG+email yields 5 + 5."""
+    bounded by :func:`output_hard_cap` (default :data:`_OUTPUT_HARD_CAP`, env-
+    overridable via ``SCALERS_OUTPUT_HARD_CAP``). So "10 emails" on an email-only
+    plan yields 10 email drafts; "10" across IG+email yields 5 + 5."""
     spec = registry.get(state.archetype_id)
     chosen = [c.value for c in spec.channels[: spec.fanout_cap]] or ["ig"]
     n = state.output_count if (state.output_count and state.output_count > 0) else len(chosen)
-    n = max(1, min(int(n), _OUTPUT_HARD_CAP))
+    n = max(1, min(int(n), output_hard_cap()))
     return [chosen[i % len(chosen)] for i in range(n)]
 
 
