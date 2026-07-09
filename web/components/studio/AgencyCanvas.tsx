@@ -142,7 +142,7 @@ export function AgencyCanvas({
           ) : (
             <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>
               {connected
-                ? 'Start a run from the Voice tab or the Command workbench to watch it here.'
+                ? 'Start a run from the voice interview or the Agency tab to watch it here.'
                 : 'Backend unreachable — this is the honest not-connected state. No run can start.'}
             </p>
           )}
