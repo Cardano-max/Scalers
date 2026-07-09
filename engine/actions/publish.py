@@ -490,14 +490,16 @@ def _publish_gmail(
         # No redirect target AND no explicit live authorization → REFUSE. The
         # action was already claimed; mark it failed WITHOUT any external call
         # (never double-fires; exactly-once unaffected).
+        blocked_reason = (
+            "GMAIL_REDIRECT_TO not configured and no explicit live "
+            "authorization — refusing (fail closed)"
+        )
+        _record_send_audit_row(
+            action, mode="blocked", result="failed", transport="gmail-api",
+            detail=blocked_reason, dsn=dsn,
+        )
         return _with_mode(
-            update_status(
-                action.id, "failed", dsn=dsn,
-                last_error=(
-                    "GMAIL_REDIRECT_TO not configured and no explicit live "
-                    "authorization — refusing (fail closed)"
-                ),
-            ),
+            update_status(action.id, "failed", dsn=dsn, last_error=blocked_reason),
             "blocked",
         )
 
@@ -509,14 +511,16 @@ def _publish_gmail(
     body = action.draft or ""
     stray = _PLACEHOLDER_RE.search(body)
     if stray is not None:
+        placeholder_reason = (
+            f"refusing to send: unresolved template placeholder "
+            f"{stray.group(0)!r} in body"
+        )
+        _record_send_audit_row(
+            action, mode=mode, result="failed", transport="gmail-api",
+            detail=placeholder_reason, dsn=dsn,
+        )
         return _with_mode(
-            update_status(
-                action.id, "failed", dsn=dsn,
-                last_error=(
-                    f"refusing to send: unresolved template placeholder "
-                    f"{stray.group(0)!r} in body"
-                ),
-            ),
+            update_status(action.id, "failed", dsn=dsn, last_error=placeholder_reason),
             mode,
         )
 
@@ -536,14 +540,16 @@ def _publish_gmail(
             media = load_artifact_media(promised_artifact, dsn=dsn)
             attachments, attachment_receipts = validate_attachments([media.as_attachment()])
         except (ArtifactMediaError, MailAttachmentError) as exc:
+            attach_reason = (
+                f"draft promised attachment (artifact {promised_artifact}) but it "
+                f"could not be attached: {exc} — refusing to send without it"
+            )
+            _record_send_audit_row(
+                action, mode=mode, result="failed", transport="gmail-api",
+                detail=attach_reason, dsn=dsn,
+            )
             return _with_mode(
-                update_status(
-                    action.id, "failed", dsn=dsn,
-                    last_error=(
-                        f"draft promised attachment (artifact {promised_artifact}) but it "
-                        f"could not be attached: {exc} — refusing to send without it"
-                    ),
-                ),
+                update_status(action.id, "failed", dsn=dsn, last_error=attach_reason),
                 mode,
             )
         _log.info(
@@ -621,7 +627,15 @@ def _publish_demo(action: ActionRow, connector: Any | None, dsn: str | None) -> 
             to=action.target or "", subject=action.subject or "", body=action.draft or ""
         )
     except Exception as exc:  # noqa: BLE001 — surface the real error, never fake success
+        _record_send_audit_row(
+            action, mode="sandbox", result="failed", transport="sandbox",
+            detail=str(exc), dsn=dsn,
+        )
         return update_status(action.id, "failed", dsn=dsn, last_error=str(exc))
+    _record_send_audit_row(
+        action, mode="sandbox", result="sent", transport="sandbox",
+        provider_id=getattr(receipt, "deep_link", None), dsn=dsn,
+    )
     return _with_mode(
         update_status(
             action.id, "sent", dsn=dsn,
@@ -645,7 +659,15 @@ def _publish_facebook(action: ActionRow, connector: Any | None, dsn: str | None)
         )
         result = _resolve(raw)
     except Exception as exc:  # noqa: BLE001 — expired token raises the REAL Graph error
+        _record_send_audit_row(
+            action, mode="live", result="failed", transport="facebook-graph",
+            detail=str(exc), dsn=dsn,
+        )
         return update_status(action.id, "failed", dsn=dsn, last_error=str(exc))
+    _record_send_audit_row(
+        action, mode="live", result="sent", transport="facebook-graph",
+        provider_id=getattr(result, "provider_id", None), dsn=dsn,
+    )
     return update_status(
         action.id, "sent", dsn=dsn,
         deep_link=getattr(result, "deep_link", None),
@@ -784,7 +806,15 @@ def _reply_instagram(action: ActionRow, connector: Any | None, dsn: str | None) 
         _ensure_real(conn)  # real-only: a mock never live-sends
         result = _resolve(conn.reply_to_comment(comment_id=action.target or "", message=action.draft))
     except Exception as exc:  # noqa: BLE001 — surface the REAL Graph error, never fake success
+        _record_send_audit_row(
+            action, mode="live", result="failed", transport="instagram-graph",
+            detail=str(exc), dsn=dsn,
+        )
         return update_status(action.id, "failed", dsn=dsn, last_error=str(exc))
+    _record_send_audit_row(
+        action, mode="live", result="sent", transport="instagram-graph",
+        provider_id=getattr(result, "reply_id", None), dsn=dsn,
+    )
     return update_status(
         action.id, "sent", dsn=dsn,
         deep_link=getattr(result, "permalink", None) or getattr(result, "reply_id", None),
