@@ -45,11 +45,26 @@ def _connect(dsn: str | None = None):
     return psycopg.connect(_dsn(dsn), autocommit=True, row_factory=dict_row)
 
 
+# Memoize the schema DDL per-DSN per-process: an inbound webhook hits ``append_turn``
+# on a hot path, and re-issuing CREATE/CREATE INDEX on every request risks a DDL lock
+# on the shared cluster (qa1). The table is created once, then every later call is a
+# pure no-op. ``reset_schema_cache`` lets tests that drop the table force a re-create.
+_schema_ensured: set[str] = set()
+
+
+def reset_schema_cache() -> None:
+    _schema_ensured.clear()
+
+
 def ensure_schema(dsn: str | None = None) -> None:
     """Idempotently create ``lead_conversations`` (a no-op on the live cluster).
 
     One row per (tenant, customer): the ordered ``turns`` JSONB, the opening campaign
-    message (``campaign_message``), the ``channel`` and ``source`` it came from."""
+    message (``campaign_message``), the ``channel`` and ``source`` it came from.
+    Memoized per-DSN so the hot inbound path does not re-issue DDL every request."""
+    key = _dsn(dsn)
+    if key in _schema_ensured:
+        return
     with _connect(dsn) as conn:
         conn.execute(
             """
@@ -68,6 +83,7 @@ def ensure_schema(dsn: str | None = None) -> None:
                 ON lead_conversations (tenant_id, customer_id);
             """
         )
+    _schema_ensured.add(key)
 
 
 def normalize_turns(turns: list[dict[str, Any]] | None) -> list[dict[str, str]]:
@@ -151,9 +167,11 @@ def append_turn(
     This is the INBOUND-signal write path (CustomerAcq-tlv.2): unlike
     :func:`upsert_conversation` (bulk upload, REPLACES turns), this never discards
     history — it appends exactly one ``{speaker, text}`` turn. Returns
-    ``(conversation_id, appended)``; ``appended`` is False when the row already ends
-    with this exact turn (webhook redelivery), so a retried delivery is idempotent.
-    The append itself is a single atomic UPDATE (no read-modify-write race)."""
+    ``(conversation_id, appended)``; ``appended`` is False when the thread ALREADY
+    CONTAINS this exact turn anywhere (webhook redelivery, in or out of order), so a
+    retried delivery is idempotent. The append is a single atomic UPDATE gated by a
+    ``@>`` containment check — no read-modify-write race, no tail-only blind spot
+    (qa1: A,B,redeliver-A used to append a third turn)."""
     clean = (text or "").strip()
     if not clean:
         raise ValueError("turn text is empty")
@@ -177,7 +195,8 @@ def append_turn(
         if created is not None:
             return created["id"], True
         # Row exists: atomic dedupe-append — append ONLY when the thread does not
-        # already end with this exact turn (idempotent on webhook redelivery).
+        # ALREADY CONTAIN this exact turn (``@>`` containment, order-independent), so a
+        # redelivery of an earlier turn is a no-op, not a duplicate at the tail.
         appended = conn.execute(
             """
             UPDATE lead_conversations
@@ -185,10 +204,10 @@ def append_turn(
                 channel = COALESCE(channel, %s),
                 updated_at = now()
             WHERE tenant_id = %s AND customer_id = %s
-              AND (jsonb_array_length(turns) = 0 OR turns->-1 <> %s::jsonb)
+              AND NOT (turns @> %s::jsonb)
             RETURNING id
             """,
-            (turn_json, channel, tenant_id, customer_id, turn_json),
+            (turn_json, channel, tenant_id, customer_id, json.dumps([turn])),
         ).fetchone()
         if appended is not None:
             return appended["id"], True

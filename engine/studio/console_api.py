@@ -316,16 +316,26 @@ class InboundSignalBody(BaseModel):
 def studio_inbound(body: InboundSignalBody) -> dict:
     """Capture one inbound customer reply into the persistent memory loop: a REAL
     ``customer`` turn appended to ``lead_conversations`` + a structured outcome
-    memory (``replied|booked|objected:<type>``). 404 when the sender does not
-    resolve to a real customer — nothing is written for an unknown sender.
-    Idempotent on webhook redelivery. Nothing here sends."""
+    memory (``replied|booked|objected:<type>``).
+
+    Status codes (qa1-hardened): 200 on capture; 404 when the sender does not resolve
+    to a real customer (nothing written — an honest miss); 422 on empty/whitespace
+    text or missing channel (a client error, not retryable); 5xx when the DB errors
+    (retryable — the provider redelivers rather than marking the reply delivered and
+    losing it). Idempotent on webhook redelivery. Nothing here sends."""
     from proactive.followup_source import capture_inbound
 
-    result = capture_inbound(
-        body.tenant_id, text=body.text, channel=body.channel,
-        customer_id=body.customer_id, email=body.email, phone=body.phone,
-        ig_handle=body.ig_handle, run_id=body.run_id,
-    )
+    try:
+        result = capture_inbound(
+            body.tenant_id, text=body.text, channel=body.channel,
+            customer_id=body.customer_id, email=body.email, phone=body.phone,
+            ig_handle=body.ig_handle, run_id=body.run_id,
+        )
+    except ValueError as exc:
+        # Bad payload (empty/whitespace text, missing channel) — 422, not retryable.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # A DB / infra error is NOT caught here: it surfaces as 5xx so the webhook provider
+    # retries instead of dropping the signal on a transient outage.
     if result is None:
         raise HTTPException(
             status_code=404,

@@ -254,10 +254,20 @@ def build_dossier(
     # row is the last thing we sent, the first ``kind=outcome`` row is what REALLY
     # happened after it (captured by proactive.followup_source). Pure read of stored
     # rows — honest-empty until the loop has actually captured something.
+    #
+    # STALE-OUTCOME GUARD (qa1): only pair the outcome with the outreach when the
+    # outcome is at least as NEW as the latest outreach. If the newest touch is an
+    # outreach we sent AFTER the last captured reply (outreach index < outcome index in
+    # this newest-first list), that outreach has no reply yet — showing the older
+    # outcome beside it would misattribute a stale reply to a fresh send, so the outcome
+    # block stays honestly empty.
     last_outreach = _field(None, "none", "none")
     last_outcome = _field(None, "none", "none")
     last_outcome_verbatim = ""
-    for m in facts.get("memories", []) or []:
+    _outreach_idx: int | None = None
+    _outcome_idx: int | None = None
+    _outcome_meta: dict[str, Any] = {}
+    for i, m in enumerate(facts.get("memories", []) or []):
         meta = (m.get("metadata") or {}) if isinstance(m, dict) else {}
         kind = meta.get("kind")
         if kind == "outreach" and not last_outreach.present:
@@ -265,11 +275,19 @@ def build_dossier(
                 (m.get("text") if isinstance(m, dict) else None), "high",
                 "memory:outreach",
             )
-        elif kind == "outcome" and meta.get("outcome") and not last_outcome.present:
-            last_outcome = _field(meta.get("outcome"), "high", "memory:outcome")
-            last_outcome_verbatim = str(meta.get("verbatim") or "")
-        if last_outreach.present and last_outcome.present:
+            _outreach_idx = i
+        elif kind == "outcome" and meta.get("outcome") and _outcome_idx is None:
+            _outcome_idx = i
+            _outcome_meta = meta
+        if last_outreach.present and _outcome_idx is not None:
             break
+    # Surface the outcome only when it is not stale relative to the latest outreach.
+    _outcome_is_current = _outcome_idx is not None and (
+        _outreach_idx is None or _outcome_idx <= _outreach_idx
+    )
+    if _outcome_is_current:
+        last_outcome = _field(_outcome_meta.get("outcome"), "high", "memory:outcome")
+        last_outcome_verbatim = str(_outcome_meta.get("verbatim") or "")
 
     # --- honest personalization posture --------------------------------------------- #
     # Count the HARD (high-confidence) distinguishing signals. A lead with none of these is
