@@ -3029,6 +3029,55 @@ async def stage_publish(
 
     dsn = ctx.deps.dsn or os.environ.get("ENGINE_DATABASE_URL")
     await asyncio.to_thread(ensure_schema, dsn)
+
+    # LINEAGE FIX (engine-core item 5): the old path staged with NO run_id and a
+    # random-uuid idempotency key, so these drafts sorted LAST in the review queue
+    # ("Unassigned", no lineage). Derive a REAL campaign/run id (same camp_/team-
+    # format launch_studio_run mints), record a minimal agent_runs + runs trail so
+    # the draft deep-links to a run like every other staged action, and key the row
+    # deterministically (run_id + target/draft hash) — exactly-once inside the run.
+    campaign_id = f"camp_{uuid.uuid4().hex[:12]}"
+    run_id = f"team-{campaign_id}-{uuid.uuid4().hex[:12]}"
+    target_hash = hashlib.sha1(f"{target or ''}|{draft}".encode("utf-8")).hexdigest()[:12]
+    idem_key = f"{run_id}:{target_hash}"
+
+    def _record_lineage() -> None:
+        """Best-effort minimal trail: one draft agent_run (the supervisor host is the
+        real author/model) + a materialized runs row. Never blocks the staging."""
+        try:
+            from team.store import TeamStore
+
+            from studio.campaign_runner import _materialize_runs_row
+
+            ts = TeamStore(dsn)
+            ts.setup()
+            out = {
+                "caption": draft,
+                "channel": channel,
+                "source": "stage_publish",
+                "note": "supervisor-authored draft staged HELD via the approval gate",
+            }
+            ts.record_agent_run(
+                id=f"ar_stage_{hashlib.sha1(idem_key.encode()).hexdigest()[:16]}",
+                campaign_id=campaign_id,
+                run_id=run_id,
+                role="draft",
+                model=HOST_AGUI_MODEL,
+                input={"channel": channel, "target": target, "source": "stage_publish"},
+                output=out,
+            )
+            _materialize_runs_row(
+                dsn=dsn,
+                run_id=run_id,
+                tenant_id=ctx.deps.tenant_id,
+                agent_runs=[{"role": "draft", "model": HOST_AGUI_MODEL,
+                             "input": {"channel": channel}, "output": out}],
+                terminal_status="completed",
+            )
+        except Exception:
+            pass
+
+    await asyncio.to_thread(_record_lineage)
     action_id = await asyncio.to_thread(
         lambda: record_pending_action(
             tenant_id=ctx.deps.tenant_id,
@@ -3042,13 +3091,14 @@ async def stage_publish(
             threshold=None,
             esc_kind="approval_required",
             esc_label="Studio publish — operator approval required",
-            idempotency_key=f"studio:{ctx.deps.session_id}:{uuid.uuid4().hex[:12]}",
+            idempotency_key=idem_key,
+            run_id=run_id,
             dsn=dsn,
         )
     )
     return (
-        f"STAGED (held): action {action_id} on {channel} is PENDING approval. "
-        "Nothing has been sent."
+        f"STAGED (held): action {action_id} on {channel} is PENDING approval "
+        f"(run {run_id}). Nothing has been sent."
     )
 
 
