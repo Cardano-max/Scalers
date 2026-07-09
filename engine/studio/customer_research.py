@@ -229,7 +229,12 @@ def churn_risk_leads(
                 OR (p.traits #>> '{traits,lifecycle_stage,value}')
                      IN ('lapsing', 'lead-no-visit', 'churn-risk')
               )
-            ORDER BY c.created_at
+            -- Deterministic order: c.created_at collides for batch/seed inserts
+            -- (one txn now()), so a bare created_at makes the LIMIT-N slice an
+            -- ARBITRARY subset that Postgres may return differently across runs —
+            -- a retry then picks DIFFERENT customers (nmh.11 vanish/re-stage). The
+            -- unique c.id tiebreaker makes the cohort STABLE across retries.
+            ORDER BY c.created_at, c.id
             LIMIT %s
             """,
             (tenant_id, limit),
@@ -293,7 +298,11 @@ def conversation_leads(
                 FROM lead_conversations
                 WHERE tenant_id = %s
                 GROUP BY customer_id
-                ORDER BY mc
+                -- Unique customer_id tiebreaker: MIN(created_at) collides freely
+                -- across customers, so a bare ORDER BY mc makes the LIMIT-N slice
+                -- non-deterministic and a retry re-picks a DIFFERENT cohort
+                -- (nmh.11). Ordering by customer_id after mc makes it STABLE.
+                ORDER BY mc, customer_id
                 LIMIT %s
                 """,
                 (tenant_id, limit),
