@@ -42,7 +42,16 @@ function readFileText(file: File): Promise<string> {
   });
 }
 
-export function CustomerUpload({ endpoint, sessionId }: { endpoint?: string; sessionId?: string }) {
+export function CustomerUpload({
+  endpoint,
+  sessionId,
+  onUploaded,
+}: {
+  endpoint?: string;
+  sessionId?: string;
+  /** Fires after a REAL successful upload — lets the page refresh context panels. */
+  onUploaded?: () => void;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [status, setStatus] = useState<Status>('idle');
   const [ack, setAck] = useState<UploadAck | null>(null);
@@ -83,6 +92,7 @@ export function CustomerUpload({ endpoint, sessionId }: { endpoint?: string; ses
       }
       setAck(data);
       setStatus('done');
+      onUploaded?.();
     } catch (err) {
       setStatus('error');
       setError(err instanceof Error ? err.message : 'upload failed');

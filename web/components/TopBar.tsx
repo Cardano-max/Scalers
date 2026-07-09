@@ -6,7 +6,7 @@
  */
 import { useConsole, type ScreenId } from '@/state/console-store';
 import { useData } from '@/lib/data/DataProvider';
-import { SELECTABLE_TENANTS } from '@/lib/data';
+import { selectableTenants } from '@/lib/data';
 import { Dot } from './icons';
 
 const TITLES: Record<ScreenId, { title: string; subtitle: string }> = {
@@ -33,6 +33,10 @@ export function TopBar({
   const { screen } = useConsole();
   const { tenantId, setTenantId } = useData();
   const { title, subtitle } = TITLES[screen];
+  // Fixture tenants stay hidden from operators unless explicitly enabled via
+  // NEXT_PUBLIC_SHOW_FIXTURE_TENANTS (QA 5j). A persisted fixture selection
+  // still renders (as the raw-id option below) so the switcher never breaks.
+  const tenants = selectableTenants();
 
   return (
     <header
@@ -57,7 +61,7 @@ export function TopBar({
             selectable as the dev fixture. The choice persists (localStorage). */}
         <select
           aria-label="Tenant"
-          value={SELECTABLE_TENANTS.some((t) => t.id === tenantId) ? tenantId : ''}
+          value={tenants.some((t) => t.id === tenantId) ? tenantId : ''}
           onChange={(e) => e.target.value && setTenantId(e.target.value)}
           style={{
             padding: '6px 10px',
@@ -69,10 +73,10 @@ export function TopBar({
             color: 'var(--text-primary, inherit)',
           }}
         >
-          {!SELECTABLE_TENANTS.some((t) => t.id === tenantId) && (
+          {!tenants.some((t) => t.id === tenantId) && (
             <option value="">{tenantId}</option>
           )}
-          {SELECTABLE_TENANTS.map((t) => (
+          {tenants.map((t) => (
             <option key={t.id} value={t.id}>
               {t.label}
             </option>

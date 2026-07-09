@@ -5,6 +5,7 @@ import { useData } from '@/lib/data/DataProvider';
 import { useAsync } from '@/lib/useAsync';
 import { Dot } from './icons';
 import { FeedRow } from './FeedRow';
+import { Skeleton, EmptyState, ErrorState } from './states';
 import type { FeedEvent, Worker } from '@/lib/data/models';
 
 const WORKERS: Array<{ id: Worker; label: string }> = [
@@ -118,7 +119,7 @@ export function FeedScreen() {
         </button>
       </div>
 
-      {/* Feed list */}
+      {/* Feed list — with the mandatory async/empty states (QA 5f). */}
       <div
         style={{
           flex: 1,
@@ -127,6 +128,20 @@ export function FeedScreen() {
           minHeight: 0,
         }}
       >
+        {feed.loading && feed.data === undefined && <Skeleton rows={5} label="Loading feed…" />}
+        {feed.error && !feed.loading && <ErrorState error={feed.error} onRetry={feed.reload} />}
+        {!feed.loading && !feed.error && items.length === 0 && (
+          <EmptyState
+            title="No activity yet"
+            hint="Engine decisions stream here in real time — run a campaign from the Voice or Agency tab to see it live."
+          />
+        )}
+        {!feed.loading && !feed.error && items.length > 0 && filtered.length === 0 && (
+          <EmptyState
+            title="Nothing from this worker"
+            hint="No feed events match the selected filter — clear it to see the full stream."
+          />
+        )}
         {filtered.map((event) => (
           <FeedRow key={event.id} event={event} />
         ))}

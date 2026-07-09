@@ -76,7 +76,16 @@ export function AppShell() {
   const [engineOverride, setEngineOverride] = useState<EngineState | null>(null);
 
   const tenant = useAsync(() => adapter.getTenant(tenantId), [tenantId]);
+  // The REST tenant record (GET /tenants/{id}) carries the human name ("Skin
+  // Design Tattoo") even when the GraphQL tenant query fails — the top-bar chip
+  // prefers it over a raw tenant id and must NEVER be stuck on "Loading…" (QA 5b).
+  const tenantMeta = useAsync(() => adapter.getTenantMeta(tenantId), [tenantId]);
   const queue = useAsync(() => adapter.getReviewQueue(tenantId), [tenantId]);
+
+  const clientName =
+    tenant.data?.name ??
+    tenantMeta.data?.name ??
+    (tenant.loading || tenantMeta.loading ? 'Loading…' : tenantId);
 
   const engineState: EngineState =
     engineOverride ?? tenant.data?.engineState ?? 'RUNNING';
@@ -107,7 +116,7 @@ export function AppShell() {
       />
       <main style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <TopBar
-          clientName={tenant.data?.name ?? 'Loading…'}
+          clientName={clientName}
           pack={tenant.data?.pack ?? ''}
         />
         {/* ju1.5: server-driven TEST-MODE banner — renders only when the tenants

@@ -214,6 +214,9 @@ export function VoiceScreen() {
             onSend={studio.send}
             streamStatus={studio.streamStatus}
             busy={studio.busy}
+            /* "Thinking" until the host's first token — but never during a campaign
+               run, whose progress lives in the right-hand reasoning stream (QA 5e). */
+            pendingReply={studio.busy && !studio.runningCampaign}
             approval={
               studio.pendingApproval
                 ? {

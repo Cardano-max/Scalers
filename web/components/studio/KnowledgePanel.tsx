@@ -43,9 +43,12 @@ interface KnowledgePanelProps {
   collapsible?: boolean;
   /** Initial open state when collapsible (defaults closed). Ignored when not collapsible. */
   defaultOpen?: boolean;
+  /** Bump to force a re-fetch of the document list (e.g. after an upload succeeds
+   *  elsewhere on the page) so the summary never shows a stale "No documents yet". */
+  refreshToken?: number;
 }
 
-export function KnowledgePanel({ endpoint, collapsible = false, defaultOpen = false }: KnowledgePanelProps) {
+export function KnowledgePanel({ endpoint, collapsible = false, defaultOpen = false, refreshToken = 0 }: KnowledgePanelProps) {
   const [docs, setDocs] = useState<DocRow[]>([]);
   const [name, setName] = useState('');
   const [content, setContent] = useState('');
@@ -82,7 +85,7 @@ export function KnowledgePanel({ endpoint, collapsible = false, defaultOpen = fa
 
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+  }, [refresh, refreshToken]);
 
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

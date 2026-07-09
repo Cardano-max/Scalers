@@ -84,6 +84,15 @@ export function NavIcon({ id }: { id: ScreenId }) {
           <circle cx="3.5" cy="18" r="1.2" fill="currentColor" stroke="none" />
         </svg>
       );
+    case 'memory':
+      // Campaign memory — an archive/library box (real past-campaign examples).
+      return (
+        <svg {...base} aria-hidden>
+          <rect x="3" y="4" width="18" height="5" rx="1.2" />
+          <path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9" />
+          <line x1="10" y1="13" x2="14" y2="13" />
+        </svg>
+      );
     default:
       return null;
   }

@@ -38,10 +38,13 @@ function readFileText(file: File): Promise<string> {
 export function BrandNotesUpload({
   endpoint,
   sessionId,
+  onUploaded,
 }: {
   /** POST /studio/notes endpoint; omit in preview to show the honest not-connected note. */
   endpoint?: string;
   sessionId: string;
+  /** Fires after a REAL successful attach — lets the page refresh context panels. */
+  onUploaded?: () => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [status, setStatus] = useState<Status>('idle');
@@ -80,6 +83,7 @@ export function BrandNotesUpload({
       }
       setAck(data);
       setStatus('done');
+      onUploaded?.();
     } catch (err) {
       setStatus('error');
       setError(err instanceof Error ? err.message : 'attach failed');

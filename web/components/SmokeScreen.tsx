@@ -98,7 +98,7 @@ export function SmokeScreen() {
           </ul>
         ) : (
           <div style={{ padding: 16, color: 'var(--text-muted)', fontSize: 13 }}>
-            No campaign runs yet — start one from the Command tab.
+            No campaign runs yet — start one from the Voice or Agency tab.
           </div>
         )}
       </div>

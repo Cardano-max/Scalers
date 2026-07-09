@@ -29,11 +29,26 @@ export type DataSource = 'mock' | 'live';
  */
 export const LIVE_TENANT_ID = 'skindesign';
 
-/** Tenants the TopBar switcher offers. Order = default first. */
-export const SELECTABLE_TENANTS: { id: string; label: string }[] = [
+/** Tenants the TopBar switcher offers. Order = default first. `fixture` marks
+ *  dev-only tenants that are HIDDEN from the operator-facing switcher unless
+ *  NEXT_PUBLIC_SHOW_FIXTURE_TENANTS is set (QA 5j). */
+export const SELECTABLE_TENANTS: { id: string; label: string; fixture?: boolean }[] = [
   { id: 'skindesign', label: 'Skin Design Tattoo' },
-  { id: 'ladies8391', label: 'Ladies First (dev fixture)' },
+  { id: 'ladies8391', label: 'Ladies First (dev fixture)', fixture: true },
 ];
+
+/** True when dev fixture tenants should appear in the switcher (env opt-in). */
+export function showFixtureTenants(): boolean {
+  const v = process.env.NEXT_PUBLIC_SHOW_FIXTURE_TENANTS;
+  return v === '1' || v === 'true';
+}
+
+/** The switcher's visible tenants: fixtures only with the env opt-in. */
+export function selectableTenants(): { id: string; label: string; fixture?: boolean }[] {
+  return showFixtureTenants()
+    ? SELECTABLE_TENANTS
+    : SELECTABLE_TENANTS.filter((t) => !t.fixture);
+}
 
 export interface DataLayerEnv {
   source?: string;
