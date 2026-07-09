@@ -137,7 +137,8 @@ export async function fetchArtist(slug: string, signal?: AbortSignal): Promise<A
       vlmSummary: str(w.vlmSummary),
     })),
     campaigns: campaigns.map((c) => ({
-      campaign_name: str(c.campaign_name) ?? 'Untitled campaign',
+      // engine serves the key as `name`; accept the contract's `campaign_name` too
+      campaign_name: str(c.campaign_name) ?? str(c.name) ?? 'Untitled campaign',
       offer_price_usd: num(c.offer_price_usd),
       message_copy: str(c.message_copy),
       cta: str(c.cta),
