@@ -1,4 +1,4 @@
-# demo_studio demo data — Copper Fox Tattoo (SYNTHETIC / FICTIONAL)
+# demo_studio demo data — Fenmore Tattoo (SYNTHETIC / FICTIONAL)
 
 > ⚠️ **100% FICTIONAL, company-owned demo asset** for the tlv.6 end-to-end demo
 > slice. NOT real people, NOT a real studio. Every email uses the RFC-2606 reserved
@@ -7,6 +7,14 @@
 > person or business**. Zero bleed from the real client `skindesign` or the
 > synthetic `ladies8391` / `ink-studio` tenants. No sensitive-attribute inference:
 > every field is a booking fact only.
+>
+> **Name collision check (2026-07-09):** the studio name, all 5 artist names, and
+> every customer name were **web-searched** to confirm none matches a real tattoo
+> studio, a real business/brand, or a notable public figure (Wikipedia / public
+> artist-author-athlete-musician). Names shared only with private, non-notable
+> individuals are unavoidable and acceptable; any hit on a notable person or real
+> business was renamed. (Fixes the earlier "Copper Fox Tattoo" / "Priya Anand"
+> collisions.)
 >
 > Authored by writer 2026-07-09. Brand-voice bundle for this tenant lives at
 > `skills/brand-voice/tenants/demo_studio/` + pack `engine/config/packs/demo_studio.toml`.
@@ -21,7 +29,7 @@
 | `interests` | tattoo styles/themes | `;`-delimited |
 | `last_visit` | last appointment | ISO `yyyy-mm-dd` |
 | `objection` | the booking objection to overcome | short phrase |
-| `preferred_artist` | resident artist (see brand-dna roster) | one of Nova Reyes / Theo Marsh / Priya Anand / Del Okafor / Sam Winters |
+| `preferred_artist` | resident artist (see brand-dna roster) | one of Elliot Prewitt / Wren Halloway / Rafi Sadeghi / Marlow Deitch / Gwen Lindqvist |
 | `notes` | booking-relevant persona detail | free text (`;`-delimited if multi) |
 
 5 of 11 are **lapsed** (last visit before 2025-08) to exercise the win-back demo

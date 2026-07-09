@@ -1,4 +1,4 @@
-# SYNTHETIC / DEMO tenant pack — Copper Fox Tattoo (demo_studio).
+# SYNTHETIC / DEMO tenant pack — Fenmore Tattoo (demo_studio).
 # 100% FICTIONAL company-owned demo asset for eng4's tlv.6 end-to-end slice.
 # NOT a real studio or people. Deliberately a different studio from ladies8391 /
 # ink-studio / the real client skindesign (zero identity bleed). All channels are
@@ -7,10 +7,10 @@
 # never a live provider.
 
 tenant_id = "demo_studio"
-display_name = "Copper Fox Tattoo"
+display_name = "Fenmore Tattoo"
 
 # Fictional demo sending domain (RFC-2606 reserved .example — never resolves).
-sending_domain = "outreach.copperfox.example"
+sending_domain = "outreach.fenmore.example"
 
 [voice]
 skill = "brand-voice/demo_studio"
