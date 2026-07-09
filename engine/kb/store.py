@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from contextlib import contextmanager
 from typing import Any, Iterator
 
@@ -147,6 +148,43 @@ class KbStore:
             )
             for r in rows
         ]
+
+    def prune_gold_examples(
+        self,
+        *,
+        tenant_id: str,
+        split: Split | str,
+        keep_content_hashes: Sequence[str],
+        label_version: int | None = None,
+    ) -> int:
+        """Delete gold examples for ``(tenant, split)`` whose ``content_hash`` is
+        NOT in ``keep_content_hashes``, so a loader is *authoritative* for its
+        dataset (CustomerAcq-wwy.5).
+
+        Without this, a loader is upsert-only: after a relabel or reworded example
+        (a new ``content_hash``) the old rows linger on a persistent KB, so the
+        gate scores a superset of the intended dataset and can false-fail. Pruning
+        the rows absent from the current set restores the honest-measurement
+        property on a long-lived KB (CI already truncates, so it was correct there).
+
+        Scoped to ``tenant_id`` (explicit filter + the RLS ``app.current_tenant``)
+        AND ``split``, so real HOLDOUT / TRAIN / CALIBRATION rows and every other
+        tenant are never touched. ``gold_label`` rows cascade with their example
+        (FK ``ON DELETE CASCADE``). Returns the number of examples deleted.
+        """
+        split_v = split.value if isinstance(split, Split) else str(split)
+        keep = list(keep_content_hashes)
+        clauses = ["tenant_id = %s", "split = %s", "content_hash <> ALL(%s::text[])"]
+        params: list[Any] = [tenant_id, split_v, keep]
+        if label_version is not None:
+            clauses.append("label_version = %s")
+            params.append(label_version)
+        with self._conn(tenant_id) as conn:
+            rows = conn.execute(
+                "DELETE FROM gold_example WHERE " + " AND ".join(clauses) + " RETURNING id",
+                params,
+            ).fetchall()
+        return len(rows)
 
     # ── gold labels (per rater x dimension) ──────────────────────────────────
 
