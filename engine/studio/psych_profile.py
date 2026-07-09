@@ -45,6 +45,12 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
+from research.protected_traits import (
+    allowed_categories,
+    build_first_party_corpus,
+    filter_lines,
+    trait_violations,
+)
 from studio.reason_history import (
     OBJECTION_PAYMENT,
     OBJECTION_PRICE,
@@ -89,6 +95,7 @@ SRC_CSV = "csv"
 SRC_PERSONA = "persona"
 SRC_HISTORY = "tattoo_history"
 SRC_SOCIAL = "social"
+SRC_MEMORY = "memory"
 
 
 class _Camel(BaseModel):
@@ -135,6 +142,11 @@ class PsychProfile(_Camel):
     grounded_fields: int = 0
     insufficient_fields: int = 0
     had_conversation: bool = False
+    # Sensitive-trait audit (spec §7/§24): every field/evidence line the deterministic
+    # protected-traits filter DROPPED, recorded honestly — {field, categories, matched,
+    # note} — so an operator can see exactly what was withheld and why. Empty = nothing
+    # asserted a protected trait.
+    trait_filtered: list[dict[str, str]] = Field(default_factory=list)
 
     def scalar_fields(self) -> list[tuple[str, PsychField]]:
         """The single-value dimensions (excludes the list dimensions)."""
@@ -193,12 +205,20 @@ def _build_corpus(
     conversation_turns: list[dict[str, Any]] | None,
 ) -> str:
     """The lowercased text a ``stated`` read must be traceable to: the real conversation
-    turns + the CRM ``key=value`` tokens + any social text. This is the ground truth the
-    validation gate checks every evidence span against."""
+    turns + the CRM ``key=value`` tokens + the lead's prior-campaign MEMORIES + any
+    social text. This is the ground truth the validation gate checks every evidence
+    span against."""
     parts: list[str] = []
     for t in conversation_turns or []:
         parts.append(str(t.get("text") or ""))
     parts.extend(_facts_kv(facts))
+    # Prior campaign memories (real ``memories`` rows for this customer, as
+    # ``lookup_lead`` returns them) are first-party CRM evidence: a stated read may
+    # quote them, and they ground the "what we already tried / learned" dimension.
+    for m in facts.get("memories") or []:
+        txt = (m or {}).get("text") if isinstance(m, dict) else None
+        if txt:
+            parts.append(str(txt))
     if social:
         parts.append(str(social))
     # Normalized (case/whitespace/punctuation-collapsed) so a verbatim quote matches
@@ -224,6 +244,8 @@ def _present_sources(
         present.add(SRC_CSV)
     if facts.get("tattoo_history"):
         present.add(SRC_HISTORY)
+    if facts.get("memories"):
+        present.add(SRC_MEMORY)
     if social:
         present.add(SRC_SOCIAL)
     return present
@@ -518,10 +540,64 @@ def _compose_narrative(profile: PsychProfile, signals: ReasonSignals) -> None:
     )
 
 
+def _trait_filter_field(
+    name: str, field: PsychField, profile: PsychProfile,
+    allowed: frozenset[str], fp_corpus: str,
+) -> PsychField:
+    """The SENSITIVE-TRAIT gate for one surviving field (spec §7/§24). If the field's
+    value or evidence asserts a protected trait that is neither derivable from a
+    first-party field the customer provided (e.g. age from a real ``dob``) nor the
+    customer's own verbatim words, the WHOLE field is dropped to insufficient-signal
+    and the drop is recorded honestly on ``profile.trait_filtered``."""
+    if field.signal == INSUFFICIENT:
+        return field
+    viols = trait_violations(
+        f"{field.value}\n{field.evidence}", allowed=allowed, first_party_corpus=fp_corpus
+    )
+    if not viols:
+        return field
+    cats = sorted({v.category for v in viols})
+    profile.trait_filtered.append({
+        "field": name,
+        "categories": ", ".join(cats),
+        "matched": ", ".join(sorted({v.span.strip().lower() for v in viols}))[:120],
+        "note": "protected-trait assertion not backed by customer-provided data; dropped",
+    })
+    return PsychField.insufficient(
+        f"protected trait ({', '.join(cats)}) filtered — not customer-provided"
+    )
+
+
+def _apply_trait_filter(
+    profile: PsychProfile, allowed: frozenset[str], fp_corpus: str,
+) -> None:
+    """Run the protected-traits gate over every SURVIVING field (scalars + lists),
+    after corpus validation and before the recount/narrative — so a filtered read can
+    never leak into ``where_customer_sits`` / ``best_reengagement_angle``."""
+    for name, field in profile.scalar_fields():
+        setattr(profile, name, _trait_filter_field(name, field, profile, allowed, fp_corpus))
+    profile.secondary_objections = [
+        v for v in (
+            _trait_filter_field("secondary_objections", o, profile, allowed, fp_corpus)
+            for o in profile.secondary_objections
+        )
+        if v.signal != INSUFFICIENT
+    ]
+    profile.decision_blockers = [
+        v for v in (
+            _trait_filter_field("decision_blockers", b, profile, allowed, fp_corpus)
+            for b in profile.decision_blockers
+        )
+        if v.signal != INSUFFICIENT
+    ]
+
+
 def _finalize(profile: PsychProfile, corpus: str, present: set[str],
-              signals: ReasonSignals) -> PsychProfile:
-    """Run the anti-fabrication gate over every field, recount grounding, and compose
-    the derived one-liners from what survived."""
+              signals: ReasonSignals, *,
+              allowed: frozenset[str] = frozenset(), fp_corpus: str = "") -> PsychProfile:
+    """Run the anti-fabrication gate over every field, then the protected-traits gate
+    over what survived, recount grounding, and compose the derived one-liners from
+    what remains."""
     profile.umbrella_category = _validate_field(profile.umbrella_category, corpus, present)
     profile.primary_objection = _validate_field(profile.primary_objection, corpus, present)
     profile.secondary_objections = [
@@ -538,6 +614,10 @@ def _finalize(profile: PsychProfile, corpus: str, present: set[str],
         v for v in (_validate_field(b, corpus, present) for b in profile.decision_blockers)
         if v.signal != INSUFFICIENT
     ]
+
+    # SENSITIVE-TRAIT BAN (spec §7/§24): drop any surviving read that asserts a
+    # protected trait the customer did not provide, recording each drop honestly.
+    _apply_trait_filter(profile, allowed, fp_corpus)
 
     scalars = [f for _, f in profile.scalar_fields()]
     profile.grounded_fields = sum(1 for f in scalars if f.signal != INSUFFICIENT)
@@ -636,10 +716,18 @@ def _build_psych_cell():
         "- For EVERY dimension set signal to 'stated' ONLY if the customer's own words "
         "evidence it, and put that VERBATIM quote in 'evidence' with evidence_source="
         "'conversation'. Set 'inferred' if you derive it from a CRM/persona field (put "
-        "the field in 'evidence', source 'csv'/'persona'/'tattoo_history'). Set "
+        "the field in 'evidence', source 'csv'/'persona'/'tattoo_history'/'memory'). Set "
         "'insufficient-signal' and leave value empty if there is NO real evidence.\n"
         "- NEVER invent an objection, motive, urgency, or emotion the data does not show. "
-        "When unsure, choose 'insufficient-signal'. Honest gaps beat confident guesses."
+        "When unsure, choose 'insufficient-signal'. Honest gaps beat confident guesses.\n"
+        "- PROTECTED TRAITS — ABSOLUTE BAN (compliance): NEVER read, infer, guess, or "
+        "mention the customer's gender, age, ethnicity/race, health/disability, "
+        "religion, sexuality, financial status or distress, immigration status, or "
+        "political views — not in any value, evidence, or note, not even hedged "
+        "('probably', 'seems'), and not from their name, photo, handle, or writing "
+        "style. A price objection is about THIS purchase, never about their finances "
+        "as a person. A deterministic post-filter drops any output asserting these; "
+        "do not produce it."
     )
     return Cell(
         name="psych_analyst",
@@ -665,8 +753,18 @@ def _build_psych_prompt(
     else:
         lines.append("(no prior conversation on file — do NOT invent objections/psychology; "
                      "mark conversation-derived dimensions insufficient-signal)")
+    mems = [
+        str((m or {}).get("text") or "").strip()
+        for m in (facts.get("memories") or [])
+        if isinstance(m, dict)
+    ]
+    mems = [m for m in mems if m]
+    if mems:
+        lines.append("\n# PRIOR CAMPAIGN MEMORIES (our own CRM records about this lead — "
+                     "real evidence, evidence_source='memory'):")
+        lines.extend(f"- {m}" for m in mems)
     if social:
-        lines.append(f"\n# SOCIAL SIGNAL (verbatim): {social}")
+        lines.append(f"\n# SOCIAL SIGNAL (verbatim, already trait-filtered): {social}")
     lines.append("\nProduce the structured psychological read. Ground every 'stated' read "
                  "in a verbatim quote above; use 'insufficient-signal' wherever there is no "
                  "real evidence.")
@@ -676,6 +774,21 @@ def _build_psych_prompt(
 # --------------------------------------------------------------------------- #
 # Public entry point.
 # --------------------------------------------------------------------------- #
+def _social_fetch_enabled() -> bool:
+    """Whether the analyst may make the ONE consent-safe Firecrawl call for a lead's
+    customer-provided handle. OFF by default (per-lead live egress is opt-in):
+    enabled by ``STUDIO_SOCIAL_RESEARCH`` or, absent that, by the existing
+    ``STUDIO_DEEP_RESEARCH`` opt-in (deep per-lead research implies the consent-safe
+    social lookup). Keyless environments degrade honestly inside the fetcher."""
+    raw = os.environ.get("STUDIO_SOCIAL_RESEARCH")
+    if raw is not None:
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    raw = os.environ.get("STUDIO_DEEP_RESEARCH")
+    if raw is not None:
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    return False
+
+
 def analyze_customer(
     facts: dict[str, Any],
     conversation: list[dict[str, Any]] | dict[str, Any] | None = None,
@@ -683,19 +796,27 @@ def analyze_customer(
     *,
     known_artists: list[str] | None = None,
     use_llm: bool | None = None,
+    fetch_social: bool | None = None,
 ) -> PsychProfile:
     """Analyze ONE customer into a deep, evidence-grounded :class:`PsychProfile`.
 
     ``facts`` is the lead's real grounded facts (as ``customer_research.lookup_lead``
     returns). ``conversation`` is either a list of ``{speaker,text}`` turns or the
     ``conversations.get_conversation`` dict (``{turns,...}``). ``social`` is any verbatim
-    social snippet.
+    social snippet — when the caller passes none and the lead's OWN row carries a
+    customer-provided ``ig_handle`` / ``linkedin_handle``, the analyst fetches public
+    profile context itself via :func:`studio.customer_research.gather_social_context`
+    (one gated Firecrawl call; ``fetch_social`` overrides the env gate, default off;
+    NEVER name-based discovery). Any social text — passed or fetched — is scrubbed by
+    the protected-traits filter before it becomes evidence.
 
     A deterministic, fully-grounded read is always computed (the keyless floor). When an
     LLM is available (and not disabled) it enriches the read, but its output is passed
     through the SAME corpus-validation gate — no read survives that the customer's own
-    data does not evidence. Returns the profile; every field is tagged stated/inferred/
-    insufficient-signal and carries its evidence span. NEVER fabricates."""
+    data does not evidence — and then the SENSITIVE-TRAIT gate (spec §7/§24): any read
+    asserting a protected trait the customer did not provide is dropped and recorded on
+    ``profile.trait_filtered``. Returns the profile; every field is tagged stated/
+    inferred/insufficient-signal and carries its evidence span. NEVER fabricates."""
     # Normalize the conversation input to a list of turns. Accepts a list of
     # ``{speaker,text}`` turns, the ``get_conversation`` dict (``{turns,...}``), OR a
     # message-source ``ConversationThread`` (has a ``.turns`` attribute) — the adapter's
@@ -708,11 +829,44 @@ def analyze_customer(
     else:
         turns = conversation or []
 
+    # First-party exemption substrate for the protected-traits gate: the customer's own
+    # words/fields (+ our CRM memories), NEVER web/social text or the generated persona.
+    allowed = allowed_categories(facts)
+    fp_corpus = build_first_party_corpus(facts, turns)
+
+    # CONSENT-SAFE social context (spec §7): only when the lead row itself carries a
+    # customer-provided handle, only when explicitly enabled, and only via the vetted
+    # Firecrawl provider. A blocked host / proxy / keyless env degrades to honest-None.
+    trait_drops: list[dict[str, str]] = []
+    if social is None and (facts.get("ig_handle") or facts.get("linkedin_handle")):
+        do_fetch = _social_fetch_enabled() if fetch_social is None else bool(fetch_social)
+        if do_fetch:
+            try:
+                from studio.customer_research import gather_social_context
+
+                social = gather_social_context(facts, enabled=True)
+            except Exception:
+                social = None  # honest-none; never a fabricated social signal
+    if social:
+        # Everything extracted (or passed) from social surfaces passes the sensitive-
+        # trait filter BEFORE it can enter the corpus, the prompt, or any evidence.
+        clean, drops = filter_lines(str(social), allowed=allowed,
+                                    first_party_corpus=fp_corpus)
+        for d in drops:
+            trait_drops.append({
+                "field": "social",
+                "categories": d.get("categories", ""),
+                "matched": d.get("matched", ""),
+                "note": "protected-trait line scrubbed from social context",
+            })
+        social = clean or None
+
     signals = extract_signals(turns, known_artists=known_artists)
     corpus = _build_corpus(facts, signals, social, turns)
     present = _present_sources(facts, signals, social)
 
     profile = _deterministic_profile(facts, signals, social)
+    profile.trait_filtered.extend(trait_drops)
 
     do_llm = _llm_enabled() if use_llm is None else use_llm
     if do_llm:
@@ -724,4 +878,5 @@ def analyze_customer(
             # Any cell/model failure: the deterministic floor stands (honest, grounded).
             profile.source = "deterministic"
 
-    return _finalize(profile, corpus, present, signals)
+    return _finalize(profile, corpus, present, signals,
+                     allowed=allowed, fp_corpus=fp_corpus)

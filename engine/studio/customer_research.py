@@ -470,6 +470,28 @@ def _classify_source(url: str) -> str:
     return "website"
 
 
+def _research_query(facts: dict[str, Any]) -> str:
+    """The per-lead web query, shaped by WHAT the lead actually is (65w.13 lesson:
+    frame by the lead's REAL type, never a hardcoded business shape).
+
+    * An explicit studio/shop/business lead (:func:`_is_studio_lead`) keeps the
+      business-shaped query: ``"{name}" {city} tattoo studio``.
+    * Every other lead is a CONSUMER (skindesign's leads are all people), so the
+      query is person-shaped — ``"{name}" {city} [first interest] tattoo`` — their
+      own name plus their real CSV interest, never a fabricated business framing.
+
+    The name is quoted so a person search stays about THIS person. Pure projection
+    of real fields; absent fields simply drop out."""
+    name = (facts.get("name") or "").strip()
+    city = (facts.get("city") or "").strip()
+    if _is_studio_lead(facts):
+        return " ".join(x for x in [f'"{name}"', city, "tattoo studio"] if x)
+    interest = next(
+        (str(i).strip() for i in (facts.get("interests") or []) if str(i).strip()), ""
+    )
+    return " ".join(x for x in [f'"{name}"', city, interest, "tattoo"] if x)
+
+
 def research_studio(facts: dict[str, Any], *, enabled: bool) -> list[dict[str, Any]]:
     """Verified web research for the RECIPIENT studio via the wired Firecrawl provider
     (``research.pipeline.live_registry`` — enabled only when a key is present). Returns
@@ -484,21 +506,34 @@ def research_studio(facts: dict[str, Any], *, enabled: bool) -> list[dict[str, A
 
     HONESTY GATE: every field is copied verbatim from a real provider response; the type
     is derived from the real URL; the binding is the lead's real id. This NEVER fabricates
-    a source. A failure degrades to ``[]`` (no citation), never an invented fact."""
+    a source. A failure degrades to ``[]`` (no citation), never an invented fact.
+
+    SENSITIVE-TRAIT FILTER (spec §7/§24): before a hit is returned (and later persisted
+    by the caller), its title/snippet pass the deterministic protected-traits filter —
+    a line asserting the lead's gender/age/ethnicity/health/religion/sexuality/financial
+    status/immigration status/politics is blanked unless the customer's own first-party
+    data provides it; a hit with no citable text left is dropped. Each blank is recorded
+    on the hit as ``trait_filtered`` so the persisted source is honest about the scrub."""
     if not enabled:
         return []
     name = (facts.get("name") or "").strip()
     if not name:
         return []
-    city = (facts.get("city") or "").strip()
     cust_id = facts.get("customer_id")
     try:
         from research.pipeline import live_registry
+        from research.protected_traits import (
+            allowed_categories,
+            build_first_party_corpus,
+            filter_lines,
+        )
 
         provider = live_registry().get("firecrawl")
         if provider is None or not getattr(provider, "enabled", False):
             return []
-        query = " ".join(x for x in [name, city, "tattoo studio"] if x)
+        query = _research_query(facts)
+        allowed = allowed_categories(facts)
+        fp_corpus = build_first_party_corpus(facts)
         # Collect more than we keep so we can diversify across source types.
         raw: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -507,13 +542,32 @@ def research_studio(facts: dict[str, Any], *, enabled: bool) -> list[dict[str, A
             if not url or url in seen:
                 continue
             seen.add(url)
-            raw.append({
+            entry: dict[str, Any] = {
                 "title": getattr(hit, "title", None),
                 "snippet": getattr(hit, "snippet", None),
                 "url": url,
                 "source_type": _classify_source(url),
                 "customer_id": cust_id,
-            })
+            }
+            # Protected-traits scrub on the verbatim text fields (blank, never rewrite).
+            scrubbed: list[str] = []
+            for fld in ("title", "snippet"):
+                val = entry.get(fld)
+                if not val:
+                    continue
+                clean, drops = filter_lines(
+                    str(val), allowed=allowed, first_party_corpus=fp_corpus
+                )
+                if drops:
+                    entry[fld] = clean or None
+                    scrubbed.extend(
+                        f"{fld}:{d.get('categories', '')}" for d in drops
+                    )
+            if scrubbed:
+                entry["trait_filtered"] = scrubbed
+            if not (entry.get("title") or entry.get("snippet")):
+                continue  # nothing citable survived the trait filter -> drop the hit
+            raw.append(entry)
         # Diversify: one pass takes the FIRST hit of each distinct type (website first so
         # the lead's own positioning leads), then fills remaining slots in rank order.
         ordered: list[dict[str, Any]] = []
