@@ -4909,7 +4909,7 @@ def mount_studio_agui(app) -> None:
 
     @app.get("/studio/sessions")
     async def studio_sessions_route():  # noqa: ANN202
-        """Claude-style session list: every conversation session (from the shared
+        """Conversation session list (chat-app style): every session (from the shared
         ``studio_chat_turns`` transcript store) with its first operator line as the
         title, turn count, and last activity — newest-active first. Honest empty
         list when none exist."""
