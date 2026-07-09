@@ -591,6 +591,40 @@ def compose_caption(
     )
 
 
+def voice_post_fields(
+    tenant_id: str,
+    *,
+    styles: list[str] | None = None,
+    motifs: list[str] | None = None,
+    theme: str | None = None,
+) -> dict[str, Any]:
+    """Grounded IG post fields (hashtags + CTA + angle) for REAL tags — the same
+    pack-policy helpers the standalone drafter uses, exposed for the supervisor IG
+    pipeline (engine-core item 6c) to land on staged post actions' context.
+
+    Every hashtag traces to a provided real style/motif or a pack example; the CTA
+    is the deterministic angle CTA (+ the free-consult clause only when the pack
+    approves that claim). Honest-empty tags yield pack-example hashtags only."""
+    voice = resolve_voice(tenant_id)
+    pick = None
+    if styles or motifs:
+        pick = ArtworkPick(
+            asset_id="", artist="", image_ref="", caption="",
+            matched_styles=[], matched_motifs=[], score=0, exact_match=False,
+            why="", styles=list(styles or []), motifs=list(motifs or []),
+        )
+    angle = theme_angle(theme) or pick_angle(pick, theme)
+    cta = _ANGLE_CTA_IG.get(angle, _ANGLE_CTA_IG[_DEFAULT_ANGLE])
+    if _free_consult_claim(voice):
+        cta = cta + " consults are free."
+    limit = voice.hashtag_max if voice.resolved else 6
+    theme_tag = _theme_hashtag(theme, None)
+    hashtags = _hashtags_for(
+        pick, voice, limit=limit, extra_tags=(theme_tag,) if theme_tag else ()
+    )
+    return {"hashtags": hashtags, "cta": cta, "angle": angle}
+
+
 # --------------------------------------------------------------------------- #
 # Orchestration — pick artwork, compose per platform, stage HELD (exactly-once).
 # --------------------------------------------------------------------------- #
