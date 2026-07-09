@@ -18,6 +18,7 @@ from typing import Any
 
 from actions import store as actions_store
 from cells.strategy import build_strategy_cell, build_strategy_prompt, render_strategy
+from config.loader import describe_tenant
 from contentrun import run_content_to_review
 from harness.runstore import PostgresRunStore, RunStatus
 from harness.spans import Span, summarize
@@ -180,7 +181,9 @@ def start_campaign(
     # Feed the REAL research findings forward into the strategy (research ->
     # strategy -> draft). research_findings is None on an honest-empty research
     # run, so the strategy degrades cleanly to the brief alone — never fabricated.
-    strategy_prompt = build_strategy_prompt(tenant_id, brief_text, research=research_findings)
+    strategy_prompt = build_strategy_prompt(
+        describe_tenant(tenant_id), brief_text, research=research_findings
+    )
     strategy_text: str | None = None
     strategy_payload: dict[str, Any] | None = None
     strategy_model: str | None = None

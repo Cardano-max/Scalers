@@ -112,6 +112,9 @@ class VoiceBundle:
     hashtag_max: int = 6
     example_hashtags: list[str] = field(default_factory=list)
     resolved: bool = False
+    # The tenant this voice was actually resolved for — so the grounding label records
+    # the REAL tenant, never a hardcoded fixture id (CustomerAcq-wwy.7 r8).
+    tenant_id: str | None = None
 
 
 def _parse_emoji_policy(policy: str) -> tuple[list[str], int]:
@@ -152,9 +155,19 @@ def _parse_hashtag_policy(policy: str) -> tuple[int, int, list[str]]:
 
 def resolve_voice(tenant_id: str | None = None) -> VoiceBundle:
     """Structured brand-voice bundle for the SENDING tenant. Degrades to an unresolved
-    empty bundle (``resolved=False``) if the pack can't load — the caption then composes
-    from artwork facts only, with no emoji and a plain CTA (never a fabricated voice)."""
-    tid = tenant_id or _DEFAULT_TENANT
+    empty bundle (``resolved=False``) if the pack can't load OR no tenant resolves — the
+    caption then composes from artwork facts only, with no emoji and a plain CTA (never a
+    fabricated voice, never a fixture stand-in).
+
+    ``resolve_voice(None)`` resolves the fixture default ONLY via the same explicit dev
+    flag as :func:`studio.customer_research.resolve_brand_voice` (CustomerAcq-wwy.7 r8):
+    a real tenant that passes no id degrades honestly rather than borrowing ladies8391's
+    voice."""
+    from studio.customer_research import _default_tenant
+
+    tid = tenant_id or _default_tenant()
+    if not tid:
+        return VoiceBundle()
     try:
         from config.loader import load_pack
         from kb.voice import load_voice_dimensions
@@ -175,6 +188,7 @@ def resolve_voice(tenant_id: str | None = None) -> VoiceBundle:
             hashtag_max=h_hi,
             example_hashtags=h_ex,
             resolved=True,
+            tenant_id=tid,
         )
     except Exception:
         return VoiceBundle()
@@ -471,7 +485,11 @@ def compose_caption(
     care = _lexicon(voice, "no rush", "take our time", default="")
     space = _lexicon(voice, "safe space", "women-first", default="")
     if voice.resolved:
-        grounding.append("brand_voice=ladies8391" if voice.prefer else "brand_voice=empty")
+        # Record the REAL tenant the voice resolved for — never a hardcoded fixture id
+        # (CustomerAcq-wwy.7 r8: a skindesign post must not log brand_voice=ladies8391).
+        grounding.append(
+            f"brand_voice={voice.tenant_id}" if voice.prefer else "brand_voice=empty"
+        )
 
     # Emoji: at most one allowed glyph on IG, none on FB (lighter register). Only ever a
     # pack-allowed emoji; zero if the pack didn't sanction any.

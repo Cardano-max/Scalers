@@ -229,10 +229,11 @@ def _make_strategy_node(team_store, dsn=None):
     def _strategy_node(state: CampaignState) -> dict[str, Any]:
         """REAL strategy cell (Sonnet, temp 0) -> CampaignStrategy."""
         from cells.strategy import build_strategy_cell, build_strategy_prompt, render_strategy
+        from config.loader import describe_tenant
 
         cell = build_strategy_cell()
         prompt = build_strategy_prompt(
-            state.tenant_id, state.brief or f"{state.archetype_id} campaign",
+            describe_tenant(state.tenant_id), state.brief or f"{state.archetype_id} campaign",
             research=state.research_text or None,
         )
         # Ground the strategy in the operator's own documents — pull the passages

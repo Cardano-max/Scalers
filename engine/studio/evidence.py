@@ -502,10 +502,18 @@ def assemble_action_evidence(
 def resolve_brand_voice_doc(tenant_id: str | None) -> BrandVoiceDoc | None:
     """Load the tenant's structured brand-voice dimensions (tone / structure /
     lexicon / bans / approved claims) + the brand-dna source path, for the console
-    to render as clean chips. None (honest) when the pack can't resolve."""
-    from studio.customer_research import _DEFAULT_TENANT
+    to render as clean chips.
 
-    tid = tenant_id or _DEFAULT_TENANT
+    None (honest) when the pack can't resolve. It NEVER falls back to another tenant's
+    doc: a tenant whose pack is missing/corrupt gets ``None``, never a fixture's voice
+    surfaced under its name (r8: kill ladies8391 fixture bleed). ``tenant_id=None``
+    resolves only to a real configured/dev-flagged default (:func:`_default_tenant`),
+    else ``None``."""
+    from studio.customer_research import _default_tenant
+
+    tid = tenant_id or _default_tenant()
+    if not tid:
+        return None
     try:
         from config.loader import load_pack
         from kb.voice import load_voice_dimensions
@@ -513,9 +521,7 @@ def resolve_brand_voice_doc(tenant_id: str | None) -> BrandVoiceDoc | None:
         pack = load_pack(tid)
         dims = load_voice_dimensions(pack)
     except Exception:
-        # Retry with the default tenant so a placeholder deps tenant still resolves.
-        if tid != _DEFAULT_TENANT:
-            return resolve_brand_voice_doc(_DEFAULT_TENANT)
+        # HONEST: never borrow another tenant's doc. A missing/corrupt pack -> None.
         return None
     v = dims.vocabulary
     family, _, tslug = (pack.voice.skill or "").partition("/")

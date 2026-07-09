@@ -353,17 +353,31 @@ def choose_channel(facts: dict[str, Any], plan_channels: list[str] | None) -> st
 # Brand voice + verified research — the REAL inputs the copywriter cell consumes
 # --------------------------------------------------------------------------- #
 
-# The sending tenant (whose brand voice every outreach draft is written in). The
-# studio Host is single-tenant today; resolved once here so the call-site
-# (studio.agui) does not have to thread it through.
-_DEFAULT_TENANT = os.environ.get("SCALERS_TENANT_ID") or "ladies8391"
-
-
 def _env_flag(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name)
     if raw is None:
         return default
     return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _default_tenant() -> str | None:
+    """Resolve the fallback sending tenant for a call that passed no ``tenant_id``.
+
+    An explicit deploy-configured ``SCALERS_TENANT_ID`` is always honored — that is a
+    real operator choice. The ``ladies8391`` FIXTURE, however, is dev-only: it must
+    NEVER silently stand in for a real tenant, or the fixture's voice/claims bleed into
+    a real client's outreach. So the fixture fallback is gated behind an explicit dev
+    flag (``SCALERS_ALLOW_FIXTURE_TENANT``). With neither set this returns ``None`` and
+    callers degrade honestly (empty voice) rather than borrowing the fixture identity.
+
+    See CustomerAcq-wwy.7 (r8: kill ladies8391 fixture bleed).
+    """
+    configured = os.environ.get("SCALERS_TENANT_ID")
+    if configured:
+        return configured
+    if _env_flag("SCALERS_ALLOW_FIXTURE_TENANT", False):
+        return "ladies8391"
+    return None
 
 
 def _llm_copy_enabled() -> bool:
@@ -409,10 +423,14 @@ def resolve_brand_voice(tenant_id: str | None = None) -> tuple[str, tuple[str, .
     the brand-voice resolver (``config.load_pack`` + ``kb.voice.load_voice_dimensions``).
 
     These describe the SENDER (the artist writing the outreach), never the recipient.
-    Degrades honestly to ``("", ())`` if the pack / dimensions cannot be resolved —
-    the copy then writes from goal + grounded recipient facts only, never a fabricated
-    voice."""
-    tid = tenant_id or _DEFAULT_TENANT
+    Degrades honestly to ``("", ())`` if the pack / dimensions cannot be resolved, OR
+    if no tenant is given and no default resolves (:func:`_default_tenant`) — the copy
+    then writes from goal + grounded recipient facts only, never borrowing a fixture's
+    voice. ``resolve_brand_voice(None)`` is ``("", ())`` unless a real tenant is
+    configured or the fixture dev flag is set (r8: kill ladies8391 fixture bleed)."""
+    tid = tenant_id or _default_tenant()
+    if not tid:
+        return "", ()
     try:
         from config.loader import load_pack
         from kb.voice import load_voice_dimensions
@@ -834,7 +852,25 @@ def _build_email_prompt(
     else:
         research_lines = "- (none — no verified research available for this studio)"
 
+    # Prior-relationship evidence: real history on file (tattoos / lifecycle / win-back
+    # persona signal) or a real prior conversation (the grounded warm-lead profile).
+    # This gates BOTH the goal line and the first-contact rule below.
+    has_relationship = bool(tattoos or lifecycle or win_back or warm)
+
     goal_line = (goal or "open a genuine conversation").strip()
+    # SMOKING-GUN FIX (wwy.7 r8): the operator's INTERNAL goal ("win back lapsed
+    # clients") was spliced verbatim into the prompt for leads whose row carries
+    # name+email ONLY — telling the model the recipient is a lapsed client, so it
+    # fabricated an implied history ("work with you again") the DB cannot back. When
+    # there is NO prior-relationship evidence, a relationship-implying goal is
+    # reframed as an honest first contact; the campaign-level goal stays internal.
+    if not has_relationship and re.search(
+        r"win[- ]?back|re-?engage|lapsed|return|reactivat", goal_line, re.IGNORECASE
+    ):
+        goal_line = (
+            "invite them to start a conversation (our records show NO prior "
+            "relationship with this person — write it as a genuine first contact)"
+        )
 
     if angle["generic"]:
         angle_block = [
@@ -928,6 +964,15 @@ def _build_email_prompt(
         "it at all — a deterministic guard rejects any draft that fakes this.",
         "- Everything you say about YOURSELF (the sender) must come from the brand "
         "voice's approved claims above — nothing else.",
+        # wwy.7 r8 (smoking gun): with NO prior-relationship evidence on file, the copy
+        # must read as a genuine first contact — never a fabricated reunion.
+        *([] if has_relationship else [
+            "- OUR RECORDS SHOW NO PRIOR RELATIONSHIP with this person: no past visit, "
+            "no tattoo, no conversation. This is a FIRST contact. Do NOT imply any "
+            "shared history — no 'again', no 'welcome back', no 'it's been a while', "
+            "no 'work with you again'. A deterministic guard rejects any draft that "
+            "implies a relationship we cannot substantiate.",
+        ]),
         f"- Reason for reaching out / goal: {goal_line}.",
         "",
         "Write a specific honest subject and a short plain-text body. Include ONE clear "
@@ -1416,7 +1461,11 @@ def build_outreach_draft(
             )
             subject, body = copy.subject, copy.body
             if brand_voice_context:
-                grounding.append(f"brand_voice={tenant_id or _DEFAULT_TENANT}")
+                # Record the tenant the voice was ACTUALLY resolved for. brand_voice_context
+                # is only non-empty when a real pack resolved, so (tenant_id or the resolved
+                # default) is guaranteed non-None here — never a fixture stand-in for a real
+                # tenant that passed its own id.
+                grounding.append(f"brand_voice={tenant_id or _default_tenant()}")
             for r in research:
                 grounding.append(f"research:{r['url']}")
             grounding.append("copy=copywriter_email_cell")
