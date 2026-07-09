@@ -38,7 +38,11 @@ def _write_pack(packs_dir, tid="acme", threshold=0.9) -> None:
 # -- The shipped seed pack -------------------------------------------------- #
 
 
-def test_loads_seed_ink_studio_pack():
+def test_loads_seed_ink_studio_pack(monkeypatch):
+    # An operator .env can put INK_STUDIO_META_ACCESS_TOKEN into os.environ (any
+    # earlier test touching load_local_env() leaks it process-wide) — clear it so
+    # the resolve()-is-None assertion tests the pack, not the host machine.
+    monkeypatch.delenv("INK_STUDIO_META_ACCESS_TOKEN", raising=False)
     pack = load_pack("ink-studio")
     assert pack.tenant_id == "ink-studio"
     assert pack.display_name == "Ink & Iron Tattoo Studio"

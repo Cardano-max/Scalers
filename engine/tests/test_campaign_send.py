@@ -169,6 +169,45 @@ def test_send_eligible_sends_only_eligible_through_approve_path(monkeypatch):
     assert out2["n_sent"] == 0
 
 
+def test_send_eligible_gate_blocked_draft_is_reported_not_fatal(monkeypatch):
+    """A draft the tenant TEST-MODE gate refuses (``TestModeSendBlockedError`` from
+    the REAL ``approve_and_publish``) lands in ``skipped`` carrying the gate's reason
+    — it must NOT abort the batch; drafts after it still send. (Regression: one gated
+    IG draft used to 500 the entire one-button /studio/send-eligible.) The gate itself
+    is untouched: the blocked draft is never sent and stays pending."""
+    monkeypatch.delenv("GMAIL_REDIRECT_TO", raising=False)
+    gated = _row(id="act_gate", tenant_id="skindesign", channel="gmail",
+                 target="real.customer@example.com", conf=0.95, threshold=0.85,
+                 esc_kind="hold", worker="studio_real_send",
+                 subject="Hi", draft="Body", run_id="team-camp_f-r1")
+    eligible = _row(id="act_ok", channel="gmail", target="good@lead.com",
+                    conf=0.9, threshold=0.85, esc_kind="hold", worker="studio_real_send",
+                    subject="Hi", draft="Body", run_id="team-camp_f-r1")
+    store = _FakeStore(gated, eligible)  # gated FIRST — proves the loop continues past it
+    _wire(monkeypatch, store)
+    gmail = _FakeGmail()
+
+    import tenants.store as tenants_store
+    monkeypatch.setattr(
+        tenants_store, "check_send_allowed",
+        lambda tenant_id, recipient, dsn=None: (
+            (False, f"TEST MODE - real customer sends disabled for tenant '{tenant_id}'")
+            if tenant_id == "skindesign" else (True, "ok")
+        ),
+    )
+
+    out = cs.send_eligible(run_id="team-camp_f-r1", connectors={"gmail": gmail})
+
+    # The batch survived the gate: the draft AFTER the blocked one was still sent.
+    assert gmail.calls == [("good@lead.com", "Hi", "Body")]
+    assert out["n_sent"] == 1 and out["n_failed"] == 0 and out["n_skipped"] == 1
+    blocked = out["skipped"][0]
+    assert blocked["action_id"] == "act_gate"
+    assert "TEST MODE" in blocked["reason"]
+    # The gate held: never sent, still pending for review.
+    assert store.rows["act_gate"].status == "pending"
+
+
 def test_send_eligible_honors_gmail_allow_list_redirect(monkeypatch):
     """A non-``studio_real_send`` eligible gmail draft is REDIRECTED to the operator
     inbox (allow-list), exactly as approve_and_publish does per-draft — proving the

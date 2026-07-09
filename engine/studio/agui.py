@@ -2097,6 +2097,62 @@ def _execute_provided_leads_sync(
                 picked.add(_f["customer_id"])
                 _refilled += 1
                 yield _f
+        # SUPERVISOR REDO QUEUE: re-process leads the supervisor ordered redone —
+        # only ones this run has not already handled (a staged lead's re-draft is
+        # the operator's reject-then-redo flow, never a silent duplicate).
+        while _sup_redo_ids:
+            _cid = _sup_redo_ids.pop()
+            if _cid in _sup_processed_ids:
+                continue
+            for _f in lookup_leads(
+                tenant_id, [{"customer_id": _cid}], dsn=dsn, memory_store=store
+            ):
+                yield _f
+
+    # SUPERVISOR FULL-DUPLEX (spec: the supervisor orchestrates, not just watches).
+    # At every safe boundary (before each lead) the executor consumes any PENDING
+    # run_directives: abort/pause stop the fan-out honestly, set_angle/guide_copy
+    # redirect subsequent drafts, set_offer switches to another SUBSTANTIATED offer,
+    # skip_lead drops a lead with a ledger reason. Every application lands as a
+    # role='supervisor' agent_run, so the intervention is visible in the live panel.
+    from studio.supervisor_control import apply_directives as _apply_directives
+    from studio.supervisor_control import check_plan_conformance as _check_conformance
+
+    _sup_guidance: list[str] = []
+    _sup_skip_ids: set[str] = set()
+    _sup_redo_ids: set[str] = set()
+    _sup_processed_ids: set[str] = set()
+    _conf_fired: set[str] = set()
+    _sup_offer_code: str | None = None
+    _sup_stopped: str | None = None
+
+    def _consume_directives() -> None:
+        nonlocal campaign_angle, draft_goal, _sup_offer_code, _sup_stopped
+        try:
+            changes = _apply_directives(
+                run_id, tenant_id, dsn=dsn,
+                record_agent_run=lambda **kw: _rec(
+                    kw["role"], kw["model"], kw["input"], kw["output"]
+                ),
+            )
+        except Exception:
+            return  # steering is additive; a directive-store hiccup never kills the run
+        if changes["angle"]:
+            campaign_angle = changes["angle"]
+            draft_goal = f"{goal}. Lead with this campaign angle: {campaign_angle}"
+        if changes["guidance"]:
+            _sup_guidance.extend(changes["guidance"])
+            draft_goal = draft_goal + " " + " ".join(
+                f"Operator guidance: {g}." for g in changes["guidance"]
+            )
+        if changes["offer_code"]:
+            _sup_offer_code = changes["offer_code"]
+        _sup_skip_ids.update(changes["skip_customer_ids"])
+        _sup_redo_ids.update(changes.get("redo_customer_ids") or ())
+        if changes["abort"]:
+            _sup_stopped = "aborted by supervisor directive"
+        elif changes["pause"]:
+            _sup_stopped = "paused by supervisor directive (re-run resumes; staged leads replay-skip)"
 
     # 2) Per-lead: real DB history + research ABOUT this lead + brand-voiced draft.
     # The blueprint's stop_conditions + the hard cap bound the fan-out: draft at most
@@ -2105,7 +2161,31 @@ def _execute_provided_leads_sync(
     for facts in _lead_stream():
         if len(pending) >= effective_cap:
             break  # stop_condition: per-run quota / hard cap met
+        _consume_directives()
+        # PLAN CONFORMANCE (operator order: keep steering until the run matches the
+        # plan). Deterministic, evidence-only check over the steps recorded SO FAR;
+        # each new finding lands as a visible supervisor step and its correction is
+        # injected into every subsequent draft prompt.
+        for _f in _check_conformance(plan, agent_runs, fired_rules=_conf_fired):
+            _rec(
+                "supervisor",
+                "conformance:auto",
+                {"rule": _f["rule"]},
+                {"finding": _f["detail"], "correction": _f["correction"], "auto_enforced": True},
+            )
+            _sup_guidance.append(_f["correction"])
+            draft_goal = draft_goal + f" Supervisor correction: {_f['correction']}"
+        if _sup_stopped:
+            skipped.append({"row": None, "lead": "run", "reason": _sup_stopped})
+            break
         cust_id = facts["customer_id"]
+        _sup_processed_ids.add(cust_id)
+        if cust_id in _sup_skip_ids:
+            skipped.append(
+                {"row": None, "lead": facts.get("name") or cust_id,
+                 "reason": "skipped by supervisor directive"}
+            )
+            continue
         # Replay-skip (fr1.2): this lead was fully staged in a prior (crashed) drive.
         # Skip its re-draft; re-attach its already-staged action id to the payload so
         # the resumed run's count is honest. The action row itself already exists
@@ -2210,7 +2290,12 @@ def _execute_provided_leads_sync(
         # one. This makes the blueprint load-bearing (not a decorative artifact).
         rule = offer_rule_for(blueprint, objection_val)
         chosen_offer = None
-        if rule is not None and rule.offer_code:
+        if _sup_offer_code:
+            # Supervisor directive: this run's offer was explicitly switched — the
+            # substantiation gate still decides (an unknown code yields None, never
+            # an invented discount).
+            chosen_offer = substantiate(offers, _sup_offer_code)
+        elif rule is not None and rule.offer_code:
             chosen_offer = select_offer(offers, objection=objection_val, interest=interest_hint)
             if chosen_offer is not None:
                 chosen_offer = substantiate(offers, chosen_offer.code)
@@ -3509,6 +3594,91 @@ async def get_artist_memory(ctx: RunContext[StudioDeps], artist: str) -> str:
     return "\n".join(lines)
 
 
+@studio_agent.tool
+async def steer_run(
+    ctx: RunContext[StudioDeps],
+    kind: str,
+    run_id: str = "",
+    angle: str = "",
+    offer_code: str = "",
+    customer_id: str = "",
+    guidance: str = "",
+) -> str:
+    """SUPERVISE a live run FULL-DUPLEX: queue a steering directive the executor
+    honors at its next safe boundary (before the next lead). Kinds: 'pause',
+    'abort', 'set_angle' (+angle), 'set_offer' (+offer_code — substantiation still
+    gates it), 'skip_lead' (+customer_id), 'guide_copy' (+guidance). With no run_id
+    the ACTIVE run is steered. Every application lands as a visible supervisor step
+    in the live panel. Directives only narrow/redirect — never widen delivery."""
+    from studio.live_state import agent_activity
+    from studio.supervisor_control import issue_directive
+
+    rid = (run_id or "").strip()
+    if not rid:
+        act = await asyncio.to_thread(
+            lambda: agent_activity(ctx.deps.tenant_id, dsn=ctx.deps.dsn)
+        )
+        rid = str((act.get("activeRun") or {}).get("runId") or "")
+        if not rid:
+            return "No active run to steer — start a campaign first, or name a run_id."
+    payload: dict[str, Any] = {}
+    if angle.strip():
+        payload["angle"] = angle.strip()
+    if offer_code.strip():
+        payload["code"] = offer_code.strip()
+    if customer_id.strip():
+        payload["customer_id"] = customer_id.strip()
+    if guidance.strip():
+        payload["text"] = guidance.strip()
+    try:
+        row = await asyncio.to_thread(
+            issue_directive,
+            rid,
+            ctx.deps.tenant_id,
+            kind.strip(),
+            payload,
+            issued_by="supervisor",
+            dsn=ctx.deps.dsn,
+        )
+    except ValueError as exc:
+        return f"Could not steer: {exc}"
+    return (
+        f"Directive {row['kind']} queued for run {rid} — the team applies it before "
+        "the next lead and it will show as a supervisor step in the live panel."
+    )
+
+
+@studio_agent.tool
+async def review_run(ctx: RunContext[StudioDeps], run_id: str = "") -> str:
+    """AUDIT a run's internal coherence from the agents' REAL recorded outputs
+    (researcher vs strategist vs analyst): contradiction findings + suggested
+    directives. Honest verdict only — apply a fix with steer_run if warranted."""
+    from studio.live_state import agent_activity
+    from studio.supervisor_control import review_run_coherence
+
+    rid = (run_id or "").strip()
+    if not rid:
+        act = await asyncio.to_thread(
+            lambda: agent_activity(ctx.deps.tenant_id, dsn=ctx.deps.dsn)
+        )
+        rid = str((act.get("activeRun") or {}).get("runId") or "")
+        if not rid:
+            return "No run to review — name a run_id or start a campaign."
+    v = await asyncio.to_thread(
+        lambda: review_run_coherence(rid, ctx.deps.tenant_id, dsn=ctx.deps.dsn)
+    )
+    if not v.get("contradiction"):
+        return (
+            f"Reviewed run {rid}: no contradiction found across "
+            f"{', '.join(v.get('checked_roles') or [])} (LLM read: {v.get('llm_read')})."
+        )
+    lines = [f"Reviewed run {rid}: CONTRADICTION found:"]
+    for f in v.get("findings") or []:
+        lines.append(f"- [{f['rule']}] {f['detail']} → suggest: {f['suggest']}")
+    lines.append("Use steer_run to apply a correction.")
+    return "\n".join(lines)
+
+
 # --------------------------------------------------------------------------- #
 # Customer CSV upload. This helper is the PURE PARSER only (no side effects). The
 # `POST /studio/upload` route below is what then INGESTS the rows into `customers`
@@ -4596,6 +4766,98 @@ def mount_studio_agui(app) -> None:
         except Exception as exc:
             return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
         return JSONResponse(out)
+
+    @app.post("/studio/send-eligible")
+    async def studio_send_all_eligible_route(request: Request):  # noqa: ANN202
+        """THE one-button send: every eligible/safe PENDING draft of the ACTIVE TENANT
+        (all campaigns), each through the existing per-draft ``approve_and_publish``
+        (atomic exactly-once claim + tenant TEST-MODE gate + allow-list/redirect) —
+        NOT a bulk bypass. Non-eligible drafts come back under ``skipped``; ``live``
+        must be explicitly true to lift the redirect, exactly like the per-run route."""
+        from fastapi.responses import JSONResponse
+
+        from studio.campaign_send import send_eligible
+
+        try:
+            payload = json.loads(await request.body() or b"{}")
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        live = payload.get("live") is True
+        dsn = get_dsn()
+        try:
+            out = await asyncio.to_thread(
+                send_eligible,
+                tenant_id=tenant_id,
+                dsn=dsn,
+                operator=payload.get("operator"),
+                live=live,
+            )
+        except Exception as exc:
+            return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+        return JSONResponse(out)
+
+    @app.post("/studio/run/{run_id}/steer")
+    async def studio_run_steer_route(run_id: str, request: Request):  # noqa: ANN202
+        """SUPERVISOR FULL-DUPLEX: queue a steering directive for a live run —
+        pause / abort / set_angle / set_offer / skip_lead / guide_copy. The executor
+        consumes it at the next safe boundary (before the next lead) and records the
+        application as a role='supervisor' agent_run. Directives can only narrow or
+        redirect a run; there is no kind that widens delivery or lifts a gate."""
+        from fastapi.responses import JSONResponse
+
+        from studio.supervisor_control import issue_directive
+
+        try:
+            payload = json.loads(await request.body() or b"{}")
+        except Exception:
+            payload = {}
+        kind = str((payload or {}).get("kind") or "").strip()
+        directive_payload = (payload or {}).get("payload") or {}
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        try:
+            row = await asyncio.to_thread(
+                issue_directive,
+                run_id,
+                tenant_id,
+                kind,
+                directive_payload if isinstance(directive_payload, dict) else {},
+                issued_by=str((payload or {}).get("issuedBy") or "operator"),
+                dsn=get_dsn(),
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except Exception as exc:
+            return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+        return JSONResponse({"ok": True, "directive": row})
+
+    @app.get("/studio/run/{run_id}/directives")
+    async def studio_run_directives_route(run_id: str):  # noqa: ANN202
+        """Every directive issued for this run, with applied/pending status + notes."""
+        from fastapi.responses import JSONResponse
+
+        from studio.supervisor_control import list_directives
+
+        rows = await asyncio.to_thread(list_directives, run_id, dsn=get_dsn())
+        return JSONResponse({"runId": run_id, "directives": rows})
+
+    @app.post("/studio/run/{run_id}/review")
+    async def studio_run_review_route(run_id: str):  # noqa: ANN202
+        """The supervisor's coherence audit over this run's REAL recorded agent
+        outputs (researcher vs strategist vs analyst): deterministic contradiction
+        rules + one policy-clamped LLM read when configured. Returns the honest
+        verdict + suggested directives; applies nothing by itself."""
+        from fastapi.responses import JSONResponse
+
+        from studio.supervisor_control import review_run_coherence
+
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        verdict = await asyncio.to_thread(
+            review_run_coherence, run_id, tenant_id, dsn=get_dsn()
+        )
+        return JSONResponse(verdict)
 
     @app.post("/studio/campaign/{run_id}/send-eligible")
     async def studio_campaign_send_eligible_route(run_id: str, request: Request):  # noqa: ANN202

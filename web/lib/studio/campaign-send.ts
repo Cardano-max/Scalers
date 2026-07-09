@@ -142,6 +142,33 @@ export async function sendEligible(
   };
 }
 
+/** THE one-button send: every eligible PENDING draft of the ACTIVE TENANT (all
+ *  campaigns), each through the same per-draft approve path + server gates. Same
+ *  `live` semantics as `sendEligible` — default false keeps the safe redirect. */
+export async function sendAllEligible(
+  operator?: string,
+  live = false,
+): Promise<SendEligibleResult> {
+  const res = await fetch(`/studio/send-eligible`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ...(operator ? { operator } : {}), ...(live ? { live: true } : {}) }),
+  });
+  if (!res.ok) throw new Error(await errorFrom(res));
+  const d = (await res.json()) as Partial<SendEligibleResult>;
+  const sent = Array.isArray(d.sent) ? d.sent : [];
+  const failed = Array.isArray(d.failed) ? d.failed : [];
+  const skipped = Array.isArray(d.skipped) ? d.skipped : [];
+  return {
+    sent,
+    failed,
+    skipped,
+    n_sent: d.n_sent ?? sent.length,
+    n_failed: d.n_failed ?? failed.length,
+    n_skipped: d.n_skipped ?? skipped.length,
+  };
+}
+
 /** Audited override: push ONE held draft past the safety bar. `reason` is required;
  *  the engine returns HTTP 400 with an `error` if it is empty (we surface that). */
 export async function overrideSend(
