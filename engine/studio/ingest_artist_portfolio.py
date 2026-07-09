@@ -1,0 +1,280 @@
+"""Turnkey artist-portfolio ingest + top-4 campaign selection (CustomerAcq-nmh.5).
+
+Point this at a folder of an artist's artwork images and it:
+1. analyzes EACH image with the real VLM (:func:`studio.artwork_vision.analyze_artwork`)
+   into structured, sensitive-attribute-gated tags + a summary,
+2. embeds + stores each into the artist's tenant-scoped memory
+   (:mod:`studio.artwork_memory`),
+3. returns an honest, DB-verifiable report (scanned / ingested / skipped-with-reason /
+   per-image tags).
+
+Then a campaign can call :func:`shortlist_top4` to get the 4 best-matching pieces for a
+motif/theme and a mid-run PAUSE prompt for the operator to choose (spec §9/§10/§22).
+
+Gates: no-fabrication (an image that can't be analyzed is SKIPPED with a reason, never a
+guessed row); NO sensitive-attribute inference (the vision gate rejects it upstream);
+company-owned assets only (local operator-provided files); HELD — this writes memory and
+sends NOTHING.
+"""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from studio.artwork_memory import ensure_schema, record_artwork, search_artwork
+from studio.artwork_vision import (
+    ArtworkAnalysis,
+    SensitiveAttributeError,
+    analysis_summary,
+    analyze_artwork,
+)
+from studio.ingest_vlm import NotConfiguredError, guess_media_type
+
+# The Anthropic vision API decodes these; HEIC (Apple) must be converted to JPEG first.
+SUPPORTED_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif")
+# Image formats we RECOGNISE but the vision API cannot decode (Apple exports, print
+# formats, vector/PDF). These are surfaced as an explicit, honest per-image skip
+# ("convert first") rather than dropped silently, so ``scanned`` reconciles with what
+# is actually in the folder.
+UNSUPPORTED_IMAGE_EXTS = (".heic", ".heif", ".tif", ".tiff", ".bmp", ".svg", ".avif", ".pdf")
+_CANDIDATE_EXTS = frozenset(SUPPORTED_EXTS + UNSUPPORTED_IMAGE_EXTS)
+# Per-image byte ceiling — the vision API caps ~5MB/image (base64); larger is skipped
+# with an honest reason rather than silently truncated.
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+
+AnalyzeFn = Callable[..., ArtworkAnalysis]
+
+# Media types the Anthropic vision API can actually decode.
+_API_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+
+
+def sniff_media_type(data: bytes) -> str | None:
+    """The TRUE image media type from a file's magic bytes (content), not its filename.
+
+    Real portfolios carry misnamed files — a JPEG saved as ``.PNG``, an Apple HEIC saved
+    as ``.jpg`` — and the vision API rejects a media-type/extension mismatch (or an
+    undecodable container) with a 400. Sniffing the content lets us send the correct type
+    for a decodable image, and honestly skip an undecodable one, instead of trusting the
+    extension. Returns ``image/{png,jpeg,gif,webp}`` for a decodable format,
+    ``image/heic`` / ``image/avif`` for a recognised-but-undecodable container, or
+    ``None`` when unrecognised."""
+    b = bytes(data[:16])
+    if len(b) < 12:
+        return None
+    if b[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if b[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if b[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if b[:4] == b"RIFF" and b[8:12] == b"WEBP":
+        return "image/webp"
+    if b[4:8] == b"ftyp":  # ISO-BMFF; the brand distinguishes HEIC/AVIF from MP4
+        brand = b[8:12]
+        if brand in (b"heic", b"heix", b"heif", b"mif1", b"msf1", b"hevc", b"hevx"):
+            return "image/heic"
+        if brand in (b"avif", b"avis"):
+            return "image/avif"
+    return None
+
+
+@dataclass
+class PortfolioIngestReport:
+    tenant_id: str
+    artist_id: str
+    scanned: int = 0
+    ingested: list[dict[str, Any]] = field(default_factory=list)   # {file,id,summary,tags}
+    skipped: list[dict[str, Any]] = field(default_factory=list)     # {file,reason}
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "tenant_id": self.tenant_id,
+            "artist_id": self.artist_id,
+            "scanned": self.scanned,
+            "n_ingested": len(self.ingested),
+            "n_skipped": len(self.skipped),
+            "ingested": self.ingested,
+            "skipped": self.skipped,
+        }
+
+
+def _image_files(folder: Path) -> list[Path]:
+    """Every image-like file under ``folder`` — RECURSIVELY, so an artist's themed
+    subfolders (``Pride Flash/``, ``4th of July Flash/`` …) are one catalog, not just
+    the top level. Returns supported AND known-unsupported image formats (the caller
+    skips the latter with an honest reason); non-image files are ignored. Sorted by
+    relative path so a run is deterministic and reads folder-by-folder."""
+    return sorted(
+        (p for p in folder.rglob("*")
+         if p.is_file() and p.suffix.lower() in _CANDIDATE_EXTS),
+        key=lambda p: p.relative_to(folder).as_posix().lower(),
+    )
+
+
+def ingest_portfolio(
+    tenant_id: str,
+    artist_id: str,
+    folder: str | Path,
+    *,
+    source: str = "upload",
+    is_test: bool = False,
+    analyze_fn: AnalyzeFn | None = None,
+    model: str | None = None,
+    client: Any = None,
+    embedder: Any = None,
+    dsn: str | None = None,
+) -> PortfolioIngestReport:
+    """Ingest every supported image in ``folder`` into ``artist_id``'s memory under
+    ``tenant_id``. Returns a :class:`PortfolioIngestReport`.
+
+    Real client work sets ``is_test=False`` (skindesign, the operator's own assets).
+    ``analyze_fn`` is injectable for tests; production uses the real
+    :func:`studio.artwork_vision.analyze_artwork`. A per-image failure (unconfigured,
+    oversized, bad decode, or a sensitive-attribute rejection) SKIPS that image with a
+    concrete reason — the run continues and never stores a fabricated row."""
+    folder = Path(folder)
+    if not folder.is_dir():
+        raise NotADirectoryError(f"artist portfolio folder not found: {folder}")
+    analyze_fn = analyze_fn or analyze_artwork
+    ensure_schema(dsn)
+
+    report = PortfolioIngestReport(tenant_id=tenant_id, artist_id=artist_id)
+    for path in _image_files(folder):
+        report.scanned += 1
+        # The image_ref carries the RELATIVE path (not just the basename) so two files
+        # that share a name in different themed subfolders get distinct, collision-free
+        # ids (record ids derive from image_ref) — every catalog image is its own row.
+        rel = path.relative_to(folder).as_posix()
+        image_ref = f"{source}://{artist_id}/{rel}"
+        try:
+            if path.suffix.lower() not in SUPPORTED_EXTS:
+                raise ValueError(
+                    f"unsupported image format {path.suffix.lower()!r} — convert "
+                    "HEIC/HEIF/TIFF/BMP/SVG/PDF to PNG or JPEG first"
+                )
+            size = path.stat().st_size
+            if size > MAX_IMAGE_BYTES:
+                raise ValueError(
+                    f"image is {size} bytes > {MAX_IMAGE_BYTES} cap (downscale/convert first)"
+                )
+            data = path.read_bytes()
+            # Trust CONTENT over the filename extension: the vision API 400s on a
+            # media-type mismatch (a .PNG that is really JPEG) or an undecodable
+            # container (a .jpg that is really HEIC). Sniff the real type from magic
+            # bytes; if the bytes are not a vision-decodable image, skip honestly.
+            media_type = sniff_media_type(data) or guess_media_type(path.name)
+            if media_type not in _API_IMAGE_TYPES:
+                raise ValueError(
+                    f"unsupported image content {media_type or 'unknown'!r} — the real "
+                    "bytes are not a vision-decodable PNG/JPEG/WebP/GIF (e.g. a HEIC/AVIF "
+                    "misnamed .jpg); convert to PNG or JPEG first"
+                )
+            analysis = analyze_fn(data, media_type=media_type, filename=path.name,
+                                  model=model, client=client)
+            rid = record_artwork(
+                tenant_id, artist_id, image_ref, analysis,
+                source=source, media_type=media_type, is_test=is_test,
+                embedder=embedder, dsn=dsn,
+            )
+            report.ingested.append({
+                "file": rel, "id": rid,
+                "summary": analysis_summary(analysis),
+                "tags": analysis.model_dump(),
+            })
+        except SensitiveAttributeError as exc:
+            report.skipped.append({"file": rel, "reason": f"sensitive-attribute rejected: {exc}"})
+        except NotConfiguredError as exc:
+            report.skipped.append({"file": rel, "reason": f"VLM unconfigured: {exc}"})
+        except Exception as exc:  # honest per-image skip; never a fabricated row
+            report.skipped.append({"file": rel, "reason": f"{type(exc).__name__}: {exc}"})
+    return report
+
+
+# --------------------------------------------------------------------------- #
+# Top-4 campaign selection + mid-run pause (spec §9/§10/§22)
+# --------------------------------------------------------------------------- #
+@dataclass
+class Top4Selection:
+    query: str
+    picks: list[dict[str, Any]] = field(default_factory=list)   # {image_ref,summary,why,similarity}
+    honest_empty: bool = False
+    pause_prompt: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "query": self.query, "picks": self.picks,
+            "honest_empty": self.honest_empty, "pause_prompt": self.pause_prompt,
+        }
+
+
+def shortlist_top4(
+    tenant_id: str,
+    artist_id: str,
+    campaign_query: str,
+    *,
+    k: int = 4,
+    include_test: bool = False,
+    embedder: Any = None,
+    dsn: str | None = None,
+) -> Top4Selection:
+    """Shortlist the top-``k`` (default 4) artworks matching ``campaign_query`` and
+    build the mid-run PAUSE prompt the operator answers. NEVER auto-picks — it returns
+    the ranked options + the question. When the artist has no matching artwork, returns
+    ``honest_empty`` with the spec's honest message (never a random attach)."""
+    hits = search_artwork(
+        tenant_id, artist_id, campaign_query, k=k,
+        include_test=include_test, embedder=embedder, dsn=dsn,
+    )
+    if not hits:
+        return Top4Selection(
+            query=campaign_query, honest_empty=True,
+            pause_prompt=(
+                f"I could not find a good matching artwork for '{campaign_query}' in "
+                f"{artist_id}'s portfolio. Please upload one, or tell me to use a general "
+                "artist piece."
+            ),
+        )
+    picks = [{
+        "image_ref": h.record.image_ref,
+        "summary": h.record.summary,
+        "why": f"matches on {', '.join(h.record.analysis.style_tags[:4]) or h.record.analysis.motif}",
+        "similarity": round(h.similarity, 4),
+    } for h in hits]
+    n = len(picks)
+    prompt = (
+        f"I found {n} matching piece(s) for '{campaign_query}'. Which one should I use "
+        f"for this campaign? " + "; ".join(
+            f"[{i + 1}] {p['summary']}" for i, p in enumerate(picks)
+        )
+    )
+    return Top4Selection(query=campaign_query, picks=picks, pause_prompt=prompt)
+
+
+def cli_ingest(argv: list[str] | None = None) -> int:
+    """A fresh session can run the real ingest once the portfolio lands:
+
+        STUDIO_TENANT_ID=skindesign ANTHROPIC_API_KEY=... \\
+          uv run python -m studio.ingest_artist_portfolio <artist_id> <folder>
+    """
+    import json
+    import sys
+
+    args = argv if argv is not None else sys.argv[1:]
+    if len(args) < 2:
+        print("usage: python -m studio.ingest_artist_portfolio <artist_id> <folder> "
+              "[--test]", file=sys.stderr)
+        return 2
+    artist_id, folder = args[0], args[1]
+    is_test = "--test" in args[2:]
+    tenant = os.environ.get("STUDIO_TENANT_ID", "skindesign")
+    report = ingest_portfolio(tenant, artist_id, folder, is_test=is_test)
+    print(json.dumps(report.to_dict(), indent=2))
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(cli_ingest())
