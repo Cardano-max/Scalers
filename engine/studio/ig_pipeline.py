@@ -194,6 +194,171 @@ def run_trend_research(query: str, *, limit: int = 5) -> dict[str, Any]:
         }
 
 
+def run_deep_social_research(
+    styles: list[str] | None = None, *, now: datetime | None = None, limit: int = 4
+) -> dict[str, Any]:
+    """COMPLEX multi-angle social research (operator's order: not one simple query).
+    Three cited-only angles through the live provider registry:
+
+      1. instagram-trends — what's trending for tattoo content right now;
+      2. reddit-community — what r/tattoo(s) / tattoo-artist threads say actually
+         works on Instagram (``site:reddit.com`` scoped);
+      3. hooks-and-formats — proven hook lines / reel formats / posting mechanics
+         for tattoo studios.
+
+    Returns ``{angles: [{angle, query, sources, cited, note}], total_cited}``.
+    Every source is a verbatim provider hit; a blocked/keyless/empty search is an
+    honest ``cited=0`` note — trends and hooks are NEVER invented."""
+    now = now or datetime.now(timezone.utc)
+    month = now.strftime("%B %Y")
+    style_bit = " ".join((styles or [])[:3])
+    queries = [
+        ("instagram-trends", f"tattoo Instagram trends {month} {style_bit}".strip()),
+        ("reddit-community",
+         f"site:reddit.com tattoo artist instagram what works posts {style_bit}".strip()),
+        ("hooks-and-formats",
+         "tattoo studio instagram reel hooks caption formats that get bookings"),
+    ]
+    angles = [dict(run_trend_research(q, limit=limit), angle=name) for name, q in queries]
+    return {"angles": angles, "total_cited": sum(a.get("cited") or 0 for a in angles)}
+
+
+def render_deep_research_block(deep: dict[str, Any]) -> str:
+    """Brief block for the multi-angle research — cited snippets grouped per angle,
+    or the honest empty statement. The drafter may reference ONLY what is cited."""
+    angles = deep.get("angles") or []
+    if not deep.get("total_cited"):
+        notes = "; ".join(f"{a.get('angle')}: {a.get('note')}" for a in angles)
+        return (
+            f"\nSOCIAL RESEARCH (3 angles) returned NO usable sources ({notes}). "
+            "Do NOT reference or invent any trend, hook pattern, or 'what works' "
+            "claim — draft from the artist memory, proven brand patterns, and plan only."
+        )
+    lines = [
+        "\nSOCIAL RESEARCH — LIVE cited sources across three angles (reference a "
+        "trend/hook ONLY if it appears below, and cite its URL):"
+    ]
+    for a in angles:
+        if not a.get("cited"):
+            lines.append(f"  [{a.get('angle')}] no sources ({a.get('note')})")
+            continue
+        lines.append(f"  [{a.get('angle')}] query {a.get('query')!r}:")
+        for s in (a.get("sources") or [])[:4]:
+            title = (s.get("title") or "").strip()[:90]
+            snippet = (s.get("snippet") or "").strip()[:160]
+            lines.append(f"    - {title} — {snippet} ({s.get('url')})")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
+# Proven brand patterns + b-roll (REAL past campaigns + artist memory).
+# --------------------------------------------------------------------------- #
+def load_brand_patterns(
+    tenant_id: str, artist: str | None, *, dsn: str | None = None
+) -> dict[str, Any]:
+    """The artist's PROVEN voice: hooks/CTAs from real past campaigns
+    (campaign_examples) + brand_voice / style_profile artist memories. All live
+    reads; honest empties."""
+    out: dict[str, Any] = {"campaign_ctas": [], "campaign_hooks": [], "voice_memories": []}
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+
+        with psycopg.connect(_dsn(dsn), row_factory=dict_row, connect_timeout=5) as conn:
+            rows = conn.execute(
+                "SELECT campaign_name, cta, message_copy, offer_price_usd, offer_type, "
+                "recipient_count, delivered_count FROM campaign_examples "
+                "WHERE tenant_id=%s AND (%s::text IS NULL OR artist_name ILIKE %s) "
+                "ORDER BY created_at DESC LIMIT 5",
+                (tenant_id, artist, f"%{artist}%" if artist else None),
+            ).fetchall()
+        for r in rows:
+            if r.get("cta"):
+                out["campaign_ctas"].append(
+                    {"cta": r["cta"], "campaign": r.get("campaign_name"),
+                     "delivered": r.get("delivered_count")})
+            first_line = (r.get("message_copy") or "").strip().splitlines()
+            if first_line:
+                out["campaign_hooks"].append(
+                    {"hook": first_line[0][:160], "campaign": r.get("campaign_name"),
+                     "offer": f"${r.get('offer_price_usd')} {r.get('offer_type') or ''}".strip()})
+    except Exception:
+        pass
+    if artist:
+        try:
+            from studio.artist_memory import list_artist_memories
+            from studio.artists_directory import artist_slug as _slugify
+
+            for m in list_artist_memories(tenant_id, _slugify(artist), dsn=dsn):
+                kind = (m.get("metadata") or {}).get("kind") or ""
+                if kind in ("brand_voice", "style_profile"):
+                    out["voice_memories"].append(m.get("text") or "")
+        except Exception:
+            pass
+    return out
+
+
+def render_brand_patterns_block(patterns: dict[str, Any]) -> str:
+    """Brief block ordering the drafter to MOLD researched trends into the PROVEN
+    brand hooks/angles/CTAs — never generic copy, never an unproven claim."""
+    ctas = patterns.get("campaign_ctas") or []
+    hooks = patterns.get("campaign_hooks") or []
+    voices = patterns.get("voice_memories") or []
+    if not (ctas or hooks or voices):
+        return (
+            "\nPROVEN BRAND PATTERNS: none on file for this artist yet — use the "
+            "studio's standard voice; do NOT invent 'proven' claims."
+        )
+    lines = ["\nPROVEN BRAND PATTERNS (REAL past campaigns + artist memory) — mold the "
+             "researched trends INTO these hooks/angles/CTAs; keywords only from cited sources:"]
+    for h in hooks[:3]:
+        lines.append(f"  - proven hook ({h['campaign']}, {h.get('offer')}): \"{h['hook']}\"")
+    for c in ctas[:3]:
+        d = f", {c['delivered']} delivered" if c.get("delivered") else ""
+        lines.append(f"  - proven CTA ({c['campaign']}{d}): \"{c['cta']}\"")
+    for v in voices[:2]:
+        lines.append(f"  - voice memory: {v[:220]}")
+    return "\n".join(lines)
+
+
+def load_broll(
+    tenant_id: str, artist: str | None, *, dsn: str | None = None
+) -> list[dict[str, Any]]:
+    """REAL b-roll on file: the artist's VIDEO library assets (media='video').
+    Honest empty list when none."""
+    try:
+        from studio.artwork_select import list_artwork  # noqa: F401  (same store)
+        import psycopg
+        from psycopg.rows import dict_row
+
+        with psycopg.connect(_dsn(dsn), row_factory=dict_row, connect_timeout=5) as conn:
+            rows = conn.execute(
+                "SELECT id, content FROM assets WHERE content->>'media'='video' "
+                "AND (%s::text IS NULL OR content->>'artist' ILIKE %s) "
+                "ORDER BY created_at DESC LIMIT 5",
+                (artist, f"%{artist}%" if artist else None),
+            ).fetchall()
+        return [
+            {"asset_id": r["id"],
+             "caption": (r["content"] or {}).get("caption") or "",
+             "summary": (r["content"] or {}).get("vlm_summary") or ""}
+            for r in rows
+        ]
+    except Exception:
+        return []
+
+
+def render_broll_block(broll: list[dict[str, Any]]) -> str:
+    if not broll:
+        return ""
+    lines = ["\nB-ROLL ON FILE (REAL videos in the library — reference these for the "
+             "reel/post concept; never invent footage):"]
+    for b in broll:
+        desc = b.get("summary") or b.get("caption") or b.get("asset_id")
+        lines.append(f"  - {b['asset_id']}: {str(desc)[:180]}")
+    return "\n".join(lines)
+
+
 def render_trend_block(research: dict[str, Any]) -> str:
     """The brief block for trend research — cited snippets with URLs, or the honest
     empty statement (never invented trends)."""
@@ -278,17 +443,45 @@ def build_ig_brief_block(
             },
         )
 
-    query = trend_query(mem.get("styleTags") or None)
-    research = run_trend_research(query)
+    # COMPLEX multi-angle research (operator's order): instagram-trends +
+    # reddit-community + hooks-and-formats, all cited-only. Recorded as TWO
+    # visible crew steps so the panel shows the deep pass distinctly.
+    deep = run_deep_social_research(mem.get("styleTags") or None)
     if run_id:
         _record_crew_step(
             dsn, run_id, campaign_id,
             "trend_research", "firecrawl",
-            {"query": query},
-            research,
+            {"queries": [a.get("query") for a in deep.get("angles") or []][:1]},
+            (deep.get("angles") or [{}])[0],
+        )
+        _record_crew_step(
+            dsn, run_id, campaign_id,
+            "hook_research", "firecrawl",
+            {"queries": [a.get("query") for a in (deep.get("angles") or [])[1:]]},
+            {"angles": (deep.get("angles") or [])[1:],
+             "total_cited": deep.get("total_cited")},
         )
 
-    parts = [render_artist_memory_block(mem), render_trend_block(research)]
+    # Proven brand voice + b-roll from the REAL stores; a visible crew step too.
+    patterns = load_brand_patterns(tenant_id, artist, dsn=dsn)
+    broll = load_broll(tenant_id, artist, dsn=dsn)
+    if run_id:
+        _record_crew_step(
+            dsn, run_id, campaign_id,
+            "brand_patterns", "db",
+            {"artist": artist},
+            {"proven_ctas": len(patterns.get("campaign_ctas") or []),
+             "proven_hooks": len(patterns.get("campaign_hooks") or []),
+             "voice_memories": len(patterns.get("voice_memories") or []),
+             "broll_on_file": len(broll)},
+        )
+
+    parts = [
+        render_artist_memory_block(mem),
+        render_deep_research_block(deep),
+        render_brand_patterns_block(patterns),
+        render_broll_block(broll),
+    ]
     if artwork:
         parts.append(
             "\nSELECTED ARTWORK (operator-picked, REAL): asset "

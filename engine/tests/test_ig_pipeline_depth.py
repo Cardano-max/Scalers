@@ -122,9 +122,13 @@ def test_brief_block_grounds_artist_memory_and_cited_trends(monkeypatch):
         assert "Skin Design Tattoo Test" in block
         assert "06.29 BELLA" in block and "$1200" in block
         assert "fine-line" in block
-        # Cited trend snippets WITH URLs.
-        assert "INSTAGRAM TREND RESEARCH — LIVE cited sources" in block
+        # Cited trend snippets WITH URLs — the deep pass groups three angles
+        # (instagram-trends / reddit-community / hooks-and-formats).
+        assert "SOCIAL RESEARCH — LIVE cited sources across three angles" in block
+        assert "[reddit-community]" in block
         assert "https://ex.com/t1" in block
+        # Proven brand patterns block is present (real seeded campaign).
+        assert "PROVEN BRAND PATTERNS" in block
 
         # Channel-crew agent_runs recorded with REAL outputs + deterministic ids.
         import psycopg
@@ -141,6 +145,11 @@ def test_brief_block_grounds_artist_memory_and_cited_trends(monkeypatch):
         assert rows["trend_research"][0] == "firecrawl"
         assert rows["trend_research"][1]["cited"] == 1
         assert rows["trend_research"][1]["sources"][0]["url"] == "https://ex.com/t1"
+        # The deep pass adds hook_research (reddit + formats angles) and the
+        # brand_patterns read as their own visible crew steps.
+        assert rows["hook_research"][0] == "firecrawl"
+        assert rows["hook_research"][1]["total_cited"] >= 1
+        assert rows["brand_patterns"][0] == "db"
 
         # Re-building (a resume) records NO duplicates (deterministic ids).
         build_ig_brief_block(plan, tenant, run_id=run_id, campaign_id=campaign_id, dsn=DSN)
@@ -148,7 +157,7 @@ def test_brief_block_grounds_artist_memory_and_cited_trends(monkeypatch):
             n = c.execute(
                 "SELECT count(*) FROM agent_runs WHERE run_id=%s", (run_id,)
             ).fetchone()[0]
-        assert n == 2
+        assert n == 4
     finally:
         _cleanup(tenant, [run_id])
 

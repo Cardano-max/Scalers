@@ -13,6 +13,7 @@ import { useData } from '@/lib/data/DataProvider';
 import { useConsole } from '@/state/console-store';
 import { useAsync } from '@/lib/useAsync';
 import { ArtifactLibrary } from './studio/ArtifactLibrary';
+import { MediaUpload } from './studio/MediaUpload';
 import type { CampaignExample } from '@/lib/data/models';
 
 function fmt(v: number | string | null | undefined): string {
@@ -166,6 +167,9 @@ export function MemoryScreen() {
           )}
         </>
       )}
+      {/* Direct media intake: images AND videos land in the artifact library +
+          artist memory through the same engine pipeline as the Artists tab. */}
+      <MediaUpload />
       {/* Upload-center / knowledge view: EVERY context artifact the agents can see
           (GET /studio/artifacts) with kind filters + image previews. */}
       <ArtifactLibrary />

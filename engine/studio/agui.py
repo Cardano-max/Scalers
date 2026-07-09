@@ -4650,26 +4650,47 @@ def mount_studio_agui(app) -> None:
                 {"ok": False, "error": "contentBase64 decoded to zero bytes"},
                 status_code=400,
             )
-        if media_type and not media_type.startswith("image/"):
+        # Videos take the frame-sampled pipeline (studio/video_ingest.py): same
+        # disk + artifact + b-roll library + memory writes, VLM over REAL frames.
+        is_video = bool(media_type and media_type.startswith("video/")) or (
+            not media_type
+            and name.lower().endswith((".mp4", ".mov", ".webm", ".m4v", ".avi"))
+        )
+        if media_type and not media_type.startswith(("image/", "video/")):
             return JSONResponse(
-                {"ok": False, "error": f"mediaType {media_type!r} is not an image/*"},
+                {"ok": False, "error": f"mediaType {media_type!r} is not image/* or video/*"},
                 status_code=400,
             )
         try:
-            from studio.image_ingest import process_image_upload
+            if is_video:
+                from studio.video_ingest import process_video_upload
 
-            result = await asyncio.to_thread(
-                lambda: process_image_upload(
-                    tenant_id,
-                    name,
-                    raw,
-                    media_type=media_type,
-                    kind=kind,
-                    artist=artist,
-                    prompt=prompt,
-                    dsn=dsn,
+                result = await asyncio.to_thread(
+                    lambda: process_video_upload(
+                        tenant_id,
+                        name,
+                        raw,
+                        media_type=media_type or "video/mp4",
+                        artist=artist,
+                        prompt=prompt,
+                        dsn=dsn,
+                    )
                 )
-            )
+            else:
+                from studio.image_ingest import process_image_upload
+
+                result = await asyncio.to_thread(
+                    lambda: process_image_upload(
+                        tenant_id,
+                        name,
+                        raw,
+                        media_type=media_type,
+                        kind=kind,
+                        artist=artist,
+                        prompt=prompt,
+                        dsn=dsn,
+                    )
+                )
         except Exception as exc:
             return JSONResponse(
                 {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500
