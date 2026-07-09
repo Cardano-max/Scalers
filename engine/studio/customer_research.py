@@ -240,6 +240,38 @@ def churn_risk_leads(
     )
 
 
+def contactable_leads(
+    tenant_id: str, *, limit: int = 50, exclude_ids: list[str] | None = None,
+    dsn: str | None = None, memory_store: Any | None = None,
+) -> list[dict[str, Any]]:
+    """Grounded facts for the tenant's CONTACTABLE customers — any customer with a real
+    contact method (email / phone / IG handle / name), excluding ``exclude_ids``.
+
+    This is the general fill source behind the exact-draft-count requirement (spec §14,
+    nmh.1): when the WARM + churn cohorts are short of the requested N, the run tops up
+    from here so a request for 10 yields 10 drafts whenever the tenant has >=10 valid
+    contacts. Ordered by ``created_at`` for a stable, reproducible cohort. Returns full
+    grounded facts (same shape as the other lead sources)."""
+    exclude = list(exclude_ids or [])
+    with _connect(dsn) as conn:
+        rows = conn.execute(
+            """
+            SELECT id FROM customers
+            WHERE tenant_id = %s
+              AND (email IS NOT NULL OR phone IS NOT NULL
+                   OR ig_handle IS NOT NULL OR name IS NOT NULL)
+              AND id <> ALL(%s)
+            ORDER BY created_at, id
+            LIMIT %s
+            """,
+            (tenant_id, exclude, limit),
+        ).fetchall()
+    ids = [r["id"] for r in rows]
+    return lookup_leads(
+        tenant_id, [{"customer_id": i} for i in ids], dsn=dsn, memory_store=memory_store
+    )
+
+
 def conversation_leads(
     tenant_id: str, *, limit: int = 50, dsn: str | None = None,
     memory_store: Any | None = None,

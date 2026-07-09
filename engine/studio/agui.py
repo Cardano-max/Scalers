@@ -1454,6 +1454,7 @@ def _execute_provided_leads_sync(
         _research_enabled,
         build_outreach_draft,
         churn_risk_leads,
+        contactable_leads,
         conversation_leads,
         lookup_leads,
         research_studio,
@@ -1531,26 +1532,79 @@ def _execute_provided_leads_sync(
         )
     else:
         limit = min(plan.lead_count or plan.output_count or 10, effective_cap)
-        # Prefer the tenant's WARM leads — the customers that HAVE real conversation
-        # history (the whole point of the provided-leads pivot: per-lead psych analysis
-        # off their own chat, e.g. Sarah Kim's price-objection SMS). Fall back to the
-        # churn cohort ONLY when the tenant has no conversation leads.
-        leads = conversation_leads(tenant_id, limit=limit, dsn=dsn, memory_store=store)
-        if leads:
-            source_note = f"your warm leads with conversation history ({len(leads)})"
-        else:
-            leads = churn_risk_leads(tenant_id, limit=limit, dsn=dsn, memory_store=store)
-            source_note = f"existing-database win-back / lapsing cohort ({len(leads)})"
+        # DRAFT-COUNT EXACTNESS (nmh.1, spec §14): the operator asked for ``limit``
+        # drafts and must get EXACTLY that many (one per valid contact) — never a
+        # self-chosen smaller number. Build the cohort to ``limit`` in priority order,
+        # de-duplicated by customer_id: the tenant's WARM leads first (best signal —
+        # per-lead psych off their real chat), then the churn / win-back cohort, then
+        # ANY remaining contactable customer. Only a tenant with genuinely fewer than
+        # ``limit`` valid contacts yields fewer (reconciled below with a counted skip).
+        leads = []
+        picked: set[str] = set()
 
-    # Cohort path: expected = the operator's count; a cohort short of that is an honest
-    # single skip row (never a silent undercount).
+        def _fill_from(source_leads: list[dict[str, Any]]) -> int:
+            n0 = len(leads)
+            for lead in source_leads:
+                if len(leads) >= limit:
+                    break
+                cid = lead.get("customer_id")
+                if cid and cid not in picked:
+                    picked.add(cid)
+                    leads.append(lead)
+            return len(leads) - n0
+
+        n_warm = _fill_from(
+            conversation_leads(tenant_id, limit=limit, dsn=dsn, memory_store=store)
+        )
+        n_churn = 0
+        if len(leads) < limit:
+            n_churn = _fill_from(
+                churn_risk_leads(tenant_id, limit=limit, dsn=dsn, memory_store=store)
+            )
+        n_fill = 0
+        if len(leads) < limit:
+            n_fill = _fill_from(contactable_leads(
+                tenant_id, limit=limit, exclude_ids=list(picked), dsn=dsn,
+                memory_store=store,
+            ))
+        _parts = [
+            f"{n_warm} with conversation history" if n_warm else "",
+            f"{n_churn} win-back / lapsing" if n_churn else "",
+            f"{n_fill} other contactable" if n_fill else "",
+        ]
+        _parts = [p for p in _parts if p]
+        source_note = (
+            f"your database cohort ({', '.join(_parts)})" if _parts
+            else "your database cohort (no contactable customers found)"
+        )
+
+    # Cohort path: expected = the operator's count. Any shortfall is reconciled with a
+    # counted skip row (``count`` accounts for every missing slot) so the ledger balances
+    # (requested = created + accounted-shortfall), never a silent undercount. The reason
+    # is HONEST about the cause: contact-supply exhaustion vs the output hard cap — never
+    # "only N contactable" when it was actually the cap that clipped the run.
     if not requested_ids:
         expected = int(plan.output_count or plan.lead_count or len(leads))
-        if len(leads) < expected:
+        # ``limit`` was min(requested, effective_cap): a request above the cap is clipped
+        # by the cap, not by contact supply.
+        capped_target = limit
+        if len(leads) < capped_target:
+            # Genuine contact exhaustion within the cap: fewer valid contacts than we
+            # could have drafted for.
+            shortfall = capped_target - len(leads)
             skipped.append({
-                "row": None, "lead": "cohort",
-                "reason": (f"cohort had only {len(leads)} lead(s) with signal; "
-                           f"{expected - len(leads)} short of requested {expected}"),
+                "row": None, "lead": "cohort", "count": shortfall,
+                "reason": (f"tenant has only {len(leads)} contactable customer(s); "
+                           f"{shortfall} short of requested {expected}"),
+            })
+        if capped_target < expected:
+            # The requested count exceeds the output hard cap — the remainder is clipped
+            # by the cap (roadmap #1 territory), surfaced honestly rather than hidden.
+            cap_short = expected - capped_target
+            skipped.append({
+                "row": None, "lead": "cohort", "count": cap_short,
+                "reason": (f"{cap_short} beyond the output cap of {effective_cap} "
+                           f"(requested {expected})"),
             })
 
     goal = plan.goal or "win back lapsed clients"
@@ -2030,11 +2084,16 @@ def _execute_provided_leads_sync(
         expected_n = int(expected)
     except (NameError, TypeError, ValueError):
         expected_n = len(pending) + len(skipped)
+    # A skip row normally accounts for ONE requested row; a cohort-shortfall row carries
+    # an explicit ``count`` accounting for EVERY missing slot (nmh.1) so the ledger
+    # balances (created + accounted-skips == requested), never a silent undercount.
+    accounted_skips = sum(int(s.get("count", 1) or 1) for s in skipped)
     output_ledger = {
         "expected": expected_n,
         "drafted": len(pending),
         "skipped": skipped,
-        "reconciled": (len(pending) + len(skipped)) >= expected_n,
+        "skipped_count": accounted_skips,
+        "reconciled": (len(pending) + accounted_skips) >= expected_n,
     }
 
     board = board_for_run(
