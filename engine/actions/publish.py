@@ -74,6 +74,13 @@ class MockOnLivePathError(RuntimeError):
     never a fake/silent success."""
 
 
+#: Channels that execute in a local SANDBOX with no external provider (tlv.6 demo
+#: slice). They route to :func:`_publish_demo` and are exempt from the real-send
+#: test-mode gate because they cannot reach anyone — see the gate comment in
+#: :func:`approve_and_publish`.
+SANDBOX_CHANNELS = frozenset({"demo"})
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -167,18 +174,28 @@ def approve_and_publish(
     if action.status == "sent":
         return action
 
+    channel = (action.channel or "").lower()
+
     # SERVER-SIDE TEST-MODE GATE (ju1.1) — the hard sandbox for tenants holding real
     # client PII (skindesign): if the tenant is in test_mode, refuse EVERY send whose
     # recipient is not on the operator-approved allowlist, BEFORE the claim and BEFORE
     # any connector exists. Deliberately above ``live=``/redirect handling: no toggle
     # or env config can reach past this. Unknown tenants (no registry row) pass
     # through unchanged (ladies8391 behavior identical).
-    from tenants.store import check_send_allowed
+    #
+    # SANDBOX channels (tlv.6 demo) are EXEMPT — and this is NOT a weakening: a
+    # sandbox channel routes to ``_publish_demo``, which builds no connector and
+    # performs no external send, so there is literally nothing for a real-send gate
+    # to protect. The gate stays fully in force for every REAL channel — proven by
+    # test_publish_demo_channel (gmail to a blocked recipient still raises while the
+    # demo channel to the same recipient delivers to the sandbox).
+    if channel not in SANDBOX_CHANNELS:
+        from tenants.store import check_send_allowed
 
-    allowed, reason = check_send_allowed(action.tenant_id, action.target, dsn=dsn)
-    if not allowed:
-        update_status(action.id, action.status, dsn=dsn, last_error=reason)
-        raise TestModeSendBlockedError(reason)
+        allowed, reason = check_send_allowed(action.tenant_id, action.target, dsn=dsn)
+        if not allowed:
+            update_status(action.id, action.status, dsn=dsn, last_error=reason)
+            raise TestModeSendBlockedError(reason)
 
     # Exactly-once CLAIM (atomic). Replace the old pre-send 'approved' write with a
     # single conditional UPDATE pending->'sending'. If 0 rows are claimed the action
@@ -200,7 +217,6 @@ def approve_and_publish(
         if marked is not None:
             action = marked
 
-    channel = (action.channel or "").lower()
     atype = (action.type or "").lower()
     # Email is delivered via the Gmail connector. Studio drafts may carry the channel
     # as "email" (and the studio-research path normalises it to "gmail"), but a draft
@@ -219,6 +235,8 @@ def approve_and_publish(
         if atype == "comment":
             return _reply_instagram(action, connectors.get("instagram"), dsn)
         return _publish_instagram(action, connectors.get("instagram"), dsn)
+    if channel in SANDBOX_CHANNELS:
+        return _publish_demo(action, connectors.get("demo"), dsn)
     return update_status(
         action.id, "failed", dsn=dsn, last_error=f"unknown channel {action.channel!r}"
     )
@@ -329,6 +347,33 @@ def _publish_gmail(action: ActionRow, connector: Any | None, dsn: str | None) ->
             outcome_kind="success",
         ),
         mode,
+    )
+
+
+def _publish_demo(action: ActionRow, connector: Any | None, dsn: str | None) -> ActionRow:
+    """SANDBOX execution channel (tlv.6): mark the approved action DELIVERED without
+    any external provider, so the approve -> execute loop closes for the dummy-tenant
+    demo with zero credentials. Unlike the real channels this deliberately does NOT
+    call ``_ensure_real`` — a mock/sandbox connector IS the point here. Labeled
+    'Delivered (sandbox)' so Runs/Activity never implies a real send happened."""
+    from connectors.demo import DemoConnector
+
+    conn = connector or DemoConnector()
+    try:
+        receipt = conn.deliver(
+            to=action.target or "", subject=action.subject or "", body=action.draft or ""
+        )
+    except Exception as exc:  # noqa: BLE001 — surface the real error, never fake success
+        return update_status(action.id, "failed", dsn=dsn, last_error=str(exc))
+    return _with_mode(
+        update_status(
+            action.id, "sent", dsn=dsn,
+            deep_link=getattr(receipt, "deep_link", None),
+            sent_at=_now(),
+            outcome_label="Delivered (sandbox)",
+            outcome_kind="success",
+        ),
+        "sandbox",
     )
 
 
