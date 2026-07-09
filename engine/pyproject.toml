@@ -47,6 +47,10 @@ dependencies = [
     # uv.lock per sec; re-vet on any version bump. Single transitive dep
     # python-dateutil(>=2.9.0.post0,<3), already hash-pinned in the lock.
     "holidays==0.99",
+    # Bundled static ffmpeg for the video upload pipeline (studio/video_ingest.py)
+    # — frame sampling for VLM analysis without any system ffmpeg install.
+    # Imported lazily; a missing binary degrades honestly (video kept, no frames).
+    "imageio-ffmpeg>=0.6",
 ]
 
 [project.optional-dependencies]

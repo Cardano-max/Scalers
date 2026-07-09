@@ -46,7 +46,7 @@ _ARTIFACTS_SQL = (
 # The coarse kinds the supervisor counts by (mirror the SQL CHECK constraint so a
 # bad type fails in Python with a clear message rather than a DB 23514).
 VALID_ARTIFACT_TYPES: frozenset[str] = frozenset(
-    {"csv", "brand_voice", "document", "pdf", "image", "artwork", "screenshot", "other"}
+    {"csv", "brand_voice", "document", "pdf", "image", "artwork", "screenshot", "video", "other"}
 )
 _IMAGE_TYPES: frozenset[str] = frozenset({"image", "artwork", "screenshot"})
 
@@ -298,6 +298,7 @@ _TYPE_LABEL: dict[str, str] = {
     "document": "document",
     "pdf": "PDF",
     "image": "image",
+    "video": "video (frame-sampled)",
     "artwork": "artwork image",
     "screenshot": "campaign screenshot",
     "other": "file",
@@ -326,7 +327,7 @@ def build_artifacts_readback(inv: ArtifactInventory) -> str:
             "do not have."
         )
     bits: list[str] = []
-    for t in ("csv", "brand_voice", "document", "pdf", "image", "artwork", "screenshot", "other"):
+    for t in ("csv", "brand_voice", "document", "pdf", "image", "artwork", "screenshot", "video", "other"):
         n = inv.by_type.get(t, 0)
         if not n:
             continue

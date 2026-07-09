@@ -21,6 +21,7 @@ import { renderMarkdown } from '@/lib/markdown';
 import { MicButton } from './MicButton';
 import { CustomerUpload } from './CustomerUpload';
 import { BrandNotesUpload } from './BrandNotesUpload';
+import { MediaUpload } from './MediaUpload';
 import { KnowledgePanel } from './KnowledgePanel';
 import type { SttFactoryOptions } from '@/lib/studio/stt';
 
@@ -367,6 +368,10 @@ export function VoiceTweakPanel({
           onUploaded={() => setContextVersion((v) => v + 1)}
         />
       </div>
+
+      {/* Media intake on the Voice surface: images AND videos → artifact library,
+          b-roll candidates + artist memory via the engine's VLM pipeline. */}
+      <MediaUpload onUploaded={() => setContextVersion((v) => v + 1)} />
 
       {/* Persistent knowledge store — the docs every agent reads (host, run, voice).
           Collapsed to a summary on the Voice surface; expand to upload / manage.

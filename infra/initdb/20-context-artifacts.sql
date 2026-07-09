@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS context_artifacts (
     artifact_type TEXT        NOT NULL              -- the coarse kind the supervisor counts by
                   CHECK (artifact_type IN (
                       'csv', 'brand_voice', 'document', 'pdf',
-                      'image', 'artwork', 'screenshot', 'other')),
+                      'image', 'artwork', 'screenshot', 'video', 'other')),
     media_type    TEXT,                             -- MIME, e.g. 'text/csv' | 'image/png' | 'application/pdf'
     summary       TEXT,                             -- honest one-liner: "CSV: 500 rows; columns: name, email"
     parsed_content TEXT,                            -- extracted text (docs/CSV); NULL/empty for a not-yet-parsed image
@@ -49,3 +49,13 @@ CREATE INDEX IF NOT EXISTS context_artifacts_tenant_idx
     ON context_artifacts (tenant_id, active, artifact_type);
 CREATE INDEX IF NOT EXISTS context_artifacts_linked_idx
     ON context_artifacts (tenant_id, linked_entity_type, linked_entity_id);
+
+-- Migration for pre-'video' databases (CREATE TABLE IF NOT EXISTS skips the new
+-- CHECK on an existing table): re-pin the constraint to the current kind list.
+-- Idempotent — drop-if-exists + add runs clean on both old and fresh schemas.
+ALTER TABLE context_artifacts
+    DROP CONSTRAINT IF EXISTS context_artifacts_artifact_type_check;
+ALTER TABLE context_artifacts
+    ADD CONSTRAINT context_artifacts_artifact_type_check CHECK (artifact_type IN (
+        'csv', 'brand_voice', 'document', 'pdf',
+        'image', 'artwork', 'screenshot', 'video', 'other'));

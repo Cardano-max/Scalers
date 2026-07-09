@@ -185,6 +185,38 @@ def send_eligible(
         entry["mode"] = mode
         entry["last_error"] = getattr(row, "last_error", None)
         (sent if status == "sent" else failed).append(entry)
+        # ARTIST MEMORY AWARENESS (spec: "Keebs memory should know who we sent a
+        # campaign to, what we sent, and which image"): a delivered draft that
+        # names an artist writes one memory row with the REAL send facts.
+        if status == "sent":
+            try:
+                import json as _json
+
+                ctx = getattr(a, "context", None)
+                ctx = _json.loads(ctx) if isinstance(ctx, str) else (ctx or {})
+                artist_name = str(ctx.get("artist") or "").strip()
+                if artist_name:
+                    from studio.artist_memory import write_artist_memory
+                    from studio.artists_directory import artist_slug as _slugify
+
+                    art_ref = (ctx.get("artwork") or {}).get("assetId")
+                    write_artist_memory(
+                        getattr(a, "tenant_id", "") or "",
+                        _slugify(artist_name),
+                        (
+                            f"Campaign send ({mode}): draft {a.id} sent to "
+                            f"{getattr(a, 'target', None)} — subject "
+                            f"{(getattr(a, 'subject', '') or '')[:80]!r}, "
+                            f"artwork {art_ref or 'none'}, run "
+                            f"{getattr(a, 'run_id', None)}."
+                        ),
+                        metadata={"action_id": a.id, "run_id": getattr(a, "run_id", None),
+                                  "mode": mode, "artwork_asset_id": art_ref,
+                                  "kind": "campaign_send"},
+                        dsn=dsn,
+                    )
+            except Exception:
+                pass  # memory is best-effort; the send record is already durable
 
     return {
         "run_id": run_id,

@@ -18,6 +18,7 @@ import { useConsole } from '@/state/console-store';
 import { useSharedStudio } from '@/lib/studio/StudioRunProvider';
 import { AgencyCanvas } from './AgencyCanvas';
 import { AgencyInterview } from './AgencyInterview';
+import { MediaUpload } from './MediaUpload';
 import { BlueprintBoardPanel } from './BlueprintBoardPanel';
 import { RunNarration } from './RunNarration';
 import {
@@ -126,14 +127,21 @@ export function AgencyScreen() {
             />
           </>
         ) : (
-          <AgencyInterview
-            state={interview}
-            busy={interviewBusy}
-            connected={connected}
-            running={studio.runningCampaign}
-            onAnswer={answer}
-            onRun={runCampaign}
-          />
+          <>
+            <AgencyInterview
+              state={interview}
+              busy={interviewBusy}
+              connected={connected}
+              running={studio.runningCampaign}
+              onAnswer={answer}
+              onRun={runCampaign}
+            />
+            {/* Media intake on the Agency surface: images AND videos → artifact
+                library, b-roll candidates + artist memory (same engine pipeline). */}
+            <div style={{ marginTop: 14 }}>
+              <MediaUpload />
+            </div>
+          </>
         )}
       </div>
     </section>

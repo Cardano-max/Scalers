@@ -390,7 +390,16 @@ function ArtworkCard({ artwork }: { artwork: ArtistArtwork }) {
 
 // ── Upload artwork ───────────────────────────────────────────────────────────
 
-const ACCEPTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+const ACCEPTED_IMAGE_TYPES = [
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  // Videos ride the same upload route; the engine samples real frames for the
+  // visual analysis and stores the piece as a b-roll candidate.
+  'video/mp4',
+  'video/quicktime',
+  'video/webm',
+];
 
 /** Read a picked file as base64 (payload only, no data-uri prefix). */
 function readFileBase64(file: File): Promise<string> {
@@ -430,7 +439,7 @@ function UploadArtworkBlock({
     setResult(null);
     setError(null);
     if (!ACCEPTED_IMAGE_TYPES.includes(file.type)) {
-      setError(`Unsupported file type ${file.type || '(unknown)'} — use PNG, JPEG, or WebP.`);
+      setError(`Unsupported file type ${file.type || '(unknown)'} — use PNG/JPEG/WebP or MP4/MOV/WebM.`);
       return;
     }
     try {
@@ -479,7 +488,7 @@ function UploadArtworkBlock({
     ? result.vlmSummary
       ? `Visual analysis: ${result.vlmSummary}`
       : result.vlmStatus && !['ok', 'done', 'complete'].includes(result.vlmStatus.toLowerCase())
-        ? 'Uploaded — visual analysis unavailable for this image.'
+        ? 'Uploaded — visual analysis unavailable for this file.'
         : result.note ?? 'Uploaded.'
     : null;
 
@@ -499,7 +508,7 @@ function UploadArtworkBlock({
           <input
             ref={fileRef}
             type="file"
-            accept="image/png,image/jpeg,image/webp"
+            accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime,video/webm"
             onChange={onFile}
             style={{ display: 'none' }}
             data-testid="artwork-file-input"
@@ -520,7 +529,7 @@ function UploadArtworkBlock({
               cursor: busy ? 'wait' : 'pointer',
             }}
           >
-            {fileName ? `Picked: ${fileName}` : 'Pick image (PNG / JPEG / WebP)'}
+            {fileName ? `Picked: ${fileName}` : 'Pick image or video'}
           </button>
           <button
             type="button"
