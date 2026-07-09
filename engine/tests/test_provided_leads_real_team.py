@@ -327,4 +327,3 @@ def test_failed_critic_leaves_conf_honest_none(monkeypatch):
 
     assert captured and len(captured) == 2
     assert all(c is None for c in captured)
-import pytest
