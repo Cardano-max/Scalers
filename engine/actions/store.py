@@ -169,10 +169,11 @@ def record_pending_action(
         existing = conn.execute(
             "SELECT id FROM actions WHERE idempotency_key = %s", (idempotency_key,)
         ).fetchone()
-        if existing is None and target is not None:
+        if existing is None and target is not None and worker is not None and not is_seeded:
             existing = conn.execute(
                 "SELECT id FROM actions WHERE tenant_id = %s AND worker = %s "
-                "AND target = %s AND status = 'pending' ORDER BY created_at LIMIT 1",
+                "AND target = %s AND status = 'pending' AND is_seeded = false "
+                "ORDER BY created_at LIMIT 1",
                 (tenant_id, worker, target),
             ).fetchone()
         return existing["id"] if existing else action_id

@@ -19,6 +19,9 @@
 -- CREATE ... IF NOT EXISTS is a no-op. initdb applies it on a fresh cluster; on the
 -- live cluster it is applied once, explicitly, with a reported before/after count.
 
+-- Scope: REAL drafts only (is_seeded = false). Demo/seed fixtures (is_seeded =
+-- true) are intentionally exempt so this guard never dedupes or deletes seeded
+-- console fixtures, and it aligns with the AC (exactly-N real gmail drafts).
 DELETE FROM actions a
 USING (
     SELECT id, row_number() OVER (
@@ -27,9 +30,12 @@ USING (
     ) AS rn
     FROM actions
     WHERE status = 'pending' AND target IS NOT NULL AND worker IS NOT NULL
+      AND is_seeded = false
 ) d
 WHERE a.id = d.id AND d.rn > 1;
 
+DROP INDEX IF EXISTS actions_pending_recipient_uniq;
 CREATE UNIQUE INDEX IF NOT EXISTS actions_pending_recipient_uniq
     ON actions (tenant_id, worker, target)
-    WHERE status = 'pending' AND target IS NOT NULL AND worker IS NOT NULL;
+    WHERE status = 'pending' AND target IS NOT NULL AND worker IS NOT NULL
+      AND is_seeded = false;
