@@ -3649,6 +3649,33 @@ async def steer_run(
 
 
 @studio_agent.tool
+async def fleet_status(ctx: RunContext[StudioDeps]) -> str:
+    """FLEET BOARD (initech `status`): every recent run with its live activity —
+    working / stalled / waiting-operator / done / failed — plus the last agent
+    role that stepped, staged drafts, and pending directives. Use this to answer
+    'what is every agent doing right now?' and to spot a stalled or paused run
+    before steering it."""
+    from studio.supervisor_fleet import fleet_status as _fleet
+
+    board = await asyncio.to_thread(
+        lambda: _fleet(ctx.deps.tenant_id, dsn=ctx.deps.dsn)
+    )
+    if not board:
+        return "Fleet is idle: no runs in the last 24h."
+    lines = ["FLEET (newest first):"]
+    for r in board[:12]:
+        age = f"{int(r['last_step_age_s'])}s ago" if r["last_step_age_s"] is not None else "no steps"
+        lines.append(
+            f"- {r['run_id']} [{r['activity']}] last={r['last_role'] or '-'} ({age}), "
+            f"steps={r['n_steps']}, pending drafts={r['n_pending_drafts']}, "
+            f"directives pending={r['n_pending_directives']}/applied={r['n_applied_directives']}"
+        )
+    if len(board) > 12:
+        lines.append(f"... and {len(board) - 12} older runs")
+    return "\n".join(lines)
+
+
+@studio_agent.tool
 async def review_run(ctx: RunContext[StudioDeps], run_id: str = "") -> str:
     """AUDIT a run's internal coherence from the agents' REAL recorded outputs
     (researcher vs strategist vs analyst): contradiction findings + suggested
@@ -4858,6 +4885,46 @@ def mount_studio_agui(app) -> None:
             review_run_coherence, run_id, tenant_id, dsn=get_dsn()
         )
         return JSONResponse(verdict)
+
+    @app.get("/studio/fleet")
+    async def studio_fleet_route():  # noqa: ANN202
+        """`initech status` for the marketing agents: one row per recent run with
+        live activity classification (working / stalled / waiting-operator / done /
+        failed), current role, last-step age, staged drafts and directive counts —
+        every field read from the runs/agent_runs/actions/run_directives tables."""
+        from fastapi.responses import JSONResponse
+
+        from studio.supervisor_fleet import fleet_status
+
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        board = await asyncio.to_thread(fleet_status, tenant_id, dsn=get_dsn())
+        return JSONResponse({"tenantId": tenant_id, "fleet": board})
+
+    @app.post("/studio/fleet/patrol")
+    async def studio_fleet_patrol_route():  # noqa: ANN202
+        """`initech patrol` on demand: one sweep over every non-terminal run —
+        stall detection + deterministic coherence rules; each NEW finding is
+        recorded as a role='supervisor' agent_run (deduped per run+rule). The
+        background loop runs this automatically; this route is the manual kick."""
+        from fastapi.responses import JSONResponse
+
+        from studio.supervisor_fleet import patrol_once
+
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        summary = await asyncio.to_thread(patrol_once, tenant_id, dsn=get_dsn())
+        return JSONResponse(summary)
+
+    @app.on_event("startup")
+    async def _start_supervisor_patrol():  # noqa: ANN202
+        """The supervisor's continuous loop (initech pattern): patrol every
+        SUPERVISOR_PATROL_SECONDS (default 60; 0 disables). Observation-only —
+        corrections still go through the closed directive set."""
+        from studio.supervisor_fleet import start_patrol_loop
+
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        app.state._supervisor_patrol_task = asyncio.create_task(
+            start_patrol_loop(tenant_id, dsn=get_dsn())
+        )
 
     @app.post("/studio/campaign/{run_id}/send-eligible")
     async def studio_campaign_send_eligible_route(run_id: str, request: Request):  # noqa: ANN202

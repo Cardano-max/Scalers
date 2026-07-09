@@ -225,11 +225,13 @@ def review_run_coherence(
     tenant_id: str,
     *,
     dsn: str | None = None,
+    llm: bool = True,
 ) -> dict[str, Any]:
     """The supervisor's audit of a run's internal coherence, from the agents' REAL
     recorded outputs. Deterministic rules first; one policy-clamped LLM read on top
-    when configured. Returns an honest verdict + suggested directive(s) — it never
-    applies anything itself."""
+    when configured (``llm=False`` skips it — the patrol loop runs rules-only so a
+    background sweep never spends tokens). Returns an honest verdict + suggested
+    directive(s) — it never applies anything itself."""
     outputs = _latest_outputs(run_id, dsn)
     findings: list[dict[str, str]] = []
 
@@ -294,7 +296,7 @@ def review_run_coherence(
     }
 
     # Optional LLM read (policy-clamped) — only when a key is configured; honest skip otherwise.
-    if os.environ.get("ANTHROPIC_API_KEY") and outputs.get("strategist"):
+    if llm and os.environ.get("ANTHROPIC_API_KEY") and outputs.get("strategist"):
         try:
             from pydantic import BaseModel
 

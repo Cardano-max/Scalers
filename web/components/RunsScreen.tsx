@@ -11,6 +11,7 @@ import { Skeleton, EmptyState, ErrorState } from './states';
 import { WORKER_COLOR } from '@/lib/tokens';
 import type { Run, CampaignSpec } from '@/lib/data/models';
 import { SpanTree } from './trace/SpanTree';
+import { FleetBoard } from './studio/FleetBoard';
 import { SpecMarkdown } from './SpecMarkdown';
 import { resolveSelectedId, isDeepLinkHit } from '@/lib/trace-select';
 import { useTraceArrival } from '@/lib/useTraceArrival';
@@ -98,6 +99,14 @@ export function RunsScreen() {
           <span style={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: '#A8A299', letterSpacing: '0.7px' }}>WORKFLOW RUNS</span>
           <span style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: '#A8A299' }}>durable · checkpointed · exactly-once</span>
         </div>
+
+        {/* Live agent fleet (supervisor patrol data) — only shows in-flight runs. */}
+        <FleetBoard
+          onOpenRun={(rid) => {
+            setSelectedRunId(rid);
+            setOpenEventIndex(null);
+          }}
+        />
 
         {/* Mandatory async states — never a blank canvas. */}
         {runs.loading && runs.data === undefined && <Skeleton rows={5} label="Loading runs…" />}
