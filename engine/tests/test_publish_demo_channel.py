@@ -131,3 +131,31 @@ def test_sandbox_exemption_does_not_weaken_the_real_send_gate(patched_store, mon
     patched_store(_pending(id="act_demo2"))
     out = approve_and_publish("act_demo2", connectors={})
     assert out.status == "sent" and out.outcome_label == "Delivered (sandbox)"
+
+
+def test_sandbox_delivery_tenant_redirects_email_to_sandbox(patched_store, monkeypatch):
+    """A designated demo tenant's EMAIL action executes on the sandbox (keeps its real
+    email copy) — the approve->deliver loop closes with no provider, even for a
+    recipient the test-mode gate would otherwise block."""
+    monkeypatch.setenv("SANDBOX_DELIVERY_TENANTS", "demo_studio")
+    monkeypatch.setattr(
+        "tenants.store.check_send_allowed", lambda t, r, dsn=None: (False, "blocked")
+    )
+    patched_store(_pending(id="act_e1", channel="email", tenant_id="demo_studio"))
+    out = approve_and_publish("act_e1", connectors={})  # no gmail connector needed
+
+    assert out.status == "sent"
+    assert out.outcome_label == "Delivered (sandbox)"
+    assert out.deep_link.startswith("sandbox://demo/")
+
+
+def test_redirect_is_opt_in_untargeted_tenant_still_gated(patched_store, monkeypatch):
+    """Without the tenant in SANDBOX_DELIVERY_TENANTS, an email action is NOT
+    redirected — it goes through the real path and the test-mode gate still applies."""
+    monkeypatch.delenv("SANDBOX_DELIVERY_TENANTS", raising=False)
+    monkeypatch.setattr(
+        "tenants.store.check_send_allowed", lambda t, r, dsn=None: (False, "blocked")
+    )
+    patched_store(_pending(id="act_e2", channel="email", tenant_id="demo_studio"))
+    with pytest.raises(publish.TestModeSendBlockedError):
+        approve_and_publish("act_e2", connectors={})
