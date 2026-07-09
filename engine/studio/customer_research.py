@@ -399,13 +399,27 @@ def _llm_copy_enabled() -> bool:
     return bool(os.environ.get("ANTHROPIC_API_KEY"))
 
 
-def _research_enabled(deep_research: bool | None) -> bool:
-    """Deep per-studio web research (Firecrawl) is OFF by default — it makes live
-    egress and is gated behind an explicit opt-in (``deep_research=True`` or the
-    ``STUDIO_DEEP_RESEARCH`` env flag). With no Firecrawl key wired it degrades to
-    honest-empty regardless."""
-    if deep_research is not None:
-        return bool(deep_research)
+def _research_enabled(
+    deep_research: bool | None, research_depth: str | None = None,
+) -> bool:
+    """Deep per-lead web research (Firecrawl) is OFF by default — it makes live
+    egress and is gated behind an explicit opt-in. Opt-ins, in order:
+
+    * ``deep_research=True`` (the interview's yes/no question), or
+    * ``research_depth == "deep"`` (the interview's light/standard/deep question —
+      the operator asked for deep homework on each person), or
+    * the ``STUDIO_DEEP_RESEARCH`` env flag.
+
+    An EXPLICIT ``deep_research=False`` (the operator said no) always wins — a
+    later "deep" depth answer never overrides a stated opt-out into paid egress.
+    Backward compatible: ``_research_enabled(x)`` behaves exactly as before. With
+    no Firecrawl key wired it degrades to honest-empty regardless."""
+    if deep_research is False:
+        return False
+    if deep_research is True:
+        return True
+    if (research_depth or "").strip().lower() == "deep":
+        return True
     return _env_flag("STUDIO_DEEP_RESEARCH", False)
 
 
@@ -1422,6 +1436,7 @@ def build_outreach_draft(
     plan_channels: list[str] | None = None,
     tenant_id: str | None = None,
     deep_research: bool | None = None,
+    research_depth: str | None = None,
     research: list[dict[str, Any]] | None = None,
     profile: Any = None,
     offer: Any = None,
@@ -1441,8 +1456,9 @@ def build_outreach_draft(
     first-party persona rows / cite-only verified research) and is explicitly
     forbidden from asserting any unknown specific about the real recipient studio.
     With no Anthropic key it degrades to a deterministic honest draft; with no
-    Firecrawl key (or ``deep_research`` off) the bundle simply carries no research —
-    never a fabricated fact.
+    Firecrawl key (or research not opted in — see :func:`_research_enabled`; either
+    ``deep_research=True`` or the interview's ``research_depth="deep"`` enables it)
+    the bundle simply carries no research — never a fabricated fact.
 
     Sync-callable (runs inside ``asyncio.to_thread`` today); the cell's ``run_sync``
     bridges to the async agent internally. Returns the SAME contract
@@ -1496,7 +1512,9 @@ def build_outreach_draft(
     # Resolve research up front so the angle can prefer this lead's verified public
     # positioning (its strongest differentiator) when one exists.
     if research is None and ch in ("gmail", "email") and _llm_copy_enabled():
-        research = research_studio(facts, enabled=_research_enabled(deep_research))
+        research = research_studio(
+            facts, enabled=_research_enabled(deep_research, research_depth)
+        )
     angle = _choose_angle(facts, research, profile=profile, offer=offer)
     why_different = _angle_rationale(angle, facts, research, name)
     grounding.append(f"angle={angle['key']}")
@@ -1532,7 +1550,9 @@ def build_outreach_draft(
             brand_voice_context, approved_claims = resolve_brand_voice(tenant_id)
             # Research already resolved above for the angle; only fetch if still unset.
             if research is None:
-                research = research_studio(facts, enabled=_research_enabled(deep_research))
+                research = research_studio(
+                    facts, enabled=_research_enabled(deep_research, research_depth)
+                )
             from cells.copywriter import build_copywriter_email_cell
 
             cell = build_copywriter_email_cell(
