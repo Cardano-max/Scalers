@@ -1306,6 +1306,7 @@ def _execute_provided_leads_sync(
         lookup_leads,
         research_studio,
     )
+    from cells.identity_guard import foreign_identity_violations
     from cells.offer_guard import offer_violations
     from cells.personalization_guard import facts_view as personalization_facts_view
     from cells.personalization_guard import personalization_violations
@@ -1644,6 +1645,17 @@ def _execute_provided_leads_sync(
         except Exception as exc:  # honest per-row skip; never a crash or a fake draft
             skipped.append({"row": _row, "lead": facts.get("name") or cust_id,
                             "reason": f"draft generation failed: {type(exc).__name__}"})
+            continue
+
+        # FOREIGN-IDENTITY GATE (wwy.7 r8, the smoking gun): a draft staged for this
+        # tenant must never carry ANOTHER tenant's identity ("it's Rae from Ladies
+        # First" on skindesign customers). Deterministic post-generation net — skips
+        # with the concrete foreign tenant named.
+        _id_viol = foreign_identity_violations(
+            f"{draft.get('subject') or ''}\n{draft.get('draft') or ''}", tenant_id)
+        if _id_viol:
+            skipped.append({"row": _row, "lead": facts.get("name") or cust_id,
+                            "reason": _id_viol[0]})
             continue
 
         # OFFER ANTI-FABRICATION (65w.14, the ARTLOVER audit): every offer/discount
@@ -2317,6 +2329,9 @@ def _research_and_stage_sync(
     a campaign memory so the Host remembers this outreach next run. NOTHING is sent."""
     from actions.store import ensure_schema, record_pending_action
 
+    from cells.identity_guard import foreign_identity_violations
+    from cells.personalization_guard import facts_view as personalization_facts_view
+    from cells.personalization_guard import personalization_violations
     from memory import MemoryStore
     from studio.customer_research import (
         build_outreach_draft,
@@ -2339,11 +2354,33 @@ def _research_and_stage_sync(
 
     goal = plan.goal or "win back lapsed clients"
     staged: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
     for facts in leads:
         draft = build_outreach_draft(
             facts, goal=goal, tenant_id=tenant_id, plan_channels=plan.channels or None
         )
         cust_id = facts["customer_id"]
+
+        # ANTI-FABRICATION GATE (wwy.7 r8, the smoking gun): this path staged three
+        # skindesign drafts signed "it's Rae from Ladies First" that implied a
+        # relationship the DB cannot back — it was the ONE staging loop with no
+        # guards. Same net as the provided-leads loop: a draft that asserts another
+        # tenant's identity or an ungrounded personalization/relationship claim is
+        # SKIPPED with a concrete reason; it never reaches the pending queue.
+        _copy_text = f"{draft.get('subject') or ''}\n{draft.get('draft') or ''}"
+        _id_viol = foreign_identity_violations(_copy_text, tenant_id)
+        if _id_viol:
+            skipped.append({"lead": facts.get("name") or cust_id,
+                            "reason": _id_viol[0]})
+            continue
+        _pers_viol = personalization_violations(
+            _copy_text, personalization_facts_view(facts)
+        )
+        if _pers_viol:
+            skipped.append({"lead": facts.get("name") or cust_id,
+                            "reason": f"fake personalization: {_pers_viol[0]}"})
+            continue
+
         action_id = record_pending_action(
             tenant_id=tenant_id,
             decision_id=None,
@@ -2410,6 +2447,7 @@ def _research_and_stage_sync(
         "n_drafts": len(staged),
         "channels": channels,
         "staged": staged,
+        "skipped": skipped,
         "not_found": max(0, requested - len(leads)) if emails else 0,
     }
 
@@ -2442,10 +2480,18 @@ async def research_and_stage_leads(
     )
     nf = summary.get("not_found", 0)
     nf_note = f" {nf} requested lead(s) were not in the DB (honest miss)." if nf else ""
+    skips = summary.get("skipped") or []
+    skip_note = ""
+    if skips:
+        skip_lines = "; ".join(f"{s['lead']}: {s['reason']}" for s in skips[:5])
+        skip_note = (
+            f" {len(skips)} draft(s) were REFUSED by the anti-fabrication gate and "
+            f"NOT staged — {skip_lines}."
+        )
     return (
         f"Researched {summary['n_leads']} lead(s) and staged {summary['n_drafts']} "
         f"personalized PENDING outreach draft(s) across {', '.join(summary['channels']) or 'n/a'} "
-        f"— all HELD in the Review Queue, nothing sent.{nf_note} {lead_lines}"
+        f"— all HELD in the Review Queue, nothing sent.{nf_note}{skip_note} {lead_lines}"
     )
 
 

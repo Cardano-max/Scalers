@@ -431,8 +431,9 @@ _SEED_NAME = "Ladies First Brand & Campaign Playbook"
 # by another studio's playbook. Seeding it into skindesign's document store would make
 # the Ladies First voice retrievable under the real client's name. Gate to this
 # allowlist (r8: kill ladies8391 fixture bleed — seed_tenant_documents('skindesign')
-# returns None).
-_FIXTURE_SEED_TENANTS = frozenset({"ladies8391", "ink-studio"})
+# returns None). "demo" is the studio host's default STUDIO_TENANT_ID (agui) — a
+# demo sandbox, not a real client — so its first-run doc seeding keeps working.
+_FIXTURE_SEED_TENANTS = frozenset({"ladies8391", "ink-studio", "demo"})
 
 
 def _seed_doc_id(tenant_id: str) -> str:

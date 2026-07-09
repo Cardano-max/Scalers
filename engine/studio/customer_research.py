@@ -820,7 +820,25 @@ def _build_email_prompt(
     else:
         research_lines = "- (none — no verified research available for this studio)"
 
+    # Prior-relationship evidence: real history on file (tattoos / lifecycle / win-back
+    # persona signal) or a real prior conversation (the grounded warm-lead profile).
+    # This gates BOTH the goal line and the first-contact rule below.
+    has_relationship = bool(tattoos or lifecycle or win_back or warm)
+
     goal_line = (goal or "open a genuine conversation").strip()
+    # SMOKING-GUN FIX (wwy.7 r8): the operator's INTERNAL goal ("win back lapsed
+    # clients") was spliced verbatim into the prompt for leads whose row carries
+    # name+email ONLY — telling the model the recipient is a lapsed client, so it
+    # fabricated an implied history ("work with you again") the DB cannot back. When
+    # there is NO prior-relationship evidence, a relationship-implying goal is
+    # reframed as an honest first contact; the campaign-level goal stays internal.
+    if not has_relationship and re.search(
+        r"win[- ]?back|re-?engage|lapsed|return|reactivat", goal_line, re.IGNORECASE
+    ):
+        goal_line = (
+            "invite them to start a conversation (our records show NO prior "
+            "relationship with this person — write it as a genuine first contact)"
+        )
 
     if angle["generic"]:
         angle_block = [
@@ -914,6 +932,15 @@ def _build_email_prompt(
         "it at all — a deterministic guard rejects any draft that fakes this.",
         "- Everything you say about YOURSELF (the sender) must come from the brand "
         "voice's approved claims above — nothing else.",
+        # wwy.7 r8 (smoking gun): with NO prior-relationship evidence on file, the copy
+        # must read as a genuine first contact — never a fabricated reunion.
+        *([] if has_relationship else [
+            "- OUR RECORDS SHOW NO PRIOR RELATIONSHIP with this person: no past visit, "
+            "no tattoo, no conversation. This is a FIRST contact. Do NOT imply any "
+            "shared history — no 'again', no 'welcome back', no 'it's been a while', "
+            "no 'work with you again'. A deterministic guard rejects any draft that "
+            "implies a relationship we cannot substantiate.",
+        ]),
         f"- Reason for reaching out / goal: {goal_line}.",
         "",
         "Write a specific honest subject and a short plain-text body. Include ONE clear "
