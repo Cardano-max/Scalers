@@ -613,3 +613,107 @@ def test_qa_dossier_never_pairs_stale_outcome_with_newer_outreach() -> None:
     # would misattribute; the block stays honestly empty instead.
     assert not d.last_outcome.present
     assert d.last_outcome_verbatim == ""
+
+
+# ── round-3: class-level classifier regression (adversarial re-QA, not string-overfit) #
+# Every case below is a CLASS representative (negation contractions, positive-context
+# objection words, leading/informal interrogatives, booked-elsewhere/other-thing, filler
+# idioms, mixed signals, true positives). Labels adjudicated against the documented rules.
+
+_CLASS_CASES = {
+    # negation contractions of a booking -> NOT booked
+    "I wouldn't book it right now": "replied",
+    "i couldnt book right now": "replied",
+    "I shouldn't book it yet": "replied",
+    "no way i'd book it today": "replied",
+    "dont book me just yet, wanna see a mockup first": "replied",
+    # positive idiom must NOT negate a real booking
+    "I can't wait, book me in": "booked",
+    "cant wait! book me in for friday": "booked",
+    "no worries, book me in": "booked",
+    "not gonna lie, book me in asap": "booked",
+    # positive-context objection words -> NOT an objection
+    "I can afford it, book me in": "booked",
+    "not expensive at all, lets book": "booked",
+    "it isn't too pricey, book me": "booked",
+    "first tattoo and im so excited, book me in": "booked",
+    "money is no issue, sign me up": "booked",
+    # leading / informal interrogatives -> replied (buying inquiry)
+    "Can I book it right now": "replied",
+    "how much to book me in": "replied",
+    "is booking with you gonna be pricey": "replied",
+    "u free to book me in friday or nah": "replied",
+    "you got space to book me in tomorrow": "replied",
+    "is now a good time to book me in": "replied",
+    "can u book me in and do a payment plan": "replied",
+    # booked ELSEWHERE / something else -> NOT our conversion
+    "i booked with another studio last year": "replied",
+    "just booked my honeymoon so tattoos are on hold": "replied",
+    "got booked in for jury duty this month": "replied",
+    "just booked a session at the gym": "replied",
+    "just got my car booked in for its mot": "replied",
+    "im booked out with double shifts this week": "replied",
+    # true-positive bookings MUST still fire
+    "I am ready to book!": "booked",
+    "Yes please, book me in for Friday!": "booked",
+    "Book me in for Saturday, deposit sent!": "booked",
+    "I’d like to book for Friday": "booked",
+    "lock it in for next week": "booked",
+    "pencil me in for the 12th": "booked",
+    # true-positive objections MUST still fire
+    "I want to book but I cannot afford it right now": "objected:price",
+    "honestly too expensive for me right now": "objected:price",
+    "way outta my price range rn to be honest": "objected:price",
+    "i'm really nervous about the pain": "objected:trust",
+    "maybe later, not right now": "objected:timing",
+    "still not sure, on the fence": "objected:uncertainty",
+    "i'd need a payment plan for that": "objected:payment",
+    # neutral / inquiry -> replied
+    "Thanks, I'll have a look this evening.": "replied",
+    "How much is the deposit?": "replied",
+    "Maybe Friday works?": "replied",
+    "I'll pay the deposit tomorrow": "replied",
+}
+
+
+def test_classifier_class_level_regression() -> None:
+    from proactive.followup_source import classify_outcome
+    wrong = {t: (classify_outcome(t), exp) for t, exp in _CLASS_CASES.items()
+             if classify_outcome(t) != exp}
+    assert not wrong, "class-level classifier regressions: " + repr(wrong)
+
+
+def test_classifier_never_false_books_the_adversarial_corpus() -> None:
+    """Invariant: on the workflow's adversarial corpus, the deterministic floor must not
+    return 'booked' for any case the generator labeled non-booked — EXCEPT a small set of
+    documented UNBOUNDED semantic cases the LLM judge (not the floor) is responsible for.
+    Pins that no NEW false-booked creeps into the bounded classes."""
+    import json
+    import os
+
+    from proactive.followup_source import classify_outcome
+
+    path = os.path.join(os.path.dirname(__file__), "data",
+                        "adversarial_reply_corpus.json")
+    if not os.path.exists(path):
+        import pytest
+        pytest.skip("adversarial corpus asset not present")
+    corpus = json.load(open(path, encoding="utf-8"))
+    # Unbounded semantic residuals the floor cannot close (judge-owned); everything else
+    # in the corpus that is non-booked must NOT be classified booked by the floor.
+    judge_owned = {
+        "honestly ready to book but with the artist my mate recommended not you sorry",
+        "id like to book a week off work before i even think about tattoos",
+        "booked in already thanks, deposit paid and everything, went with a place closer to home",
+        "book me in, its not the price im worried about its the timing honestly",
+        "ok lets book, cant really afford it this month but ill make it work",
+        "book it book it book it, ok but real talk is it worth the money",
+    }
+    leaked = []
+    for x in corpus:
+        exp = (x.get("expected") or "").strip().lower()
+        t = x["text"]
+        if exp != "booked" and t.strip().lower() not in judge_owned:
+            if classify_outcome(t) == "booked":
+                leaked.append(t)
+    assert not leaked, f"NEW false-booked on bounded classes: {leaked}"

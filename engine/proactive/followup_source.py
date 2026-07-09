@@ -72,20 +72,40 @@ OUTREACH_KIND = "outreach"
 # --------------------------------------------------------------------------- #
 
 # BOOKING ACCEPTANCE — a first-person commitment to book WITH US, in the customer's own
-# words. Bare "i'm in" / "in" are deliberately EXCLUDED (they fire on "interested",
-# "I'm in Dallas"); an ambiguous acceptance is safer left as ``replied``.
+# words. Bare "i'm in" / "in" are EXCLUDED (they fire on "interested"/"I'm in Dallas").
+# The ambiguous PAST-TENSE narratives "i booked" / "just booked" / "booked in" are also
+# EXCLUDED (round-3 adversarial): they fire on "i booked my honeymoon", "booked in for
+# jury duty", "just booked the gym" — an UNBOUNDED class a phrase-matcher can't enumerate.
+# A real conversion uses an imperative directed at us ("book me in") or a deposit signal;
+# the past-tense narrative is left to the LLM judge / ``replied`` (safe under-booking).
 _BOOKING_PHRASES: tuple[str, ...] = (
     "book me in", "book me", "ready to book", "i'd like to book", "id like to book",
     "i want to book", "want to book", "let's book", "lets book", "book it",
-    "i booked", "just booked", "booked in", "sign me up", "count me in",
-    "see you then", "see you on", "deposit sent", "deposit paid",
-    "paid the deposit", "sent the deposit", "confirm my appointment",
-    "appointment confirmed", "confirmed for",
+    "sign me up", "count me in", "pencil me in", "lock it in", "lock me in",
+    "see you then", "deposit sent", "deposit paid", "paid the deposit",
+    "sent the deposit", "confirm my appointment", "appointment confirmed",
 )
-# Negators that, immediately before a booking phrase, cancel it ("don't book it yet").
-_NEGATORS: tuple[str, ...] = (
-    "not", "dont", "don't", "cant", "can't", "cannot", "wont", "won't",
-    "never", "no", "isnt", "isn't", "wasnt", "wasn't",
+# COMPREHENSIVE negation lexicon — every common contraction + modal negative + bare
+# negator, so "wouldn't/couldn't/shouldn't book" (qa1 round-2) are caught, not just
+# "don't/can't". Negation is scoped to the CLAUSE the phrase sits in (see
+# ``_clause_negated``) so a positive idiom in a NEIGHBOURING clause ("I can't wait,
+# book me in") never cancels a real booking.
+_NEGATORS: frozenset[str] = frozenset({
+    "not", "no", "never", "none", "hardly", "barely", "without", "nor", "nope",
+    "cannot", "cant", "can't", "dont", "don't", "doesnt", "doesn't", "didnt",
+    "didn't", "wont", "won't", "wouldnt", "wouldn't", "couldnt", "couldn't",
+    "shouldnt", "shouldn't", "isnt", "isn't", "arent", "aren't", "wasnt", "wasn't",
+    "werent", "weren't", "aint", "ain't", "unlikely",
+})
+# Positive / FILLER idioms that CONTAIN a negator token but are NOT negations ("can't
+# wait" is excitement; "not gonna lie" is a filler). Their negator is neutralized so it
+# cannot cancel a following booking or suppress a real objection (round-3 adversarial).
+_POSITIVE_IDIOMS: tuple[str, ...] = (
+    "can't wait", "cant wait", "couldn't be happier", "couldnt be happier",
+    "can't say no", "cant say no", "no problem", "no doubt", "no worries",
+    "why not", "not gonna lie", "not going to lie", "cant lie", "can't lie",
+    "no way i'm missing", "no way im missing", "wouldn't you know",
+    "wouldnt you know", "no lie", "not gonna hold you",
 )
 # The booking is NOT ours when the reply says it happened elsewhere, or is a
 # schedule-is-full ("booked up with work") statement — not a conversion for us.
@@ -94,40 +114,69 @@ _BOOKED_ELSEWHERE: tuple[str, ...] = (
     "different artist", "someone else", "somewhere else", "with another", "elsewhere",
 )
 _BOOKED_BUSY: tuple[str, ...] = (
-    "with work", "all month", "booked up", "booked solid", "with meetings",
-    "so busy", "swamped", "full up",
+    "with work", "all month", "booked up", "booked out", "booked solid",
+    "with meetings", "so busy", "swamped", "full up", "double shift",
+    "double shifts", "jury duty", "smear test", "for its mot", "for an mot",
+)
+# NON-STUDIO booking objects — "i booked a flight / my dentist / a table" is a booking
+# of something ELSE, not a conversion for us. Bundled with the "elsewhere" suppressors so
+# the ambiguous past-tense "i booked" / "just booked" never counts one of these as ours.
+_BOOKED_OTHER_THING: tuple[str, ...] = (
+    "a flight", "flights", "a hotel", "the hotel", "a room", "a table", "a trip",
+    "a holiday", "a vacation", "an uber", "a cab", "a taxi", "a ticket", "tickets",
+    "a restaurant", "the restaurant", "my dentist", "the dentist", "a doctor",
+    "the doctor", "a car", "time off", "a meeting", "an appointment with",
+)
+# Question detection (principled, replaces a brittle opener list): a reply is an INQUIRY
+# — a buying/engagement signal, not a booking or an objection — when it ends with "?" OR
+# opens with a wh-word, OR opens with a question auxiliary IMMEDIATELY followed by a
+# subject pronoun ("can i", "do you", "is it", "would you"). The aux+pronoun requirement
+# keeps affirmations that start with an auxiliary ("will do, book me in"; "would love to
+# book") from being misread as questions.
+_WH_OPENER = re.compile(r"^(what|when|where|which|who|why|how)\b")
+_AUX_QUESTION = re.compile(
+    r"^(can|could|would|will|do|does|did|is|are|am|was|were|should|shall|have|has)\s+"
+    r"(i|we|you|u|it|they|there|that|he|she|this|these|ya)\b"
 )
 
 # OBJECTION (genuine resistance / blocker) phrases, curated for SINGLE replies — a real
 # hesitation, never an inquiry or a commitment. Ordered most-specific-first (payment >
-# price > timing > trust > uncertainty), aligned to the reason_history taxonomy. Bare
-# "maybe"/"might"/"budget"/"deposit"/"thinking" are EXCLUDED (they over-fire on single
-# replies: "Maybe Friday works?", "How much is the deposit?", "I'll pay the deposit").
+# price > timing > trust > uncertainty). PRINCIPLE (qa1 round-2): every phrase here must
+# read as resistance ON ITS OWN. Bare ambiguous tokens are EXCLUDED because they fire in
+# POSITIVE context: "afford" (dropped — "can afford" is positive; only the explicit
+# "can't/cannot/couldn't afford" negative forms stay), "first tattoo" (dropped — a
+# first-timer can be excited, not only nervous), plus the earlier drops
+# ("maybe"/"might"/"budget"/"deposit"/"thinking"). "expensive"/"pricey" stay but are
+# CLAUSE-NEGATION-guarded so "not expensive" never fires.
 _REPLY_OBJECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (OBJECTION_PAYMENT, (
         "payment plan", "pay it off", "installment", "instalment", "split the cost",
-        "split it", "afterpay", "klarna", "financing", "pay later", "pay in install",
-        "can i pay it off", "spread the cost",
+        "split it up", "afterpay", "klarna", "financing", "pay later",
+        "pay in install", "spread the cost",
     )),
     (OBJECTION_PRICE, (
-        "too expensive", "too much", "a bit much", "bit pricey", "pricey",
-        "out of my range", "out of my budget", "cannot afford", "can't afford",
-        "cant afford", "afford", "on a budget", "tight budget", "short on budget",
-        "steep", "save up", "too costly", "expensive", "cheaper",
+        "too expensive", "too much", "too costly", "too pricey", "a bit much",
+        "bit pricey", "pricey", "expensive", "out of my range", "out of my budget",
+        "out of budget", "out of my price range", "price range", "outta my",
+        "cannot afford", "can't afford", "cant afford", "couldn't afford",
+        "couldnt afford", "on a budget", "tight budget", "short on budget", "steep",
+        "save up", "cheaper", "costs too much", "found someone cheaper",
     )),
     (OBJECTION_TIMING, (
         "maybe later", "not right now", "some other time", "down the road",
         "hold off", "put it off", "next month", "next year", "when things settle",
         "circle back", "reach out later", "later in the year", "after the holidays",
+        "not this month", "too busy right now",
     )),
     (OBJECTION_TRUST, (
-        "first tattoo", "nervous", "scared", "worried", "hesitant",
-        "second thoughts", "is it safe", "is it clean", "hygiene",
+        "nervous", "scared", "worried", "hesitant", "second thoughts",
+        "is it safe", "is it clean", "does it hurt", "will it hurt", "hygiene",
+        "afraid",
     )),
     (OBJECTION_UNCERTAINTY, (
         "not sure", "unsure", "still deciding", "still thinking", "on the fence",
         "haven't decided", "havent decided", "don't know if", "dont know if",
-        "not certain", "undecided", "need to think",
+        "not certain", "undecided", "need to think", "have to think",
     )),
 )
 
@@ -148,50 +197,101 @@ def _normalize_reply(text: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
-def _has_phrase(norm: str, phrase: str) -> bool:
-    """Word-boundary phrase match on already-normalized text — so ``book it`` does NOT
-    fire inside ``don't book it``'s… wait, that IS a match; the negation guard handles
-    that. What this stops is ``see you on`` firing inside ``see you online`` and
-    ``i'm in`` firing inside ``interested`` (the qa1 false-BOOKED bug)."""
-    return re.search(r"\b" + re.escape(phrase) + r"\b", norm) is not None
+# Clause boundaries: sentence punctuation + coordinating/contrastive conjunctions.
+# Negation does not cross these, so "I can't wait, book me in" keeps "book me in"
+# un-negated ("can't wait" is in a different clause).
+_CLAUSE_SPLIT = re.compile(
+    r"[.;!?,]|\bbut\b|\band\b|\bso\b|\bthen\b|\bthough\b|\bhowever\b|\byet\b"
+)
 
 
-def _is_negated(norm: str, phrase: str) -> bool:
-    """True when a booking phrase is immediately preceded (within ~3 tokens) by a
-    negator — ``don't book it yet`` is not a booking."""
-    for m in re.finditer(r"\b" + re.escape(phrase) + r"\b", norm):
-        prefix_tokens = norm[: m.start()].split()
-        if any(tok in _NEGATORS for tok in prefix_tokens[-3:]):
-            return True
-    return False
+def _clauses(norm: str) -> list[str]:
+    return [c.strip() for c in _CLAUSE_SPLIT.split(norm) if c.strip()]
+
+
+def _has_phrase(text: str, phrase: str) -> bool:
+    """Word-boundary phrase match — so ``see you on`` does NOT fire inside ``see you
+    online`` and ``i'm in`` does NOT fire inside ``interested`` (the qa1 false-BOOKED
+    bug). ``\\b`` around an apostrophe still anchors ("can't afford")."""
+    return re.search(r"\b" + re.escape(phrase) + r"\b", text) is not None
+
+
+def _clause_negated(clause: str, phrase: str) -> bool:
+    """True when ``phrase`` is negated within its own clause — a negator token remains in
+    the clause once the phrase and any positive/filler idioms are removed. Removing the
+    phrase first means a phrase that CONTAINS a negator ("not sure", "can't afford") does
+    not self-negate, while catching negation BEFORE ("wouldn't book it") AND AFTER ("a
+    payment plan isn't needed") the phrase (round-3 adversarial). Clause-scoping stops a
+    positive idiom in a neighbouring clause from cancelling a real booking."""
+    scrubbed = clause
+    for idiom in _POSITIVE_IDIOMS:
+        scrubbed = scrubbed.replace(idiom, " ")
+    # Remove the phrase occurrences so their own negator tokens are not counted.
+    scrubbed = re.sub(r"\b" + re.escape(phrase) + r"\b", " ", scrubbed)
+    return any(tok.strip(".,!?;'\"") in _NEGATORS for tok in scrubbed.split())
+
+
+# Informal / indirect question markers a wh/aux+pronoun opener misses ("u free to...",
+# "you got space...", "is now a good time...", "...or nah") — still inquiries.
+_INFORMAL_Q_OPENERS: tuple[str, ...] = (
+    "you got", "u got", "you free", "u free", "you around", "u around",
+    "is now", "any chance", "wanna know", "any openings", "any availability",
+    "got space", "got any", "hows", "how's", "whens", "when's", "you have time",
+    "you have any",
+)
+_INFORMAL_Q_TAILS: tuple[str, ...] = ("or nah", "or not", "or what", "or no")
+# "is booking gonna be pricey", "will it be expensive" — a leading auxiliary + a future
+# "gonna"/"going to" construction is a cost/availability QUESTION, not a statement.
+_AUX_FUTURE_Q = re.compile(
+    r"^(is|are|was|were|will|would|can|could|do|does|did|should|shall)\b.*"
+    r"\b(gonna|going to)\b"
+)
+
+
+def _is_inquiry(norm: str) -> bool:
+    """A reply that is a question is a buying / engagement signal, not a booking or an
+    objection on its own. Detected by a trailing ``?``; a leading wh-word; a leading
+    question-auxiliary+pronoun ("can i book it right now" — the aux+pronoun rule avoids
+    misreading affirmations "will do"/"would love to book" as questions); an informal
+    indirect opener ("u free to...", "is now a good time..."); or an informal question
+    TAIL ("...friday or nah")."""
+    if norm.endswith("?"):
+        return True
+    if _WH_OPENER.match(norm) or _AUX_QUESTION.match(norm) or _AUX_FUTURE_Q.match(norm):
+        return True
+    if any(norm.startswith(op) for op in _INFORMAL_Q_OPENERS):
+        return True
+    return any(norm.endswith(t) for t in _INFORMAL_Q_TAILS)
 
 
 def _is_booking_acceptance(norm: str) -> bool:
-    """A genuine first-person booking commitment to US — word-boundary matched, not
-    negated, not a booking elsewhere, not a schedule-is-full statement."""
-    if any(_has_phrase(norm, p) for p in _BOOKED_ELSEWHERE + _BOOKED_BUSY):
+    """A genuine first-person booking commitment to US: a booking phrase that appears in
+    some clause NOT negated within that clause, and the reply is not a booking-elsewhere
+    / non-studio / schedule-is-full statement. Clause-scoped negation catches every
+    contraction ("wouldn't/couldn't/shouldn't book") without falsely negating "I can't
+    wait, book"."""
+    if any(_has_phrase(norm, p)
+           for p in _BOOKED_ELSEWHERE + _BOOKED_BUSY + _BOOKED_OTHER_THING):
         return False
+    clauses = _clauses(norm)
     for p in _BOOKING_PHRASES:
-        if _has_phrase(norm, p) and not _is_negated(norm, p):
-            return True
+        for clause in clauses:
+            if _has_phrase(clause, p) and not _clause_negated(clause, p):
+                return True
     return False
 
 
 def _reply_objection(norm: str) -> str | None:
-    """The objection TYPE a single reply genuinely voices, or None. Curated resistance
-    phrases only (no inquiry/commitment words), most-specific-first."""
+    """The objection TYPE a single reply genuinely voices, or None. A resistance phrase
+    counts only when it appears in a clause where it is NOT negated ("not expensive" is
+    not a price objection), most-specific type first."""
+    clauses = _clauses(norm)
     for otype, phrases in _REPLY_OBJECTIONS:
-        if any(_has_phrase(norm, p) for p in phrases):
-            return otype
+        for p in phrases:
+            for clause in clauses:
+                if _has_phrase(clause, p) and not _clause_negated(clause, p):
+                    return otype
     return None
-
-
-def _is_inquiry(norm: str) -> bool:
-    """A reply that is a question is a buying/engagement signal, not a booking or an
-    objection on its own ("Can I book right now?", "How much is the deposit?"). We treat
-    a trailing ``?`` as the inquiry marker — conservative, and it kept the qa1 price/
-    timing INQUIRIES from being recorded as objections."""
-    return norm.endswith("?")
 
 
 @dataclass(frozen=True)
@@ -211,29 +311,155 @@ def classify_outcome(text: str) -> str:
     """Deterministically classify one verbatim customer reply into the outcome
     vocabulary — ``booked | objected:<type> | replied`` — for a SINGLE inbound reply.
 
-    Order (qa1-hardened): a genuine RESISTANCE blocker wins first, so
-    "I want to book but I cannot afford it right now" is ``objected:price`` (the signal
-    angle-rotation needs), NOT ``booked``. Otherwise a real, un-negated,
-    not-elsewhere booking acceptance in a non-question reply is ``booked``. Otherwise
-    ``replied``. Inquiries ("How much is the deposit?", "Can I book right now?") and
-    commitments ("I'll pay the deposit tomorrow") fall to ``replied`` — a human still
-    sees them; we never write a confident wrong label that poisons future runs."""
+    Principled (qa1 round-2): clause-scoped negation (catches every contraction
+    "wouldn't/couldn't/shouldn't book", never falsely negating "I can't wait, book me
+    in"), leading+trailing interrogative detection, and objection phrases tightened to
+    genuine resistance so a POSITIVE context ("I can afford it, book me in";
+    "not expensive, let's book"; "first tattoo, excited, book me in") is NOT read as an
+    objection. It errs toward ``replied`` over a confident wrong label — a human still
+    sees the reply, and a poisoned memory (false ``booked`` routes a warm lead off
+    outreach) is silent and permanent.
+
+    Order: an INQUIRY (a question — "How much is the deposit?", "Can I book it right
+    now") is a buying signal, not a booking or an objection -> ``replied``. Else a
+    genuine RESISTANCE blocker wins ("book but can't afford" -> ``objected:price``, the
+    signal angle-rotation needs). Else an un-negated, not-elsewhere booking acceptance
+    -> ``booked``. Else ``replied``."""
     clean = (text or "").strip()
     if not clean:
         raise ValueError("reply text is empty")
     norm = _normalize_reply(clean)
 
-    # 1) Genuine resistance overrides an accompanying booking word ("book but can't
-    #    afford"). Curated blockers only — inquiries/commitments do not fire here.
+    # 1) A question is an inquiry (buying/engagement signal) — never a booking or an
+    #    objection on its own. Gate FIRST so a price/timing question does not read as
+    #    resistance and a "Can I book ...?" does not read as a conversion.
+    if _is_inquiry(norm):
+        return OUTCOME_REPLIED
+
+    # 2) Genuine, non-negated resistance overrides an accompanying booking word
+    #    ("book but can't afford"). Curated blockers only; positive/negated context
+    #    ("can afford", "not expensive") does not fire here.
     blocker = _reply_objection(norm)
     if blocker is not None:
         return f"{OUTCOME_OBJECTED_PREFIX}{blocker}"
 
-    # 2) A booking acceptance (not a question, not negated, not booked-elsewhere/busy).
-    if not _is_inquiry(norm) and _is_booking_acceptance(norm):
+    # 3) A genuine booking acceptance (not negated in its clause, not booked-elsewhere).
+    if _is_booking_acceptance(norm):
         return OUTCOME_BOOKED
 
     return OUTCOME_REPLIED
+
+
+# --------------------------------------------------------------------------- #
+# LLM-JUDGE fallback (operator-authorized escalation). The deterministic classifier
+# above is the SAFE, hermetic FLOOR — it never false-books on a BOUNDED class. But a
+# single reply can book an UNBOUNDED "something else" ("i booked my honeymoon", "booked
+# in for jury duty", "went with a place closer to home") that no phrase list can
+# enumerate. When an LLM is available, a temp-0 judge adjudicates the reply with real
+# semantic understanding; on ANY failure the deterministic floor stands. Mirrors the
+# psych_profile deterministic-floor + optional-LLM-through-a-gate pattern. Off by default
+# in keyless/hermetic runs (tests) — those exercise the deterministic floor.
+# --------------------------------------------------------------------------- #
+_VALID_OBJECTION_TYPES: frozenset[str] = frozenset(
+    {OBJECTION_PRICE, OBJECTION_PAYMENT, OBJECTION_TIMING, OBJECTION_TRUST,
+     OBJECTION_UNCERTAINTY}
+)
+
+
+def _reply_judge_schema():
+    from pydantic import BaseModel, Field
+
+    class ReplyJudgeOut(BaseModel):
+        """The structured verdict the reply-judge cell returns."""
+
+        outcome: str = Field(
+            description="one of: booked | objected:price | objected:payment | "
+            "objected:timing | objected:trust | objected:uncertainty | replied"
+        )
+        confidence: float = 0.0
+        reason: str = ""
+
+    return ReplyJudgeOut
+
+
+# Bound at import so the cell schema is a stable class (pydantic model identity).
+ReplyJudgeOut = _reply_judge_schema()
+
+
+def _reply_judge_enabled() -> bool:
+    """Whether to consult the LLM judge. Honors ``$SCALERS_INBOUND_LLM`` (1/0); else auto
+    (on iff an Anthropic key is present). Keyless CI / tests -> off (deterministic floor)."""
+    override = os.environ.get("SCALERS_INBOUND_LLM")
+    if override is not None:
+        return override.strip().lower() in ("1", "true", "yes", "on")
+    return bool(os.environ.get("ANTHROPIC_API_KEY"))
+
+
+def _valid_outcome(label: str | None) -> bool:
+    """A judge label is usable only if it is exactly in the outcome vocabulary."""
+    if not label:
+        return False
+    if label in (OUTCOME_BOOKED, OUTCOME_REPLIED, OUTCOME_NO_RESPONSE):
+        return True
+    if label.startswith(OUTCOME_OBJECTED_PREFIX):
+        return label[len(OUTCOME_OBJECTED_PREFIX):] in _VALID_OBJECTION_TYPES
+    return False
+
+
+def _build_reply_judge_cell():
+    from cells.base import Cell
+    from cells.validators import ValidatorBank
+
+    instructions = (
+        "You classify ONE inbound reply a customer sent a TATTOO STUDIO after the studio's "
+        "outreach. Output EXACTLY one outcome label:\n"
+        "  booked | objected:price | objected:payment | objected:timing | "
+        "objected:trust | objected:uncertainty | replied\n\n"
+        "DEFINITIONS:\n"
+        "- booked = the customer commits to booking an appointment WITH THIS studio (a "
+        "clear yes / 'book me in' / deposit sent). It is NOT booked if they booked "
+        "something ELSE (a flight, the gym, jury duty, ANOTHER studio or artist), if they "
+        "are ASKING a question, if they are only interested/excited without committing, or "
+        "if the booking is negated ('wouldn't book').\n"
+        "- objected:<type> = a genuine blocker they STATE (not ask): price (too expensive / "
+        "can't afford), payment (need a plan), timing (maybe later / not now), trust "
+        "(nervous / scared / does it hurt), uncertainty (not sure / still deciding).\n"
+        "- replied = everything else: questions/inquiries (including price questions — a "
+        "buying signal, not an objection), ambiguous, neutral, positive-but-no-commitment.\n\n"
+        "SAFETY (critical): a false 'booked' PERMANENTLY removes a warm lead from outreach "
+        "via a durable memory. When genuinely uncertain, choose 'replied'. If a booking "
+        "word AND a real blocker both appear, prefer the objection. NEVER invent a "
+        "commitment or a blocker the words do not show."
+    )
+    return Cell(
+        name="inbound_reply_judge",
+        schema=ReplyJudgeOut,
+        instructions=instructions,
+        validators=ValidatorBank(validators=()),
+    )
+
+
+def classify_reply(text: str, *, use_llm: bool | None = None) -> str:
+    """Classify one inbound reply — the deterministic floor, refined by the LLM judge
+    when available. ``classify_outcome`` (pure/deterministic) is always the fallback, so
+    a keyless run, a judge error, or an off-vocabulary judge label all resolve to the
+    safe deterministic label. Raises ``ValueError`` on empty text (before any judge)."""
+    deterministic = classify_outcome(text)  # raises on empty; the safe floor
+    do_llm = _reply_judge_enabled() if use_llm is None else use_llm
+    if not do_llm:
+        return deterministic
+    try:
+        cell = _build_reply_judge_cell()
+        out = cell.run_sync(f"CUSTOMER REPLY:\n{text.strip()}")
+        label = (getattr(out, "outcome", "") or "").strip().lower()
+        if _valid_outcome(label):
+            # The judge is the more capable classifier for the ambiguous/semantic cases
+            # the phrase-matcher cannot close; a valid label wins. Its own safety prompt
+            # biases it toward 'replied' and away from false 'booked'.
+            return label
+    except Exception:
+        pass  # any cell/model failure -> the deterministic floor stands (safe)
+    return deterministic
 
 
 def _connect(dsn: str | None):
@@ -323,6 +549,7 @@ def capture_inbound(
     ig_handle: str | None = None,
     source: str | None = None,
     run_id: str | None = None,
+    use_llm: bool | None = None,
     memory_store: Any | None = None,
     dsn: str | None = None,
 ) -> InboundCapture | None:
@@ -338,7 +565,10 @@ def capture_inbound(
     error propagates (endpoint maps to 5xx so the provider retries). Idempotent on
     redelivery: the turn dedupes against the whole thread and the memory upserts on its
     content hash."""
-    outcome = classify_outcome(text)  # raises on empty text before any write
+    # Classify via the deterministic floor + the LLM judge when available (the judge
+    # catches the unbounded "booked something else / elsewhere" cases a phrase-matcher
+    # cannot). Raises on empty text before any write.
+    outcome = classify_reply(text, use_llm=use_llm)
     clean = text.strip()
     if not (channel or "").strip():
         raise ValueError("channel is required")

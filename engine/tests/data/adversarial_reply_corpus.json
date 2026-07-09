@@ -1,0 +1,1376 @@
+[
+ {
+  "text": "can i book me in for friday",
+  "expected": "replied",
+  "why": "contains 'book me in' which is a canonical booked phrase, but this is a question (leading 'can i') with no trailing '?', so the interrogative detector may miss it and fire FALSE booked",
+  "dim": null
+ },
+ {
+  "text": "how much to book me in",
+  "expected": "replied",
+  "why": "'book me in' triggers booked phrase; leading 'how much' is a price inquiry not stated resistance; no '?' so both interrogative gates can miss -> risk FALSE booked",
+  "dim": null
+ },
+ {
+  "text": "is it too expensive to book",
+  "expected": "replied",
+  "why": "'too expensive' is a price objection phrase and 'book' present, but it's a question asking about cost, no '?', could fire FALSE objected:price or FALSE booked",
+  "dim": null
+ },
+ {
+  "text": "could you book me in this weekend",
+  "expected": "replied",
+  "why": "'book me in' is booked phrase, leading modal 'could you' makes it a request/question; no trailing '?' defeats interrogative detection -> FALSE booked",
+  "dim": null
+ },
+ {
+  "text": "do you have friday to book me in",
+  "expected": "replied",
+  "why": "availability question containing 'book me in'; leading 'do you' interrogative without '?' -> matcher likely FALSE booked",
+  "dim": null
+ },
+ {
+  "text": "can i book right now",
+  "expected": "replied",
+  "why": "'book' + 'right now' reads like a commitment but it's asking permission; no '?' so leading interrogative may slip past -> FALSE booked",
+  "dim": null
+ },
+ {
+  "text": "whats the cheapest way to book",
+  "expected": "replied",
+  "why": "price inquiry with 'book'; no objection actually stated; no '?'; could trip FALSE booked or price objection",
+  "dim": null
+ },
+ {
+  "text": "would it be too pricey to book something small",
+  "expected": "replied",
+  "why": "'too pricey' price-objection words but framed as a question ('would it be'); no '?' -> FALSE objected:price",
+  "dim": null
+ },
+ {
+  "text": "am i able to book me in for a consult",
+  "expected": "replied",
+  "why": "'book me in' present; 'am i able' is a question; missing '?' beats interrogative gate -> FALSE booked",
+  "dim": null
+ },
+ {
+  "text": "is now a good time to book me in",
+  "expected": "replied",
+  "why": "'book me in' booked phrase but a timing question, not a commitment; no '?' -> FALSE booked",
+  "dim": null
+ },
+ {
+  "text": "can i pay it off in installments if i book",
+  "expected": "replied",
+  "why": "'pay it off' and 'installments' are payment-objection phrases but asked as a question; no '?' -> FALSE objected:payment",
+  "dim": null
+ },
+ {
+  "text": "how do i book me in after hours",
+  "expected": "replied",
+  "why": "process question with 'book me in'; leading 'how do i'; no '?' -> FALSE booked",
+  "dim": null
+ },
+ {
+  "text": "you got space to book me in tomorrow",
+  "expected": "replied",
+  "why": "declarative-looking availability question containing 'book me in'; no interrogative lead word AND no '?' -> strong FALSE booked risk",
+  "dim": null
+ },
+ {
+  "text": "any chance i could book right now",
+  "expected": "replied",
+  "why": "'book right now' sounds like commitment but 'any chance i could' is an ask; no '?' -> FALSE booked",
+  "dim": null
+ },
+ {
+  "text": "is it worth booking with you or too expensive",
+  "expected": "replied",
+  "why": "'too expensive' objection words in a comparison question; no '?'; clause after 'or' could confuse negation/objection scoping -> FALSE objected:price",
+  "dim": null
+ },
+ {
+  "text": "do you think its too soon to book me in",
+  "expected": "replied",
+  "why": "'too soon' timing-ish plus 'book me in'; framed as a question; no '?' -> FALSE booked or FALSE objected:timing",
+  "dim": null
+ },
+ {
+  "text": "wanna know if i can book me in before payday",
+  "expected": "replied",
+  "why": "embedded question 'if i can book me in'; 'book me in' phrase + 'payday' hints price/payment; no leading '?' -> FALSE booked",
+  "dim": null
+ },
+ {
+  "text": "can u book me in and do a payment plan",
+  "expected": "replied",
+  "why": "double trap: 'book me in' (booked) and 'payment plan' (payment objection) both in a question with 'can u'; no '?' -> FALSE booked or FALSE objected:payment",
+  "dim": null
+ },
+ {
+  "text": "how far out do i gotta book to get you",
+  "expected": "replied",
+  "why": "scheduling inquiry with 'book'; no '?'; run-on slang; could read as booked intent -> FALSE booked",
+  "dim": null
+ },
+ {
+  "text": "is booking with you gonna be a bit pricey",
+  "expected": "replied",
+  "why": "'a bit pricey' is a tightened price-objection phrase but this is a yes/no question; no '?' -> FALSE objected:price",
+  "dim": null
+ },
+ {
+  "text": "can i just book it already lol",
+  "expected": "replied",
+  "why": "'book it' with impatient tone reads like commitment but 'can i' makes it a permission question; trailing 'lol' not '?'; -> FALSE booked",
+  "dim": null
+ },
+ {
+  "text": "should i book now or wait til next month",
+  "expected": "replied",
+  "why": "'book now' booked-ish and 'next month' timing-objection-ish, but it's a deliberation question; no '?' -> FALSE booked or FALSE objected:timing",
+  "dim": null
+ },
+ {
+  "text": "do you take deposits to book me in",
+  "expected": "replied",
+  "why": "'deposit' plus 'book me in'; a question about process; no '?'; deposit was de-emphasized but 'book me in' still fires -> FALSE booked",
+  "dim": null
+ },
+ {
+  "text": "is there a way to book me in that i can afford",
+  "expected": "replied",
+  "why": "'book me in' + 'afford' (positive framing) in a question; no '?'; 'afford' was removed as bare trigger but 'book me in' remains -> FALSE booked",
+  "dim": null
+ },
+ {
+  "text": "u free to book me in friday or nah",
+  "expected": "replied",
+  "why": "availability question ending in slang 'or nah' not '?'; contains 'book me in'; no leading interrogative word -> FALSE booked",
+  "dim": null
+ },
+ {
+  "text": "quick q can i book right now for a walk in",
+  "expected": "replied",
+  "why": "'quick q' signals a question then 'can i book right now'; no '?'; leading interrogative buried after prefix -> FALSE booked",
+  "dim": null
+ },
+ {
+  "text": "how much would it cost to book me in for a sleeve",
+  "expected": "replied",
+  "why": "pure price inquiry containing 'book me in'; leading 'how much' but no '?' -> FALSE booked or FALSE objected:price",
+  "dim": null
+ },
+ {
+  "text": "is it too late to book me in this week",
+  "expected": "replied",
+  "why": "'too late' timing phrase plus 'book me in'; a yes/no question; no '?' -> FALSE booked or FALSE objected:timing",
+  "dim": null
+ },
+ {
+  "text": "honestly its not too expensive at all, book me in for saturday",
+  "expected": "booked",
+  "why": "contains 'too expensive' substring; matcher may fire objected:price and miss the leading 'not' + the real booking commitment after the comma",
+  "dim": null
+ },
+ {
+  "text": "price is totally fine, im not worried about it, lets book",
+  "expected": "booked",
+  "why": "'price' and 'worried' are objection triggers (price/trust); positive context + booking commit, naive matcher may fire objected instead of booked",
+  "dim": null
+ },
+ {
+  "text": "i can afford it no problem so sign me up",
+  "expected": "booked",
+  "why": "'afford' historically an objection trigger; here affirmative with a real booking phrase 'sign me up'",
+  "dim": null
+ },
+ {
+  "text": "money is no issue for me, ready to book whenever you are",
+  "expected": "booked",
+  "why": "'money'/'issue' price-ish words; clause-scoped booking commit should win but substring matcher may objected:price",
+  "dim": null
+ },
+ {
+  "text": "a payment plan isnt something i need, ill just pay in full, book me",
+  "expected": "booked",
+  "why": "'payment plan' is the exact tightened payment trigger; negated across clause + real booking, high false objected:payment risk",
+  "dim": null
+ },
+ {
+  "text": "not nervous at all lol, book me in",
+  "expected": "booked",
+  "why": "'nervous' is trust trigger; leading negation should neutralize but matcher might fire objected:trust",
+  "dim": null
+ },
+ {
+  "text": "first tattoo and im so pumped, lets get it booked",
+  "expected": "booked",
+  "why": "'first tattoo' was a removed trigger but 'first tattoo' variants may linger; positive + booking commit",
+  "dim": null
+ },
+ {
+  "text": "no budget problems here, book me for the 12th",
+  "expected": "booked",
+  "why": "'budget' bare trigger removed but 'budget problems' may match; negated positive + booking",
+  "dim": null
+ },
+ {
+  "text": "its a bit pricey but honestly im in, book me",
+  "expected": "booked",
+  "why": "'a bit pricey' is a price trigger and it's NOT negated — but the operative clause 'im in, book me' is a commitment; matcher likely fires objected:price, correct is booked",
+  "dim": null
+ },
+ {
+  "text": "i thought it might be too expensive but its actually great, book me in",
+  "expected": "booked",
+  "why": "'too expensive' present, negation-ish 'but actually'; clause after 'but' is positive+booking, tests but-scoping",
+  "dim": null
+ },
+ {
+  "text": "not sure why anyone would hesitate honestly, book me in now",
+  "expected": "booked",
+  "why": "'not sure' is the exact uncertainty trigger; here it's rhetorical/positive with a firm booking, high false objected:uncertainty",
+  "dim": null
+ },
+ {
+  "text": "still deciding? nah im decided, lets book it",
+  "expected": "booked",
+  "why": "'still deciding' uncertainty trigger appears as a rejected question then reversed; matcher may fire objected:uncertainty",
+  "dim": null
+ },
+ {
+  "text": "maybe later i'll get a second one too but for now book me this one",
+  "expected": "booked",
+  "why": "'maybe later' timing trigger but scoped to a hypothetical second tattoo; the real intent is booking now",
+  "dim": null
+ },
+ {
+  "text": "the installments thing isnt for me, ill pay upfront, book me in",
+  "expected": "booked",
+  "why": "'installments' payment trigger, negated across clause + booking commit",
+  "dim": null
+ },
+ {
+  "text": "i can afford it, it looks amazing",
+  "expected": "replied",
+  "why": "'afford' trigger used positively but NO booking; correct is replied, matcher risks false objected:price OR false booked from positive tone",
+  "dim": null
+ },
+ {
+  "text": "price is fine by me tbh",
+  "expected": "replied",
+  "why": "'price' trigger, positive, no commitment — should be replied not objected:price",
+  "dim": null
+ },
+ {
+  "text": "honestly not too pricey compared to other places",
+  "expected": "replied",
+  "why": "'pricey' trigger negated, comparison, no booking — replied; risk false objected:price",
+  "dim": null
+ },
+ {
+  "text": "im not scared of the pain at all",
+  "expected": "replied",
+  "why": "'scared'/'pain' trust triggers, negated, no booking — replied; risk false objected:trust",
+  "dim": null
+ },
+ {
+  "text": "no im not on a budget, i just have questions about the design",
+  "expected": "replied",
+  "why": "'on a budget' price trigger negated; real content is an inquiry — replied, risk false objected:price",
+  "dim": null
+ },
+ {
+  "text": "not worried about the cost, just checking your availability",
+  "expected": "replied",
+  "why": "'worried'/'cost' triggers negated; it's an availability inquiry — replied, risk false objected",
+  "dim": null
+ },
+ {
+  "text": "expensive? not to me, whats the next open slot",
+  "expected": "replied",
+  "why": "'expensive' as rejected question + availability inquiry; no booking commit yet so replied, risk objected:price or booked",
+  "dim": null
+ },
+ {
+  "text": "a payment plan sounds unnecessary honestly, whats included in the price",
+  "expected": "replied",
+  "why": "'payment plan' AND 'price' triggers, dismissed positively, then an inquiry — replied; double false-objected risk",
+  "dim": null
+ },
+ {
+  "text": "im not nervous, does the shop have parking",
+  "expected": "replied",
+  "why": "'nervous' trigger negated then an unrelated logistics question — replied, risk objected:trust",
+  "dim": null
+ },
+ {
+  "text": "nothing about the money worries me, cant wait to see the sketch",
+  "expected": "replied",
+  "why": "'money'/'worries' triggers negated + 'cant wait' positive-idiom (must not be read as can't-negation); no booking — replied",
+  "dim": null
+ },
+ {
+  "text": "not deciding between studios anymore, you're the one, ill be in touch to book",
+  "expected": "replied",
+  "why": "'deciding' uncertainty trigger negated; 'ill be in touch to book' is future/soft not a commitment now — replied not booked, and not objected",
+  "dim": null
+ },
+ {
+  "text": "maybe later for the sleeve but no rush, love the quote though",
+  "expected": "replied",
+  "why": "'maybe later' timing trigger; genuinely deferring but positive tone, no booking — should be replied (soft), risk objected:timing OR false booked",
+  "dim": null
+ },
+ {
+  "text": "budget? ha i wish i had that excuse, its just my schedule",
+  "expected": "replied",
+  "why": "'budget' mentioned as a dismissed non-reason; real issue is schedule but stated vaguely — replied, risk objected:price",
+  "dim": null
+ },
+ {
+  "text": "i wouldnt say its too expensive, still thinking on the placement",
+  "expected": "replied",
+  "why": "'too expensive' negated ('wouldnt say') then 'thinking' mild uncertainty; net replied, but matcher may objected:price or objected:uncertainty",
+  "dim": null
+ },
+ {
+  "text": "the deposit? already know how it works, no issues there, ill confirm my date soon",
+  "expected": "replied",
+  "why": "'deposit' (removed bare trigger) + 'issues' dismissed; 'confirm soon' is future not a booking commit — replied, risk false booked",
+  "dim": null
+ },
+ {
+  "text": "aw thanks but i already booked in with another artist last week 😅",
+  "expected": "replied",
+  "why": "contains 'booked in' — a strong booking trigger phrase — but it's a booking ELSEWHERE with another artist, so it's replied not booked",
+  "dim": null
+ },
+ {
+  "text": "cant do sat, just booked a flight to greece for the whole month",
+  "expected": "replied",
+  "why": "'just booked' fires the matcher, but the object is a flight; also 'cant do' could look like negation but the real signal is a non-us booking",
+  "dim": null
+ },
+ {
+  "text": "sorry im booked solid at work til august, no time for ink rn",
+  "expected": "replied",
+  "why": "'booked solid' contains 'booked' and 'solid' sounds affirmative; really means schedule-full/busy = replied, and 'no time' is not a timing objection phrase per rules",
+  "dim": null
+ },
+ {
+  "text": "lol i literally just got booked in for jury duty this month",
+  "expected": "replied",
+  "why": "'got booked in' mirrors the 'i'd like to book' family but refers to jury duty, a busy/elsewhere booking = replied",
+  "dim": null
+ },
+ {
+  "text": "ready to book... my dentist appointment first, teeth are killing me",
+  "expected": "replied",
+  "why": "'ready to book' is a top booked trigger phrase, but the clause completion makes it a dentist booking; naive matcher sees 'ready to book' and fires FALSE booked",
+  "dim": null
+ },
+ {
+  "text": "book me in?? nah im already booked up with the kids stuff all weekend",
+  "expected": "replied",
+  "why": "leading 'book me in??' is a literal booked idiom AND a question; then negated by 'already booked up' busy statement — high FALSE booked risk",
+  "dim": null
+ },
+ {
+  "text": "just booked my honeymoon so tattoos are on hold for a bit",
+  "expected": "replied",
+  "why": "'just booked' triggers; the booking is a honeymoon and 'on hold' isn't a listed timing phrase, so replied",
+  "dim": null
+ },
+ {
+  "text": "im getting booked in at another studio down the road tbh",
+  "expected": "replied",
+  "why": "'getting booked in' looks like commitment but 'at another studio' = booking elsewhere = replied",
+  "dim": null
+ },
+ {
+  "text": "sign me up for a nap lol im booked out with double shifts this week",
+  "expected": "replied",
+  "why": "'sign me up' is a direct booked trigger phrase used sarcastically, plus 'booked out' busy — strong FALSE booked bait",
+  "dim": null
+ },
+ {
+  "text": "cant book rn my calendars booked solid with weddings",
+  "expected": "replied",
+  "why": "'cant book' is negated but 'booked solid' also present; matcher with clause-scoped negation might still catch a stray 'booked' = FALSE booked risk",
+  "dim": null
+ },
+ {
+  "text": "i booked the venue already so the tattoo money is gone haha",
+  "expected": "replied",
+  "why": "'i booked' + affirmative tone; refers to a venue booking + implies a price/money issue but it's neither our booking nor a genuine price objection = replied",
+  "dim": null
+ },
+ {
+  "text": "booked in with my regular guy sorry, hes done all my other pieces",
+  "expected": "replied",
+  "why": "'booked in' trigger phrase followed by 'with my regular guy' = elsewhere = replied",
+  "dim": null
+ },
+ {
+  "text": "just got my car booked in for its mot, cash is tight after that",
+  "expected": "replied",
+  "why": "'got booked in' (car/MOT) plus 'cash is tight' which flirts with price but isn't a listed price phrase; correct is replied not booked or objected",
+  "dim": null
+ },
+ {
+  "text": "yeah im booked, at the hospital for my op next tues",
+  "expected": "replied",
+  "why": "'im booked' reads as a bare affirmative booking claim, but the comma clause reveals a hospital appointment = replied",
+  "dim": null
+ },
+ {
+  "text": "lets book!! ...a table somewhere first cos im starving 😂",
+  "expected": "replied",
+  "why": "'lets book' is a top-tier booked idiom then subverted into booking a restaurant table; naive matcher fires FALSE booked on 'lets book'",
+  "dim": null
+ },
+ {
+  "text": "deposit? i already put a deposit down on a holiday not a tattoo",
+  "expected": "replied",
+  "why": "'deposit' appears twice near booking context; 'deposit sent' style triggers may fire, but it's a holiday deposit = replied (and rules removed bare deposit)",
+  "dim": null
+ },
+ {
+  "text": "im all booked up this month babysitting my sisters kids",
+  "expected": "replied",
+  "why": "'all booked up' = busy schedule-full; the word 'booked' plus positive 'all' could bait FALSE booked",
+  "dim": null
+ },
+ {
+  "text": "booked my mot, booked the dentist, booked a haircut... you got no chance this week lol",
+  "expected": "replied",
+  "why": "three 'booked' triggers stacked to overwhelm a matcher, all elsewhere/busy = replied",
+  "dim": null
+ },
+ {
+  "text": "honestly ready to book but with the artist my mate recommended not you sorry",
+  "expected": "replied",
+  "why": "'ready to book' fires booked, but 'not you' at the end makes it elsewhere; clause-scoped logic may miss the trailing disqualifier = FALSE booked risk",
+  "dim": null
+ },
+ {
+  "text": "im booked out solid, could you maybe hold a slot for next yr",
+  "expected": "replied",
+  "why": "'booked out solid' busy plus a soft future ask; not a commitment to us and 'next yr' isn't the listed timing phrasing = replied",
+  "dim": null
+ },
+ {
+  "text": "we booked the flights and hotel so no spare cash for ink atm",
+  "expected": "replied",
+  "why": "'booked the flights' trigger plus a money-shortage that isn't a listed price phrase; correct replied, bait for both FALSE booked and FALSE objected:price",
+  "dim": null
+ },
+ {
+  "text": "got booked in for a smear test that day cant make it",
+  "expected": "replied",
+  "why": "'got booked in' medical appointment; 'cant make it' negation present but the booking-elsewhere is the real signal = replied",
+  "dim": null
+ },
+ {
+  "text": "booked up with work booked up with family im booked up full stop",
+  "expected": "replied",
+  "why": "repetitive 'booked up' run-on, all busy; sheer density of 'booked' likely trips a matcher into FALSE booked",
+  "dim": null
+ },
+ {
+  "text": "just booked a session... at the gym not with you sorry hun 💀",
+  "expected": "replied",
+  "why": "'just booked a session' is nearly identical to our booking phrasing but it's a gym session elsewhere = replied",
+  "dim": null
+ },
+ {
+  "text": "id like to book a week off work before i even think about tattoos",
+  "expected": "replied",
+  "why": "'id like to book' is a listed booked trigger phrase verbatim, but the object is 'a week off work' = replied, prime FALSE booked bait",
+  "dim": null
+ },
+ {
+  "text": "booked in already thanks, deposit paid and everything, went with a place closer to home",
+  "expected": "replied",
+  "why": "'booked in already' + 'deposit paid' stack every conversion signal but 'a place closer to home' = elsewhere = replied; the worst FALSE booked trap",
+  "dim": null
+ },
+ {
+  "text": "im proper booked up rn but keep me on ur list yeah",
+  "expected": "replied",
+  "why": "'booked up' busy plus a vague future keep-in-touch, no commitment to us = replied",
+  "dim": null
+ },
+ {
+  "text": "booked solid but not gonna lie ur prices seem fine to me",
+  "expected": "replied",
+  "why": "'booked solid' busy AND an explicit anti-price statement ('prices seem fine'); double bait — FALSE booked from 'booked' and FALSE objected:price from 'prices', but negated price = replied",
+  "dim": null
+ },
+ {
+  "text": "BOOK ME IN!!! 🔥🔥🔥",
+  "expected": "booked",
+  "why": "all-caps + emoji spam; a matcher that lowercases and strips emoji should catch 'book me in', but naive casing/emoji handling may miss the phrase and fall through to replied",
+  "dim": null
+ },
+ {
+  "text": "i’d like to book 💉",
+  "expected": "booked",
+  "why": "iOS smart apostrophe (U+2019) in 'i'd'; a matcher keyed on straight-quote 'i'd like to book' won't normalize the curly quote and misses the booking -> false replied",
+  "dim": null
+ },
+ {
+  "text": "cant wait, book me in",
+  "expected": "booked",
+  "why": "'cant wait' has no apostrophe and could trip a negation lexicon reading 'cant' as 'can't'; positive-idiom neutralization must fire, else the clause gets negated and the booking is dropped",
+  "dim": null
+ },
+ {
+  "text": "let’s   book   it",
+  "expected": "booked",
+  "why": "smart quote in let's plus multiple internal spaces; both curly-quote normalization and whitespace collapse needed or 'let's book it' won't match",
+  "dim": null
+ },
+ {
+  "text": "READY TO BOOK 🙌",
+  "expected": "booked",
+  "why": "ALL CAPS commitment; if casefold happens fine, but the emoji trailing may confuse trailing-interrogative or token boundary logic",
+  "dim": null
+ },
+ {
+  "text": "sign me up!!",
+  "expected": "booked",
+  "why": "'sign me up' is a listed booking idiom but has no word 'book'; a matcher only keying on 'book' misses it -> false replied (this is a miss, not false booked)",
+  "dim": null
+ },
+ {
+  "text": "DEPOSIT SENT ✅",
+  "expected": "booked",
+  "why": "'deposit sent' is a listed positive booking commitment but bare 'deposit' was removed from objection/booking phrases; must still match 'deposit sent' idiom, caps+emoji may hide it",
+  "dim": null
+ },
+ {
+  "text": "cant book til next month tbh",
+  "expected": "replied",
+  "why": "'cant book' = negated booking (should NOT be booked) AND 'next month' looks like a timing objection, but it's phrased as scheduling info not resistance; naive matcher risks false booked (sees 'book') or false objected:timing",
+  "dim": null
+ },
+ {
+  "text": "wouldnt book anywhere else honestly",
+  "expected": "replied",
+  "why": "missing apostrophe 'wouldnt'; positive sentiment but NOT an actual commitment to us — negated 'book' with no affirmative booking; matcher may see 'book' and false-book it",
+  "dim": null
+ },
+ {
+  "text": "can i book right now??",
+  "expected": "replied",
+  "why": "leading/trailing interrogative — a question, not a commitment; contains exact phrase 'book' + 'i book' so high false-booked risk if question detection fails on the doubled '??'",
+  "dim": null
+ },
+ {
+  "text": "BOOKED WITH ANOTHER STUDIO SORRY 🙈",
+  "expected": "replied",
+  "why": "all-caps 'BOOKED' but it's a booking ELSEWHERE; matcher keying on 'booked' token with casefold will false-book this warm-off lead — worst error",
+  "dim": null
+ },
+ {
+  "text": "im booked up with work all month 😩",
+  "expected": "replied",
+  "why": "'booked up' = schedule-is-full, not a booking; contains 'booked' so false-booked risk, and 'all month' could read as timing objection",
+  "dim": null
+ },
+ {
+  "text": "a bit pricey 😬 but i’d like to book anyway",
+  "expected": "booked",
+  "why": "clause-scoped: 'a bit pricey' is an objection phrase but the 'but' clause commits to booking; smart quote in i'd; matcher must let the booking clause win, not tag objected:price",
+  "dim": null
+ },
+ {
+  "text": "not too expensive at all, LETS BOOK",
+  "expected": "booked",
+  "why": "'not too expensive' is a negated objection (not price) and second clause is a booking; caps 'LETS BOOK' missing apostrophe; false objected:price risk if negation scope fails",
+  "dim": null
+ },
+ {
+  "text": "HOW MUCH IS IT?? 💵",
+  "expected": "replied",
+  "why": "all-caps price INQUIRY (question), not an objection; if 'expensive'/'price' phrase list is loose or caps confuses interrogative detection, risks false objected:price",
+  "dim": null
+ },
+ {
+  "text": "kinda nervous lol but BOOK ME IN",
+  "expected": "booked",
+  "why": "'nervous' is a trust-objection trigger word but the 'but' clause is a firm booking; matcher must prefer booking and not tag objected:trust",
+  "dim": null
+ },
+ {
+  "text": "does it hurt tho 😅",
+  "expected": "replied",
+  "why": "'does it hurt' is a QUESTION (buying inquiry), rules say trust-objection must be stated not asked; trailing emoji + no '?' may defeat interrogative detection -> false objected:trust",
+  "dim": null
+ },
+ {
+  "text": "cant afford it rn 😭",
+  "expected": "objected:price",
+  "why": "genuine price objection but 'cant' (no apostrophe) may be misread by negation logic as negating 'afford', flipping it to not-an-objection -> false replied",
+  "dim": null
+ },
+ {
+  "text": "im not sure yet 🤔",
+  "expected": "objected:uncertainty",
+  "why": "genuine uncertainty objection; 'not sure' contains negation token 'not' which a naive lexicon might treat as negating an objection phrase and drop it -> false replied",
+  "dim": null
+ },
+ {
+  "text": "no budget issues here, sign me up",
+  "expected": "booked",
+  "why": "'budget' appears (bare budget removed, good) but 'no budget issues' is negated non-objection plus a booking idiom; false objected:price risk if 'budget' still triggers",
+  "dim": null
+ },
+ {
+  "text": "PAYMENT PLAN POSSIBLE? 🙏",
+  "expected": "replied",
+  "why": "all-caps question about payment plan = inquiry not stated objection; 'payment plan' is the objection:payment trigger so high false objected:payment risk when interrogative detection misses caps+emoji",
+  "dim": null
+ },
+ {
+  "text": "i’ll pay the deposit tomorrow",
+  "expected": "replied",
+  "why": "smart quote i'll; a commitment that is NOT a booking (future intent to pay), rules explicitly say this is replied; 'deposit' + 'pay' may trigger false booked or objected:payment",
+  "dim": null
+ },
+ {
+  "text": "maybe later ok?? 🙂",
+  "expected": "objected:timing",
+  "why": "'maybe later' is a genuine timing objection; trailing 'ok??' interrogative + emoji may make leading/trailing question detection classify the whole thing as a question -> false replied",
+  "dim": null
+ },
+ {
+  "text": "LETS. BOOK. IT. 🔥",
+  "expected": "booked",
+  "why": "periods between each word break token adjacency; 'let's book it' won't match if the matcher expects contiguous tokens, and the smart-caps + emoji add noise -> false replied",
+  "dim": null
+ },
+ {
+  "text": "book me in pls ❤️❤️ cant wait to get inked",
+  "expected": "booked",
+  "why": "'cant wait' appears AFTER the booking; negation lexicon might scope 'cant' backward onto 'book me in'; positive-idiom + clause scoping both must hold",
+  "dim": null
+ },
+ {
+  "text": "still on the fence tbh 🤷‍♀️",
+  "expected": "objected:uncertainty",
+  "why": "'on the fence' uncertainty objection with a ZWJ-emoji (🤷‍♀️ contains U+200D); emoji-stripping that leaves stray joiner chars could corrupt tokenization and miss the phrase -> false replied",
+  "dim": null
+ },
+ {
+  "text": "dont think i can afford rn but maybe soon",
+  "expected": "objected:price",
+  "why": "'dont think i can afford' is a genuine price concern but stacked negations ('dont'... 'can afford') plus 'but maybe soon' clause could confuse both negation scope and timing detection",
+  "dim": null
+ },
+ {
+  "text": "SO ready, book me innnn 🥹",
+  "expected": "booked",
+  "why": "elongated 'innnn' breaks exact 'book me in' match; caps 'SO' and emoji; matcher needs slang/elongation tolerance or misses the booking -> false replied",
+  "dim": null
+ },
+ {
+  "text": "not right now, im scared it hurts 😖",
+  "expected": "objected:timing",
+  "why": "two objection signals (timing 'not right now' + trust 'scared'/'hurts'); leading 'not' negation token plus multi-type ambiguity; per safety, a stated resistance — risk of false replied if 'not' negates the timing phrase",
+  "dim": null
+ },
+ {
+  "text": "wouldnt say im on a budget, book it 💪",
+  "expected": "booked",
+  "why": "'on a budget' is a price-objection phrase but negated by 'wouldnt say', and the real intent is a booking; false objected:price if negation across the comma fails, or miss if 'budget' still fires",
+  "dim": null
+ },
+ {
+  "text": "lol dont book me in just yet, gotta check with my boss about the time off first",
+  "expected": "replied",
+  "why": "contains the exact booking idiom 'book me in' but it's negated with 'dont' and it's actually a timing hedge; clause-scoped negation may or may not catch 'dont ... book me in' depending on word order, and a matcher keying on 'book me in' fires a FALSE booked",
+  "dim": null
+ },
+ {
+  "text": "i mean i wouldnt say no to booking this bad boy 😍",
+  "expected": "booked",
+  "why": "double negative 'wouldnt say no' = affirmative commitment, but the negation lexicon sees 'wouldnt' near 'booking' and likely neutralizes it to a FALSE replied/objection instead of the correct booked",
+  "dim": null
+ },
+ {
+  "text": "shut up and take my deposit already 🤑",
+  "expected": "booked",
+  "why": "slang commitment idiom; 'deposit' was removed as a bare trigger so matcher likely calls it replied, missing a genuine booked",
+  "dim": null
+ },
+ {
+  "text": "say less, im so booking this",
+  "expected": "booked",
+  "why": "'say less' slang + 'im so booking this' idiom; no canonical phrase like 'book me in' so a phrase matcher likely under-fires to replied, missing the booking",
+  "dim": null
+ },
+ {
+  "text": "dont mind if i do, sign me up fam",
+  "expected": "booked",
+  "why": "'dont' appears right before the affirmative 'sign me up'; naive clause negation could flip the booked to replied, but correct is booked",
+  "dim": null
+ },
+ {
+  "text": "cant wait to get booked in, this is gonna be sick",
+  "expected": "replied",
+  "why": "'cant wait' is a neutralized positive idiom AND expresses excitement but NOT an actual commitment/action to book; matcher may see 'booked in' and fire FALSE booked when it's just anticipation",
+  "dim": null
+ },
+ {
+  "text": "you had me at hello, take my money lets gooo",
+  "expected": "booked",
+  "why": "pure idiom/slang commitment with zero canonical booking phrase; matcher almost certainly under-classifies to replied despite being a real booking intent",
+  "dim": null
+ },
+ {
+  "text": "not gonna lie this is kinda pricey but whatever im in, book it",
+  "expected": "booked",
+  "why": "contains objection phrase 'pricey' before 'but'; clause-scoped logic should drop it, but a matcher might FALSE objected:price when the operative clause after 'but' is a genuine booking",
+  "dim": null
+ },
+ {
+  "text": "readingg the price like 👀 anyway yeah lock me in",
+  "expected": "booked",
+  "why": "'lock me in' is a booking idiom not in the canonical list ('book me in') so may under-fire; 'price' word may pull toward objected:price incorrectly",
+  "dim": null
+ },
+ {
+  "text": "cant book rn im at work but omg yes next week for sure",
+  "expected": "replied",
+  "why": "'cant book' negated booking + it's a timing deferral not a firm commitment; matcher might FALSE booked on 'book' + 'yes' or mislabel timing; correct is replied (no concrete commitment/date locked)",
+  "dim": null
+ },
+ {
+  "text": "take my deposit and dont let me change my mind lmao",
+  "expected": "booked",
+  "why": "'dont let me change my mind' has 'dont' near action words; negation lexicon could wrongly flip this genuine deposit/booking commitment to replied",
+  "dim": null
+ },
+ {
+  "text": "im not NOT booking this 💀",
+  "expected": "booked",
+  "why": "double negative 'not NOT booking' = affirmative; the negation lexicon sees 'not booking' and produces a FALSE replied, missing the booked",
+  "dim": null
+ },
+ {
+  "text": "first tattoo jitters aside, im ready to book, lets do it",
+  "expected": "booked",
+  "why": "contains 'first tattoo' (trust-ish) and 'jitters' but 'first tattoo' was removed as bare trigger; still risk of FALSE objected:trust when correct is a clear booked",
+  "dim": null
+ },
+ {
+  "text": "dont even show me other studios, book me with you guys",
+  "expected": "booked",
+  "why": "'dont' + mention of 'other studios' near 'book' could trip elsewhere-booking or negation logic; correct is a genuine booked WITH US",
+  "dim": null
+ },
+ {
+  "text": "consider me booked, no cap",
+  "expected": "booked",
+  "why": "'consider me booked' is an idiom without imperative 'book me in'; slang 'no cap'; matcher may under-fire to replied despite firm commitment",
+  "dim": null
+ },
+ {
+  "text": "pricey schmicey, im booking it today 😤",
+  "expected": "booked",
+  "why": "reduplication slang 'pricey schmicey' dismisses the price objection; matcher keying on 'pricey' risks FALSE objected:price when it's actually a booked",
+  "dim": null
+ },
+ {
+  "text": "i guess i could be talked into booking... jk BOOK ME IN NOW",
+  "expected": "booked",
+  "why": "hedge 'i guess i could' + 'jk' sarcasm then a real 'book me in'; matcher might latch on the tentative first clause and call it uncertainty, but correct is booked",
+  "dim": null
+ },
+ {
+  "text": "nervous? nah. book me in coach",
+  "expected": "booked",
+  "why": "contains trust word 'nervous' as a rhetorical question then dismissed with 'nah'; matcher risks FALSE objected:trust when the operative statement is a booking",
+  "dim": null
+ },
+ {
+  "text": "why wouldnt i book with yall, obviously im in",
+  "expected": "booked",
+  "why": "rhetorical question 'why wouldnt i book' contains negation + interrogative; matcher's interrogative/negation logic may flip a genuine booked to replied",
+  "dim": null
+ },
+ {
+  "text": "deadass ready to book, where do i send the deposit",
+  "expected": "booked",
+  "why": "'deadass ready to book' is a firm commitment (booked) even though it ends with a question about deposit; trailing-interrogative detection might downgrade to replied incorrectly",
+  "dim": null
+ },
+ {
+  "text": "aint no budget stopping me, sign me up",
+  "expected": "booked",
+  "why": "'aint no budget' double-negative dismisses price; matcher seeing 'budget' could FALSE objected:price when correct is booked",
+  "dim": null
+ },
+ {
+  "text": "i could NOT be more ready to book this in 🔥",
+  "expected": "booked",
+  "why": "'could NOT be more ready' is emphatic affirmative via negation; the lexicon reads 'could not ... book' and likely produces FALSE replied instead of booked",
+  "dim": null
+ },
+ {
+  "text": "tbh still on the fence but go ahead and pencil me in",
+  "expected": "booked",
+  "why": "contains uncertainty idiom 'on the fence' before 'but' then a booking action 'pencil me in'; matcher may FALSE objected:uncertainty; correct is booked because the operative clause commits",
+  "dim": null
+ },
+ {
+  "text": "dont hold your breath waiting on me... jk lets book it right now",
+  "expected": "booked",
+  "why": "sarcastic negated opener 'dont hold your breath' near booking; naive negation could suppress the real 'book it' commitment into replied",
+  "dim": null
+ },
+ {
+  "text": "is it pricey? sure. am i booking? also yes 💅",
+  "expected": "booked",
+  "why": "two rhetorical Q&A: 'is it pricey' interrogative + 'pricey' word could trigger objected:price, but the answered commitment 'am i booking? also yes' makes it a booked",
+  "dim": null
+ },
+ {
+  "text": "you couldnt stop me from booking if you tried lol",
+  "expected": "booked",
+  "why": "'couldnt stop me from booking' is an emphatic affirmative; the negation lexicon sees 'couldnt ... booking' and likely mislabels to FALSE replied instead of booked",
+  "dim": null
+ },
+ {
+  "text": "honestly booked up till friday but pencil me in for saturday, im doing it",
+  "expected": "booked",
+  "why": "'booked up till friday' is the schedule-full trap (not a booking) but the real commitment 'pencil me in ... im doing it' follows; matcher risks confusing the two — could FALSE booked on the wrong clause or miss the real one; correct label is booked on the genuine commit",
+  "dim": null
+ },
+ {
+  "text": "cant afford NOT to book this deal honestly",
+  "expected": "booked",
+  "why": "'cant afford NOT to book' is a double-negative affirmative meaning she will book; matcher seeing 'cant afford' fires FALSE objected:price when correct is booked",
+  "dim": null
+ },
+ {
+  "text": "sign me... up? nah im playing, sign me up fr",
+  "expected": "booked",
+  "why": "interrupted phrase with a mid interrogative '?' then 'nah im playing' sarcasm then genuine 'sign me up'; trailing/leading interrogative detection may mislabel to replied",
+  "dim": null
+ },
+ {
+  "text": "yeah no i wouldnt book this without seeing the artist portfolio first",
+  "expected": "replied",
+  "why": "contains 'book' with affirmative-looking 'yeah'; clause-scoped negation must catch 'wouldnt book' but the leading 'yeah no' plus 'book this' can look like a booking intent to a shallow matcher",
+  "dim": null
+ },
+ {
+  "text": "there aint no way im not booking with you guys lol",
+  "expected": "booked",
+  "why": "double negative 'aint no way im not booking' resolves to a commitment; a negation-counting matcher sees 'aint'+'not' near 'booking' and flags NOT booked, a false 'replied' — inverse trap",
+  "dim": null
+ },
+ {
+  "text": "cant wait to book, just tell me the next opening",
+  "expected": "booked",
+  "why": "'cant' is a negation contraction sitting right before 'book'; only positive-idiom neutralization of 'cant wait' saves it, otherwise false 'replied'",
+  "dim": null
+ },
+ {
+  "text": "i wont lie the price is steep but count me in, book me",
+  "expected": "booked",
+  "why": "'wont' negation + 'price is steep' objection phrasing both appear before the real commitment 'book me'; clause scope across 'but' is required or it mislabels as objected:price or NOT booked",
+  "dim": null
+ },
+ {
+  "text": "no i cant book right this second but pencil me in for saturday for sure",
+  "expected": "booked",
+  "why": "'cant book' negation clause then a genuine commitment after 'but'; matcher may stop at 'cant book' and call it replied, missing the affirmative second clause",
+  "dim": null
+ },
+ {
+  "text": "wouldnt not book something this clean ngl",
+  "expected": "booked",
+  "why": "'wouldnt not book' is a double negative = will book; naive negation lexicon flags 'wouldnt' before 'book' and returns false NOT-booked",
+  "dim": null
+ },
+ {
+  "text": "dont think id ever NOT book with you after that quote",
+  "expected": "booked",
+  "why": "'dont' + 'ever NOT book' triple-ish negation resolving positive; matcher counting negations near 'book' mislabels",
+  "dim": null
+ },
+ {
+  "text": "im not gonna lie, book me in asap",
+  "expected": "booked",
+  "why": "'not gonna lie' is a filler idiom with 'not' before the real imperative 'book me in'; clause-scoped negation across the comma must not suppress the booking",
+  "dim": null
+ },
+ {
+  "text": "cant afford NOT to book at that price honestly",
+  "expected": "booked",
+  "why": "'cant afford' triggers price-objection lexicon AND 'cant'/'NOT' are negations, but the whole phrase 'cant afford not to book' means will book; double trap toward objected:price or replied",
+  "dim": null
+ },
+ {
+  "text": "aint gonna find me booking anywhere else, lock it in",
+  "expected": "booked",
+  "why": "'aint gonna find me booking' reads as negation of booking to a shallow matcher but means exclusive commitment to us plus 'lock it in'",
+  "dim": null
+ },
+ {
+  "text": "i shouldnt but ill book it, deposit going out tonight",
+  "expected": "booked",
+  "why": "'shouldnt' negation contraction opens the sentence right before an implied book, then 'ill book it' + 'deposit going out' commits; negation must not bleed across 'but'",
+  "dim": null
+ },
+ {
+  "text": "no way id book somewhere thats not you",
+  "expected": "booked",
+  "why": "'no way id book somewhere thats not you' = will only book with us; two negations ('no way', 'not') around 'book' scream NOT-booked to a naive matcher",
+  "dim": null
+ },
+ {
+  "text": "couldnt be more ready to book, whens your next slot",
+  "expected": "booked",
+  "why": "'couldnt be more ready to book' is a positive idiom using a negation contraction; the trailing 'whens' also adds a question, doubling the mislabel risk",
+  "dim": null
+ },
+ {
+  "text": "i wouldnt say no to booking that, set it up",
+  "expected": "booked",
+  "why": "'wouldnt say no to booking' = yes; negation 'wouldnt' + 'no' next to 'booking' fools a counter into NOT-booked",
+  "dim": null
+ },
+ {
+  "text": "wont book til payday but im 100% in",
+  "expected": "replied",
+  "why": "'wont book til payday' is a genuine timing/future statement with no firm commitment yet ('100% in' is enthusiasm not a booking); risk of false booked from 'im 100% in' or false objected:timing",
+  "dim": null
+ },
+ {
+  "text": "cant not tell you how bad i wanna book this piece",
+  "expected": "replied",
+  "why": "'cant not tell you how bad i wanna book' expresses desire, not an actual commitment; double negative + 'book' may trigger false booked while rules require an actual commit",
+  "dim": null
+ },
+ {
+  "text": "there isnt a chance im booking with the other place, youre my pick",
+  "expected": "booked",
+  "why": "'isnt a chance im booking with the other place' negates booking ELSEWHERE and commits to us; matcher sees isnt+booking and may call NOT-booked or booking-elsewhere",
+  "dim": null
+ },
+ {
+  "text": "dont you dare think i wont book, im booking today",
+  "expected": "booked",
+  "why": "stacked negations 'dont', 'wont' before a firm 'im booking today'; a negation-near-book heuristic collapses to false replied",
+  "dim": null
+ },
+ {
+  "text": "nah i cant book, my schedules booked solid all month",
+  "expected": "replied",
+  "why": "'cant book' (real negation) plus 'schedules booked solid' (schedule-full idiom, not a booking); two 'book' hits, both should NOT yield booked — risk of false booked from the second",
+  "dim": null
+ },
+ {
+  "text": "wouldnt book if you paid me tbh, way too pricey",
+  "expected": "objected:price",
+  "why": "genuine price objection but wrapped in 'wouldnt book' negation; matcher might see 'wouldnt book' and call replied, suppressing the real objected:price after the comma",
+  "dim": null
+ },
+ {
+  "text": "cant say im not tempted to just book it rn",
+  "expected": "replied",
+  "why": "'cant say im not tempted to book' is tentative interest, not a commitment; the double negative near 'book' risks a false booked when rules want replied",
+  "dim": null
+ },
+ {
+  "text": "no i wont be booking, found someone cheaper",
+  "expected": "objected:price",
+  "why": "'wont be booking' negates booking, but the reason 'found someone cheaper' is a genuine price objection after the comma; risk of replied (missing objection) or false booked",
+  "dim": null
+ },
+ {
+  "text": "i never said i wouldnt book, chill, im in",
+  "expected": "booked",
+  "why": "'never said i wouldnt book' is a double-negation resolving to will-book plus 'im in'; three negation tokens ('never','wouldnt') around 'book' maximally confuse a counter",
+  "dim": null
+ },
+ {
+  "text": "aint no budget problem here, i just cant book til next week",
+  "expected": "replied",
+  "why": "'aint no budget problem' negates a price objection (must NOT be objected:price) and 'cant book til next week' is future/timing with no firm commit; double trap toward objected or booked",
+  "dim": null
+ },
+ {
+  "text": "wouldnt you know it, book me in for the 12th",
+  "expected": "booked",
+  "why": "'wouldnt you know it' is an idiom, not a negation of booking; the real imperative 'book me in for the 12th' commits — negation-near-book heuristic wrongly suppresses",
+  "dim": null
+ },
+ {
+  "text": "cant book yet cause im still not sure on the design",
+  "expected": "objected:uncertainty",
+  "why": "'cant book yet' negation plus genuine 'still not sure' uncertainty; the 'not sure' is itself negated-looking so matcher may cancel the objection to replied, or read 'book' as booked",
+  "dim": null
+ },
+ {
+  "text": "dont book me just yet, wanna see a mockup first",
+  "expected": "replied",
+  "why": "'dont book me just yet' is a hold/not-yet request, not a commitment or a categorized objection; 'book me' imperative risks false booked despite the leading 'dont'",
+  "dim": null
+ },
+ {
+  "text": "no negatives here i cant find a reason not to book, so book me",
+  "expected": "booked",
+  "why": "'cant find a reason not to book, so book me' double negative + 'so' clause boundary + real imperative; negation across 'so' plus stacked nots is a heavy trap",
+  "dim": null
+ },
+ {
+  "text": "isnt like i havent already booked with yall, this is my third",
+  "expected": "booked",
+  "why": "'isnt like i havent already booked' double negative = has booked/repeat client; two negation contractions before 'booked' invite false NOT-booked",
+  "dim": null
+ },
+ {
+  "text": "ok book me in!! its a bit pricey but whatever lol",
+  "expected": "objected:price",
+  "why": "has the strong 'book me in' commit phrase; a naive matcher fires booked, but genuine price resistance ('a bit pricey') is present in the same reply so rules say objected:price. Clause-scoping won't help since there's no negation.",
+  "dim": null
+ },
+ {
+  "text": "lets book, just gonna need a payment plan for it",
+  "expected": "objected:payment",
+  "why": "'lets book' screams booked to a phrase matcher, but 'payment plan' is genuine payment resistance -> objected:payment. Order (book first) tempts a false booked.",
+  "dim": null
+ },
+ {
+  "text": "im ready to book but honestly its too expensive for me right now",
+  "expected": "objected:price",
+  "why": "'ready to book' is a listed booked idiom; 'too expensive' is genuine price objection. Rules prioritize the resistance -> objected:price, not booked.",
+  "dim": null
+ },
+ {
+  "text": "sign me up, might need to pay it off in installments tho",
+  "expected": "objected:payment",
+  "why": "'sign me up' is a booked trigger; 'pay it off in installments' is payment-plan resistance -> objected:payment. Naive matcher false-booked.",
+  "dim": null
+ },
+ {
+  "text": "id like to book, still kinda nervous about how much it hurts tho",
+  "expected": "objected:trust",
+  "why": "'id like to book' is a booked idiom; 'nervous'/'hurts' is genuine trust resistance -> objected:trust. Matcher likely false-booked.",
+  "dim": null
+ },
+ {
+  "text": "deposit sent!! bit outside my budget but couldnt resist",
+  "expected": "booked",
+  "why": "'deposit sent' is a hard booked signal AND commitment is real; 'budget' is bare (removed from objection phrases) so no objection fires. Correct is booked, but a matcher that kept any budget cue could false-objected. Tests that bare budget was truly removed.",
+  "dim": null
+ },
+ {
+  "text": "book me in for saturday, not worried about the price at all",
+  "expected": "booked",
+  "why": "contains 'price' near 'not worried' — negation is clause-scoped and 'not worried about the price' negates the objection, so no genuine resistance -> booked. A matcher without clause-scoped negation false-objected on 'price'.",
+  "dim": null
+ },
+ {
+  "text": "lets book it, and no its not too expensive lol relax",
+  "expected": "booked",
+  "why": "'not too expensive' after the comma is negated resistance; clause-scoped negation should neutralize it -> booked. Weak negation handling would false-objected:price.",
+  "dim": null
+ },
+ {
+  "text": "wanna book but not sure if im ready to commit to the design yet",
+  "expected": "objected:uncertainty",
+  "why": "'wanna book' tempts booked; 'not sure ... im ready' — the 'not' negates 'sure', which is itself the uncertainty cue, so 'not sure' IS the uncertainty objection. Rules: genuine uncertainty -> objected:uncertainty. Tricky double-negation-ish; matcher may false-booked or mis-scope.",
+  "dim": null
+ },
+ {
+  "text": "cant wait to book this in, the price is a bit steep but im in",
+  "expected": "objected:price",
+  "why": "'cant wait' is a positive idiom (not a negation) so booked intent stands, but 'price is a bit steep' is genuine price resistance -> objected:price. Matcher that treats 'cant' as negation mishandles; correct label hinges on idiom + resistance.",
+  "dim": null
+ },
+ {
+  "text": "booked with another studio last week but might come to u next time",
+  "expected": "replied",
+  "why": "'booked with another studio' is a booking ELSEWHERE — explicitly NOT booked per rules. No genuine objection either -> replied. Naive matcher false-booked on 'booked'.",
+  "dim": null
+ },
+ {
+  "text": "can i book right now? also is it pricey?",
+  "expected": "replied",
+  "why": "both clauses are QUESTIONS — 'can i book' is interrogative (not commit) and 'is it pricey' is a buying inquiry not an objection. Correct -> replied. Matcher may false-booked and/or false-objected:price.",
+  "dim": null
+ },
+ {
+  "text": "i wouldnt book anywhere else, love this, lets do it",
+  "expected": "booked",
+  "why": "'wouldnt book anywhere else' has negation but the commit is 'lets do it'; the negated-book clause is a compliment not a decline. Genuinely booked. Matcher may false-objected/replied by seeing 'wouldnt book'.",
+  "dim": null
+ },
+ {
+  "text": "book me in, its NOT the price im worried about its the timing honestly",
+  "expected": "objected:timing",
+  "why": "'not the price' negates price; but 'timing' resistance ('worried about... timing') is genuine and un-negated -> objected:timing. Matcher could false-booked, or wrongly fire price.",
+  "dim": null
+ },
+ {
+  "text": "ok lets book, cant really afford it this month but ill make it work",
+  "expected": "objected:price",
+  "why": "'lets book' + 'cant really afford it' = genuine price/affordability resistance -> objected:price. Note 'afford' bare was removed, but 'cant afford it' should still match as price; also 'cant' is a real negation of afford yet the resistance stands. High false-booked risk.",
+  "dim": null
+ },
+ {
+  "text": "im in, sign me up — do u guys do payment plans though?",
+  "expected": "replied",
+  "why": "'sign me up' tempts booked; 'do u do payment plans' is a QUESTION/inquiry, not a stated payment objection. No genuine resistance stated -> replied. Matcher may false-booked or false-objected:payment on 'payment plan'.",
+  "dim": null
+ },
+ {
+  "text": "love the design so much, a little out of my price range, but book me!!",
+  "expected": "objected:price",
+  "why": "ends with 'book me' (booked idiom) but 'out of my price range' is genuine price resistance mid-reply -> objected:price. Trailing commit tempts false-booked.",
+  "dim": null
+ },
+ {
+  "text": "not gonna lie im on the fence, but yeah go ahead and book me in",
+  "expected": "objected:uncertainty",
+  "why": "'on the fence' is genuine uncertainty resistance; 'book me in' is a strong commit. Rules: resistance present -> objected:uncertainty despite the commit. Very high false-booked risk.",
+  "dim": null
+ },
+ {
+  "text": "lets get it booked, zero budget issues here and def not too pricey",
+  "expected": "booked",
+  "why": "'budget issues' and 'too pricey' both appear but negated ('zero ... issues', 'not too pricey') in-clause -> no genuine objection -> booked. Weak negation handling false-objected.",
+  "dim": null
+ },
+ {
+  "text": "i can afford it no problem, sounds cool, ill think about booking",
+  "expected": "replied",
+  "why": "'can afford it' is positive-no-objection, 'ill think about booking' is NOT a commitment (still deciding). No booked commit, no genuine objection -> replied. Matcher may false-booked on 'booking' or false-objected on 'afford'.",
+  "dim": null
+ },
+ {
+  "text": "book me in but maybe not this month, next month better for me",
+  "expected": "objected:timing",
+  "why": "'book me in' commit + 'not this month, next month' genuine timing deferral -> objected:timing. The negation 'not this month' is part of the timing objection, not a booking negation. False-booked risk high.",
+  "dim": null
+ },
+ {
+  "text": "ill pay the deposit tomorrow, promise, sooo excited",
+  "expected": "replied",
+  "why": "'pay the deposit tomorrow' is a commitment that is NOT a booking per rules, and bare 'deposit' was removed as a trigger. No booked, no objection -> replied. Matcher may false-booked on 'deposit'.",
+  "dim": null
+ },
+ {
+  "text": "book it book it book it, ok but real talk is it worth the money",
+  "expected": "replied",
+  "why": "repeated 'book it' tempts booked, but 'is it worth the money' is a QUESTION/inquiry, not a stated price objection, and there's no clean affirmative commit-with-us decision — it's hedged by a trailing question. Genuinely ambiguous -> replied (safety). Matcher likely false-booked.",
+  "dim": null
+ },
+ {
+  "text": "honestly still deciding but if i do itll be with u, book pending lol",
+  "expected": "objected:uncertainty",
+  "why": "'still deciding' is genuine uncertainty; 'if i do' is conditional (not a commit) and 'book pending' isn't an affirmative booking. Resistance present -> objected:uncertainty. Matcher may false-booked on 'book'.",
+  "dim": null
+ },
+ {
+  "text": "yes book me!! scared of needles but ill survive haha",
+  "expected": "objected:trust",
+  "why": "'book me' commit + 'scared of needles' genuine trust/fear resistance -> objected:trust. Emoji/joking tone masks it; false-booked risk high.",
+  "dim": null
+ },
+ {
+  "text": "no budget problems at all, book me in for the sleeve",
+  "expected": "booked",
+  "why": "'budget problems' negated by 'no ... at all' in-clause; bare budget removed anyway -> no objection; 'book me in' -> booked. Weak negation handling false-objected:price.",
+  "dim": null
+ },
+ {
+  "text": "maybe later on the big piece, but book me for the small one now",
+  "expected": "booked",
+  "why": "'maybe later' is a timing cue but scoped to 'the big piece'; the actual decision 'book me for the small one now' is an affirmative commit with us -> booked. Matcher false-objected:timing on 'maybe later'.",
+  "dim": null
+ },
+ {
+  "text": "lets book, though i cant lie its steep, still doing it",
+  "expected": "objected:price",
+  "why": "'lets book' + 'its steep' (price resistance) un-negated ('cant lie' is idiom, not negating steep) -> objected:price. 'cant' could be misread as negation of the resistance; correct is objected.",
+  "dim": null
+ },
+ {
+  "text": "i dont wanna wait, book me in asap, price is fine",
+  "expected": "booked",
+  "why": "'dont wanna wait' negates a timing delay (so no timing objection), 'price is fine' negates price -> no genuine resistance, strong commit -> booked. Matcher may false-objected on 'wait'/'price'.",
+  "dim": null
+ },
+ {
+  "text": "couldnt book last time cause of money but im all in now, book me",
+  "expected": "booked",
+  "why": "'couldnt book' + 'money' describe a PAST barrier, now resolved ('all in now, book me'). Present state is affirmative commit -> booked. Matcher may false-objected:price on 'money' or false-negate on 'couldnt book'.",
+  "dim": null
+ },
+ {
+  "text": "honestly its just way too expensive for me right now, sorry",
+  "expected": "objected:price",
+  "why": "'right now' can look like a timing hedge and an over-corrected matcher may treat the apologetic softening as neutral chatter, dropping the plain 'too expensive' price objection to replied",
+  "dim": null
+ },
+ {
+  "text": "i really cant afford that tbh",
+  "expected": "objected:price",
+  "why": "the negation IS the objection ('cant afford'); an aggressive negation lexicon that neutralizes 'cant' could wrongly suppress the whole clause to replied",
+  "dim": null
+ },
+ {
+  "text": "thats a bit pricey for my budget ngl",
+  "expected": "objected:price",
+  "why": "bare 'budget' was tightened out, so a matcher leaning on that token may miss it; it must still fire on 'a bit pricey' rather than collapse to replied",
+  "dim": null
+ },
+ {
+  "text": "im on a really tight budget at the moment",
+  "expected": "objected:price",
+  "why": "'on a budget' is the intended phrase but the inserted word 'tight' breaks an exact 'on a ... budget' match, risking a false replied on a genuine price objection",
+  "dim": null
+ },
+ {
+  "text": "way outta my price range rn to be honest",
+  "expected": "objected:price",
+  "why": "slang 'outta' and 'price range' instead of the canonical 'too expensive' may not match, over-suppressing a clear price objection to replied",
+  "dim": null
+ },
+ {
+  "text": "i'd need a payment plan to make this work",
+  "expected": "objected:payment",
+  "why": "positive framing ('make this work') and no negative words could fool a matcher that expects negativity into replied, but 'payment plan' is a genuine payment objection that must fire",
+  "dim": null
+ },
+ {
+  "text": "gonna have to pay it off in installments if thats cool",
+  "expected": "objected:payment",
+  "why": "the polite 'if thats cool' reads friendly/neutral; an over-corrected matcher may treat it as agreeable chatter and drop the 'pay it off / installments' payment objection",
+  "dim": null
+ },
+ {
+  "text": "i wanna book but i need to sort out a payment plan first",
+  "expected": "objected:payment",
+  "why": "the word 'book' risks a false booked, while an over-correction fix could suppress BOTH signals to replied; the real signal is the payment-plan objection after 'but'",
+  "dim": null
+ },
+ {
+  "text": "maybe later, not really feeling it right now",
+  "expected": "objected:timing",
+  "why": "'not right now' carries intrinsic negation; a fix that strips negated clauses may wrongly neutralize the timing objection into replied",
+  "dim": null
+ },
+ {
+  "text": "next month works better for me, not now",
+  "expected": "objected:timing",
+  "why": "'not now' looks like a suppress-me negation and 'next month' can be read as scheduling detail; an over-corrected matcher may collapse a real timing objection to replied",
+  "dim": null
+ },
+ {
+  "text": "eh not right now, gonna hold off a bit",
+  "expected": "objected:timing",
+  "why": "the leading 'eh' filler plus negated 'not right now' invites over-suppression; the timing objection must still fire",
+  "dim": null
+ },
+ {
+  "text": "im honestly so nervous about the pain 😬",
+  "expected": "objected:trust",
+  "why": "no refusal words and an emoji make it read as harmless emotion; an over-cautious matcher may treat it as neutral replied instead of the trust objection it is",
+  "dim": null
+ },
+ {
+  "text": "does it hurt a lot? cause im kinda scared ngl",
+  "expected": "objected:trust",
+  "why": "a leading interrogative ('does it hurt a lot?') can trip question-detection into flagging the whole reply as an inquiry, hiding the genuine 'scared' trust objection",
+  "dim": null
+ },
+ {
+  "text": "im really worried its gonna hurt too much",
+  "expected": "objected:trust",
+  "why": "'worried' + 'hurt' is a plain trust objection but the hesitant tone with no hard 'no' could be over-suppressed to replied by a fix tuned to avoid false objections",
+  "dim": null
+ },
+ {
+  "text": "still not sure tbh, kinda on the fence about it",
+  "expected": "objected:uncertainty",
+  "why": "'not sure' contains a negation the fix might strip and 'on the fence' is idiomatic; over-correction risks collapsing a clear uncertainty objection to replied",
+  "dim": null
+ },
+ {
+  "text": "im still deciding, cant commit yet",
+  "expected": "objected:uncertainty",
+  "why": "'cant commit' pairs a negation with a booking-adjacent word; an over-corrected matcher may neutralize the negation and miss the genuine uncertainty objection",
+  "dim": null
+ },
+ {
+  "text": "yesss book me in for saturday pls 🙌",
+  "expected": "booked",
+  "why": "trailing 'pls' politeness and an emoji could make a fix read it as a soft request rather than the clear 'book me in' commitment, wrongly dropping it to replied",
+  "dim": null
+ },
+ {
+  "text": "ok im in, lets book it — cant wait!!",
+  "expected": "booked",
+  "why": "'cant wait' is a positive idiom; if idiom-neutralization is applied too broadly a fix could let the 'cant' suppress the 'lets book it' commitment to replied",
+  "dim": null
+ },
+ {
+  "text": "dont even need to think about it, book me for the 12th",
+  "expected": "booked",
+  "why": "the leading 'dont' negation is clause-scoped to a different clause; an over-corrected matcher might let it bleed across the comma and kill the real booking",
+  "dim": null
+ },
+ {
+  "text": "cant book fast enough honestly, sign me up for next friday",
+  "expected": "booked",
+  "why": "'cant book fast enough' literally contains 'cant book' which looks negated, tempting suppression, but 'sign me up' is a clear commitment that must still fire",
+  "dim": null
+ },
+ {
+  "text": "deposit sent ✅ see you saturday",
+  "expected": "booked",
+  "why": "'deposit' was tightened as a bare objection token; a fix that scrubbed deposit-handling may miss the canonical 'deposit sent' booking signal and return replied",
+  "dim": null
+ },
+ {
+  "text": "im ready to book, no more waiting on this",
+  "expected": "booked",
+  "why": "'no more waiting' introduces a 'no' negation after the commitment; an over-corrected matcher could let it suppress the plain 'ready to book'",
+  "dim": null
+ },
+ {
+  "text": "100% booking with you guys, when can i come in",
+  "expected": "booked",
+  "why": "the trailing 'when can i come in' is interrogative and could trip question-detection into labeling the whole reply an inquiry, hiding the firm 'booking with you' commitment",
+  "dim": null
+ },
+ {
+  "text": "yeah id like to book the half sleeve for next month",
+  "expected": "booked",
+  "why": "'next month' is a timing-objection phrase that could steal the label to objected:timing or trigger suppression, but this is a genuine 'id like to book' commitment",
+  "dim": null
+ },
+ {
+  "text": "count me in for the 15th, il sort the deposit today",
+  "expected": "booked",
+  "why": "'count me in' isn't a canonical booked phrase, so a narrow/over-corrected matcher may miss the commitment and fall back to replied despite a clear booking",
+  "dim": null
+ },
+ {
+  "text": "yep lets lock it in for sat morning",
+  "expected": "booked",
+  "why": "'lock it in' is a commitment idiom outside the exact 'book' lexicon; an over-tightened matcher may fail to fire and mislabel a real booking as replied",
+  "dim": null
+ }
+]
