@@ -13,8 +13,11 @@ calls :func:`reject`. Connector selection is by the action's ``channel``:
   2-step media→media_publish flow) for posts, ``reply_to_comment`` for comment
   replies. The Meta token is currently expired, so a live call raises the REAL
   Graph error → ``status='failed'`` + ``last_error``. **Never a fake publish.**
-  (An IG post additionally needs a public JPEG ``DEMO_IG_IMAGE_URL`` and, for a
-  non-test user, Meta App Review of ``instagram_content_publish``.)
+  (An IG post additionally needs a PUBLIC image URL — per-action media resolved
+  from ``context.artwork``/``context.attachment_artifact_id`` (+ optional
+  ``PUBLIC_ASSET_BASE_URL``), with the global ``DEMO_IG_IMAGE_URL`` as a
+  logged last-resort fallback — and, for a non-test user, Meta App Review of
+  ``instagram_content_publish``.)
 
 **Exactly-once.** A real external send (a Gmail message) is not transactional, so
 the guarantee is the durable status: if the action is already ``sent`` we return
@@ -670,21 +673,104 @@ def _instagram_from_env():
     return InstagramConnector.from_env(enabled=True)
 
 
+#: The exact honest refusal when a draft carries its own artwork but that artifact
+#: has no publicly reachable URL (IG's Graph API pulls the image from a PUBLIC url;
+#: it cannot read our local disk). Spec §11.
+_IG_NO_PUBLIC_URL_ERROR = (
+    "IG needs a publicly reachable image URL; local artifact not publicly served — "
+    "configure PUBLIC_ASSET_BASE_URL or attach a public URL"
+)
+
+
+def _context_public_image_url(ctx: dict[str, Any]) -> str | None:
+    """An explicit http(s) image URL staged on the action's context (the honest
+    per-action media source), or ``None``. Checks the artwork block first
+    (``publicUrl``/``public_url``/``imageUrl``/``image_url``/``url``), then the
+    top-level context (``image_url``/``imageUrl``/``public_image_url``)."""
+    candidates: list[Any] = []
+    art = ctx.get("artwork")
+    if isinstance(art, dict):
+        candidates += [art.get(k) for k in ("publicUrl", "public_url", "imageUrl", "image_url", "url")]
+    candidates += [ctx.get(k) for k in ("image_url", "imageUrl", "public_image_url")]
+    for v in candidates:
+        if isinstance(v, str) and v.strip().lower().startswith(("http://", "https://")):
+            return v.strip()
+    return None
+
+
+def _resolve_ig_image_url(action: ActionRow) -> tuple[str | None, str, str | None]:
+    """Resolve the PER-ACTION image URL for an IG post (spec §11); returns
+    ``(image_url, source, error)`` where exactly one of ``image_url``/``error``
+    is set. Resolution order — honest at every step:
+
+    1. an explicit public URL on ``context.artwork`` / context → ``source='context_url'``;
+    2. a promised artifact id (``context.artwork.artifactId`` /
+       ``context.attachment_artifact_id``) + ``PUBLIC_ASSET_BASE_URL`` set →
+       ``{base}/studio/artifacts/{id}/raw`` (``source='public_asset_base'``);
+    3. a promised artifact with NO way to serve it publicly → the concrete
+       :data:`_IG_NO_PUBLIC_URL_ERROR` refusal (a draft that promised specific
+       artwork is NEVER silently published with different/global media);
+    4. no per-action media at all → the legacy global ``DEMO_IG_IMAGE_URL``
+       (``source='demo_env'`` — the caller logs this fallback honestly), else the
+       existing concrete no-image failure."""
+    ctx = _action_context(action)
+    public_url = _context_public_image_url(ctx)
+    if public_url:
+        return public_url, "context_url", None
+    artifact_id = _context_attachment_artifact_id(ctx)
+    if artifact_id:
+        base = (os.environ.get("PUBLIC_ASSET_BASE_URL") or "").strip()
+        if base:
+            return (
+                f"{base.rstrip('/')}/studio/artifacts/{artifact_id}/raw",
+                "public_asset_base",
+                None,
+            )
+        return None, "artifact_not_public", f"{_IG_NO_PUBLIC_URL_ERROR} (artifact {artifact_id})"
+    demo = os.environ.get("DEMO_IG_IMAGE_URL")
+    if demo:
+        return demo, "demo_env", None
+    return None, "none", (
+        "ig post needs a public image: stage per-action artwork (context.artwork with a "
+        "public URL, or an artifact id + PUBLIC_ASSET_BASE_URL) or set the demo JPEG "
+        "fallback DEMO_IG_IMAGE_URL — plus a valid re-minted token + Meta app review"
+    )
+
+
 def _publish_instagram(action: ActionRow, connector: Any | None, dsn: str | None) -> ActionRow:
     conn = connector or _instagram_from_env()
-    image_url = os.environ.get("DEMO_IG_IMAGE_URL")
-    if not image_url:
-        # IG content publishing requires a public JPEG container source. Fail
-        # honestly rather than attempt a publish that cannot carry media.
-        return update_status(
-            action.id, "failed", dsn=dsn,
-            last_error="ig post needs a public JPEG (set DEMO_IG_IMAGE_URL) + a valid re-minted token + Meta app review",
+    image_url, source, err = _resolve_ig_image_url(action)
+    if image_url is None:
+        # No publishable media. Fail honestly rather than attempt a publish that
+        # cannot carry (or would swap out) the draft's media.
+        _record_send_audit_row(
+            action, mode="live", result="failed", transport="instagram-graph",
+            detail=err, dsn=dsn,
         )
+        return update_status(action.id, "failed", dsn=dsn, last_error=err)
+    if source == "demo_env":
+        _log.warning(
+            "ig publish: action=%s has NO per-action media — falling back to the "
+            "GLOBAL DEMO_IG_IMAGE_URL (%s). This is the demo fallback image, not "
+            "artwork staged for this draft.",
+            action.id, image_url,
+        )
+    else:
+        _log.info("ig publish: action=%s image source=%s url=%s", action.id, source, image_url)
     try:
         _ensure_real(conn)  # real-only: a mock never live-sends
         result = _resolve(conn.post(image_url=image_url, caption=action.draft))
     except Exception as exc:  # noqa: BLE001 — surface the REAL Graph error, never fake success
+        _record_send_audit_row(
+            action, mode="live", result="failed", transport="instagram-graph",
+            detail=f"{exc} (image source={source})", dsn=dsn,
+        )
         return update_status(action.id, "failed", dsn=dsn, last_error=str(exc))
+    _record_send_audit_row(
+        action, mode="live", result="sent", transport="instagram-graph",
+        provider_id=getattr(result, "media_id", None),
+        detail=f"image source={source}", dsn=dsn,
+    )
     return update_status(
         action.id, "sent", dsn=dsn,
         deep_link=getattr(result, "permalink", None),
