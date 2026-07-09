@@ -153,6 +153,10 @@ def lookup_lead(
         # SMS channel targets a real number and the per-lead Dossier carries real contact.
         "phone": cust["phone"],
         "ig_handle": cust["ig_handle"],
+        # Customer-provided LinkedIn handle (already SELECTed): surfaced so the
+        # consent-safe social lookup (gather_social_context) can see it — only
+        # handles the customer provided are ever looked up, never name discovery.
+        "linkedin_handle": cust["linkedin_handle"],
         "city": cust["city"],
         "state": cust["state"],
         "interests": list(cust["interests"] or []),
@@ -599,6 +603,70 @@ def research_studio(facts: dict[str, Any], *, enabled: bool) -> list[dict[str, A
         return ordered[:3]
     except Exception:
         return []
+
+
+def gather_social_context(facts: dict[str, Any], enabled: bool = False) -> str | None:
+    """CONSENT-SAFE public social context for ONE lead (spec §7) — or honest ``None``.
+
+    PRIVACY LINE: only a handle the CUSTOMER THEMSELVES provided on their own row
+    (``ig_handle`` / ``linkedin_handle``) is ever looked up — NEVER name-based social
+    discovery. One gated Firecrawl site-search for that handle; the first hit with
+    usable public text is returned as a SHORT extract with its URL cited inline (so
+    the psych profile's evidence carries the real source). Before anything is
+    returned it passes the deterministic protected-traits filter — a line asserting
+    the lead's gender/age/ethnicity/health/religion/sexuality/financial status/
+    immigration status/politics is scrubbed (unless customer-provided first-party
+    data backs it).
+
+    Honest-none everywhere: disabled / no handle / keyless / provider disabled /
+    blocked egress (the outbound proxy blocks some hosts) / no public hit / nothing
+    left after the trait filter -> ``None``, never a fabricated social signal. Pure
+    aside from the single gated provider call."""
+    if not enabled:
+        return None
+    ig = str(facts.get("ig_handle") or "").strip().lstrip("@")
+    li = str(facts.get("linkedin_handle") or "").strip().lstrip("@")
+    if not ig and not li:
+        return None
+    query = (
+        f"site:instagram.com {ig}" if ig else f"site:linkedin.com/in {li}"
+    )
+    try:
+        from research.pipeline import live_registry
+
+        provider = live_registry().get("firecrawl")
+        if provider is None or not getattr(provider, "enabled", False):
+            return None
+        hits = provider.search(query, limit=3)
+    except Exception:
+        return None  # blocked host / proxy / provider failure -> honest none
+
+    from research.protected_traits import (
+        allowed_categories,
+        build_first_party_corpus,
+        filter_lines,
+    )
+
+    allowed = allowed_categories(facts)
+    fp_corpus = build_first_party_corpus(facts)
+    for hit in hits or []:
+        url = str(getattr(hit, "url", None) or "").strip()
+        text = " — ".join(
+            x for x in (
+                str(getattr(hit, "title", None) or "").strip(),
+                str(getattr(hit, "snippet", None) or "").strip(),
+            ) if x
+        )
+        if not url or not text:
+            continue
+        clean, _drops = filter_lines(
+            text, allowed=allowed, first_party_corpus=fp_corpus
+        )
+        clean = " ".join(clean.split()).strip()
+        if not clean:
+            continue  # everything public asserted protected traits -> not usable
+        return f"{clean[:400]} (source: {url})"
+    return None
 
 
 def _first_research_signal(
