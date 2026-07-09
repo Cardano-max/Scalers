@@ -16,7 +16,7 @@
  * paused on an artwork pick (awaiting_selection) renders the pick — nothing here
  * sends anything.
  */
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { RunState } from '@/lib/studio/run-trace';
 import {
   deriveAgencyStages,
@@ -28,6 +28,7 @@ import {
 } from '@/lib/studio/agency';
 import { AGENT_PERSONAS } from '@/lib/studio/persona';
 import { StepSpanRow } from './StepSpanRow';
+import { ArtworkPickerModal } from './ArtworkPickerModal';
 import { ResearchSourcesRail } from './ResearchSourcesRail';
 import { SpecArtifactCard } from './SpecArtifactCard';
 import { StagedDraftsReview } from './StagedDraftsReview';
@@ -45,6 +46,9 @@ export interface AgencyCanvasProps {
   onOpenReview?: () => void;
   /** Open the Review Queue detail focused on ONE staged draft (Deep Review). */
   onDeepReview?: (actionId: string) => void;
+  /** Resolve a paused run's artwork pick (POST select-artwork + keep polling).
+   *  When omitted, the pause still renders honestly but cannot be resolved here. */
+  onPickArtwork?: (assetId: string) => void;
   /** Compact mode (embedded beneath the Voice hero) trims the outer chrome. */
   compact?: boolean;
 }
@@ -56,6 +60,7 @@ export function AgencyCanvas({
   onRunCampaign,
   onOpenReview,
   onDeepReview,
+  onPickArtwork,
   compact = false,
 }: AgencyCanvasProps) {
   const stages = useMemo(() => deriveAgencyStages(runState, running), [runState, running]);
@@ -74,7 +79,18 @@ export function AgencyCanvas({
   const juryDone = !!juryStage?.done;
   const completed = runState?.status === 'completed';
   const awaitingSelection = runState?.status === 'awaiting_selection';
+  const selectionRequest = awaitingSelection ? runState?.selectionRequest ?? null : null;
   const hasRun = steps.length > 0 || running || awaitingSelection;
+
+  // The pick dialog opens whenever a NEW selection request arrives; "Decide later"
+  // hides it (the run stays paused; the inline banner keeps the reopen affordance).
+  const [pickerDismissed, setPickerDismissed] = useState(false);
+  const selectionSignature = selectionRequest
+    ? `${runState?.runId}_${selectionRequest.question}_${selectionRequest.options.length}`
+    : null;
+  useEffect(() => {
+    setPickerDismissed(false);
+  }, [selectionSignature]);
   // Real HELD draft rows for this run. The run transitions into review mode (per-draft
   // Approve / Reject / Deep-Review) once it completes (or the jury has landed) and
   // there are staged drafts — never fabricated; empty list renders nothing.
@@ -206,6 +222,54 @@ export function AgencyCanvas({
         <div role="alert" style={{ fontSize: 12.5, color: 'var(--danger-text)', background: 'var(--danger-bg)', border: '1px solid #F1BEB8', borderRadius: 9, padding: '9px 12px' }}>
           Run error: {runState.error}
         </div>
+      )}
+
+      {/* Paused on an operator artwork pick — inline banner (always visible while
+          paused, incl. the Voice-tab rail) + the pick dialog itself. */}
+      {selectionRequest && (
+        <div
+          role="status"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            flexWrap: 'wrap',
+            fontSize: 12.5,
+            color: 'var(--amber-text)',
+            background: 'var(--amber-bg)',
+            border: '1px solid var(--amber-border)',
+            borderRadius: 9,
+            padding: '9px 12px',
+          }}
+        >
+          <span style={{ minWidth: 0, flex: 1 }}>
+            <strong>Paused:</strong> {selectionRequest.question}
+          </span>
+          <button
+            type="button"
+            onClick={() => setPickerDismissed(false)}
+            style={{
+              font: 'inherit',
+              fontSize: 12,
+              fontWeight: 600,
+              color: '#fff',
+              background: 'var(--amber-dot, #B58A2A)',
+              border: 'none',
+              borderRadius: 'var(--radius-button)',
+              padding: '6px 12px',
+              cursor: 'pointer',
+            }}
+          >
+            Pick artwork ({selectionRequest.options.length})
+          </button>
+        </div>
+      )}
+      {selectionRequest && !pickerDismissed && onPickArtwork && (
+        <ArtworkPickerModal
+          request={selectionRequest}
+          onSelect={onPickArtwork}
+          onDismiss={() => setPickerDismissed(true)}
+        />
       )}
 
       {/* The lane / workflow with handoff edges. */}

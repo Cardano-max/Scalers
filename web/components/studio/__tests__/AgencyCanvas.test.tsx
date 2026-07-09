@@ -102,6 +102,45 @@ describe('AgencyCanvas — result/review transition on completion', () => {
   });
 });
 
+describe('AgencyCanvas — awaiting_selection pause (spec 22)', () => {
+  const pausedRun: RunState = {
+    runId: 'run_pause',
+    status: 'awaiting_selection',
+    steps: [step(1, 'artist_memory', { notes: 'profile' }, '2026-06-30T10:00:00Z')],
+    nPending: null,
+    pending: [],
+    archetype: 'ig_post',
+    selectionRequest: {
+      kind: 'artwork',
+      question: 'Which artwork should anchor this post?',
+      options: [
+        { assetId: 'asset_1', artifactId: 'art_1', styles: ['fine-line'], motifs: ['rose'], why: 'Matches the brief' },
+        { assetId: 'asset_2', artifactId: 'art_2', styles: ['realism'], motifs: [], why: null },
+      ],
+    },
+    error: null,
+  };
+
+  it('renders the paused banner + modal with the REAL question/options and posts the pick', () => {
+    const onPick = vi.fn();
+    wrap(<AgencyCanvas runState={pausedRun} running={false} connected onPickArtwork={onPick} />);
+    expect(screen.getByText('Paused — your pick is needed')).toBeInTheDocument();
+    // Real question renders (banner + dialog).
+    expect(screen.getAllByText(/Which artwork should anchor this post\?/).length).toBeGreaterThan(0);
+    // The dialog offers exactly the engine's options; clicking one resolves with its assetId.
+    fireEvent.click(screen.getByRole('button', { name: 'Pick artwork asset_2' }));
+    expect(onPick).toHaveBeenCalledWith('asset_2');
+  });
+
+  it('"Decide later" hides the dialog but keeps the honest paused banner', () => {
+    wrap(<AgencyCanvas runState={pausedRun} running={false} connected onPickArtwork={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Decide later' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    // The pause stays visible with a reopen affordance.
+    expect(screen.getByRole('button', { name: /Pick artwork \(2\)/ })).toBeInTheDocument();
+  });
+});
+
 describe('AgencyCanvas — honest research skipped vs queued', () => {
   const skippedResearchRun: RunState = {
     runId: 'run_skip',

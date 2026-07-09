@@ -122,6 +122,7 @@ export function AgencyScreen() {
               connected={connected}
               onOpenReview={() => navigate('review')}
               onDeepReview={(actionId) => navigate('review', actionId)}
+              onPickArtwork={studio.pickArtwork}
             />
           </>
         ) : (

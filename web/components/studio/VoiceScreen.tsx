@@ -259,6 +259,9 @@ export function VoiceScreen() {
           compact
           onOpenReview={() => navigate('review')}
           onDeepReview={(actionId) => navigate('review', actionId)}
+          /* A voice-triggered run can pause on an artwork pick — surface + resolve it
+             right here in the rail (inline banner + the pick dialog). */
+          onPickArtwork={studio.pickArtwork}
         />
       </aside>
     </section>
