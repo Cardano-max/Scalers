@@ -4652,36 +4652,17 @@ def mount_studio_agui(app) -> None:
             )
         # Videos take the frame-sampled pipeline (studio/video_ingest.py): same
         # disk + artifact + b-roll library + memory writes, VLM over REAL frames.
-        # Audio (client voice notes) goes through studio/audio_ingest.py: stored +
-        # REAL Whisper transcription into the artifact + artist memory.
         is_video = bool(media_type and media_type.startswith("video/")) or (
             not media_type
             and name.lower().endswith((".mp4", ".mov", ".webm", ".m4v", ".avi"))
         )
-        is_audio = bool(media_type and media_type.startswith("audio/")) or (
-            not media_type and name.lower().endswith((".mp3", ".m4a", ".wav", ".ogg", ".flac"))
-        )
-        if media_type and not media_type.startswith(("image/", "video/", "audio/")):
+        if media_type and not media_type.startswith(("image/", "video/")):
             return JSONResponse(
-                {"ok": False, "error": f"mediaType {media_type!r} is not image/*, video/*, or audio/*"},
+                {"ok": False, "error": f"mediaType {media_type!r} is not image/* or video/*"},
                 status_code=400,
             )
         try:
-            if is_audio:
-                from studio.audio_ingest import process_audio_upload
-
-                result = await asyncio.to_thread(
-                    lambda: process_audio_upload(
-                        tenant_id,
-                        name,
-                        raw,
-                        media_type=media_type or "audio/mpeg",
-                        artist=artist,
-                        prompt=prompt,
-                        dsn=dsn,
-                    )
-                )
-            elif is_video:
+            if is_video:
                 from studio.video_ingest import process_video_upload
 
                 result = await asyncio.to_thread(

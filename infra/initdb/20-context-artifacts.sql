@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS context_artifacts (
     artifact_type TEXT        NOT NULL              -- the coarse kind the supervisor counts by
                   CHECK (artifact_type IN (
                       'csv', 'brand_voice', 'document', 'pdf',
-                      'image', 'artwork', 'screenshot', 'video', 'audio', 'other')),
+                      'image', 'artwork', 'screenshot', 'video', 'other')),
     media_type    TEXT,                             -- MIME, e.g. 'text/csv' | 'image/png' | 'application/pdf'
     summary       TEXT,                             -- honest one-liner: "CSV: 500 rows; columns: name, email"
     parsed_content TEXT,                            -- extracted text (docs/CSV); NULL/empty for a not-yet-parsed image
@@ -58,4 +58,4 @@ ALTER TABLE context_artifacts
 ALTER TABLE context_artifacts
     ADD CONSTRAINT context_artifacts_artifact_type_check CHECK (artifact_type IN (
         'csv', 'brand_voice', 'document', 'pdf',
-        'image', 'artwork', 'screenshot', 'video', 'audio', 'other'));
+        'image', 'artwork', 'screenshot', 'video', 'other'));
