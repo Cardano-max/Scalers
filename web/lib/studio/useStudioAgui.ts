@@ -159,6 +159,13 @@ export function useStudioAgui(
   useEffect(() => {
     const ctl = new AbortController();
     let cancelled = false;
+    // Each session is its OWN conversation (Claude-style): switching sessions
+    // clears the previous session's thread/steps/voice lines before hydrating.
+    setTurns([]);
+    setVoiceTurns([]);
+    setSteps([]);
+    messagesRef.current = [];
+    lastVoiceRef.current = null;
     (async () => {
       try {
         const history = await fetchStudioHistory(graphqlUrl, sessionId, ctl.signal);
@@ -337,26 +344,51 @@ export function useStudioAgui(
   // Record a finalized spoken line into the unified transcript. Deduped against the
   // immediately-previous voice line (the realtime stream can re-emit a final), so a
   // single utterance lands once. Never sends anything — it is a display record only.
+  const lastVoiceRef = useRef<{ role: string; text: string } | null>(null);
   const recordVoiceTurn = useCallback(
     (role: ChatTurn['role'], label: string, text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
-      setVoiceTurns((prev) => {
-        const last = prev[prev.length - 1];
-        if (last && last.role === role && last.text === trimmed) return prev;
-        return [
-          ...prev,
-          {
-            id: `voice_${role}_${Date.now()}_${prev.length}`,
-            role,
-            label,
+      // Dedupe re-emitted finals BEFORE any side effect (persist/thread-join).
+      const last = lastVoiceRef.current;
+      if (last && last.role === role && last.text === trimmed) return;
+      lastVoiceRef.current = { role, text: trimmed };
+      setVoiceTurns((prev) => [
+        ...prev,
+        {
+          id: `voice_${role}_${Date.now()}_${prev.length}`,
+          role,
+          label,
+          text: trimmed,
+          at: new Date().toISOString(),
+        },
+      ]);
+      // ONE conversation across voice and text: the spoken line joins the typed
+      // host's message thread (so the next typed turn carries it as real context)…
+      const isOperator = role === 'OPERATOR';
+      messagesRef.current = [
+        ...messagesRef.current,
+        {
+          id: `v_${Date.now()}`,
+          role: isOperator ? 'user' : 'assistant',
+          content: trimmed,
+        } as AguiMessage,
+      ];
+      // …and persists to studio_chat_turns, so a re-minted voice session (and the
+      // session list / hydration) reads it back. Fire-and-forget; display already done.
+      if (aguiUrl) {
+        fetch(`${aguiUrl.replace(/\/agui(\?.*)?$/, '')}/voice/turn`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            sessionId,
+            role: isOperator ? 'operator' : 'host',
             text: trimmed,
-            at: new Date().toISOString(),
-          },
-        ];
-      });
+          }),
+        }).catch(() => {});
+      }
     },
-    [],
+    [aguiUrl, sessionId],
   );
 
   // The ONE transcript: persisted/streamed turns + client-recorded voice turns,
@@ -364,7 +396,14 @@ export function useStudioAgui(
   // single Voice surface renders — typed and spoken lines in one conversation.
   const mergedTurns = useMemo<ChatTurn[]>(() => {
     if (voiceTurns.length === 0) return turns;
-    return [...turns, ...voiceTurns].sort((a, b) =>
+    // Spoken lines now ALSO persist server-side; once history returns them, drop
+    // the client-side copy so a single utterance never renders twice.
+    const persisted = new Set(turns.map((t) => `${t.role}|${t.text.trim()}`));
+    const pendingVoice = voiceTurns.filter(
+      (v) => !persisted.has(`${v.role}|${v.text.trim()}`),
+    );
+    if (pendingVoice.length === 0) return turns;
+    return [...turns, ...pendingVoice].sort((a, b) =>
       a.at < b.at ? -1 : a.at > b.at ? 1 : 0,
     );
   }, [turns, voiceTurns]);

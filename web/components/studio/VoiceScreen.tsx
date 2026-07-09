@@ -23,6 +23,7 @@ import { useVoiceHost } from '@/lib/studio/voice/useVoiceHost';
 import { VoiceOrb } from './VoiceOrb';
 import { AgencyCanvas } from './AgencyCanvas';
 import { VoiceTweakPanel } from './VoiceTweakPanel';
+import { SessionSwitcher } from './SessionSwitcher';
 import type { ChatTurn } from '@/lib/data/studio-adapter';
 
 const HOST_ACCENT = '#6D4AE6';
@@ -108,6 +109,11 @@ export function VoiceScreen() {
           background: 'var(--canvas)',
         }}
       >
+        {/* Session bar — Claude-style conversations: pick a past session (its
+            transcript hydrates) or start a fresh one; voice + text share it. */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '10px 16px 0' }}>
+          <SessionSwitcher />
+        </div>
         {/* Hero — the orb, compact so the transcript below stays in view. */}
         <div
           style={{

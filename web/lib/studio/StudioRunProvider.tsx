@@ -11,7 +11,7 @@
  * the hook reports `connected: false` and every action is a no-op — the screens then
  * render their honest not-connected state, never a fabricated run.
  */
-import { createContext, useContext, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { useStudioAgui, type UseStudioAgui } from './useStudioAgui';
 
 export interface StudioRunContext extends UseStudioAgui {
@@ -21,6 +21,10 @@ export interface StudioRunContext extends UseStudioAgui {
   sessionId: string;
   /** True only when an AG-UI endpoint is actually configured (vs unreachable). */
   configured: boolean;
+  /** Switch to another conversation session (its transcript hydrates from the server). */
+  switchSession: (id: string) => void;
+  /** Start a brand-new empty session (Claude-style: fresh context, own memory). */
+  newSession: () => void;
 }
 
 const Ctx = createContext<StudioRunContext | null>(null);
@@ -35,18 +39,44 @@ function resolveUrls() {
 
 export function StudioRunProvider({
   children,
-  sessionId = 'studio-live-session',
+  sessionId: initialSessionId = 'studio-live-session',
 }: {
   children: ReactNode;
   sessionId?: string;
 }) {
   const { aguiUrl, graphqlUrl } = resolveUrls();
+  // Claude-style sessions: the active session id is stateful (persisted per
+  // browser), each session hydrating its OWN transcript + plan from the server.
+  const [sessionId, setSessionId] = useState(initialSessionId);
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem('scalers.sessionId');
+      if (saved) setSessionId(saved);
+    } catch {
+      /* storage unavailable: stay on the default session */
+    }
+  }, []);
+  const switchSession = useCallback((id: string) => {
+    const next = id.trim();
+    if (!next) return;
+    setSessionId(next);
+    try {
+      window.localStorage.setItem('scalers.sessionId', next);
+    } catch {
+      /* non-fatal */
+    }
+  }, []);
+  const newSession = useCallback(() => {
+    switchSession(`sess_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`);
+  }, [switchSession]);
   const studio = useStudioAgui(aguiUrl, graphqlUrl, sessionId);
   const value: StudioRunContext = {
     ...studio,
     aguiUrl,
     sessionId,
     configured: aguiUrl.length > 0,
+    switchSession,
+    newSession,
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

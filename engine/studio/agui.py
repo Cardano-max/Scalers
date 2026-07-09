@@ -4907,6 +4907,83 @@ def mount_studio_agui(app) -> None:
         )
         return JSONResponse(verdict)
 
+    @app.get("/studio/sessions")
+    async def studio_sessions_route():  # noqa: ANN202
+        """Conversation session list (chat-app style): every session (from the shared
+        ``studio_chat_turns`` transcript store) with its first operator line as the
+        title, turn count, and last activity — newest-active first. Honest empty
+        list when none exist."""
+        from fastapi.responses import JSONResponse
+
+        def _list() -> list[dict[str, Any]]:
+            import psycopg
+            from psycopg.rows import dict_row
+
+            with psycopg.connect(get_dsn(), row_factory=dict_row, connect_timeout=5) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT session_id,
+                           count(*)            AS turns,
+                           max(created_at)     AS last_at,
+                           min(created_at)     AS first_at,
+                           (SELECT t2.text FROM studio_chat_turns t2
+                             WHERE t2.session_id = t.session_id AND t2.role = 'operator'
+                             ORDER BY t2.seq LIMIT 1) AS title
+                      FROM studio_chat_turns t
+                     GROUP BY session_id
+                     ORDER BY max(created_at) DESC
+                     LIMIT 30
+                    """
+                ).fetchall()
+            return [
+                {
+                    "sessionId": r["session_id"],
+                    "title": (r["title"] or "(no operator turn yet)")[:90],
+                    "turns": int(r["turns"]),
+                    "lastAt": r["last_at"].isoformat() if r["last_at"] else None,
+                    "firstAt": r["first_at"].isoformat() if r["first_at"] else None,
+                }
+                for r in rows
+            ]
+
+        try:
+            sessions = await asyncio.to_thread(_list)
+        except Exception as exc:
+            return JSONResponse({"sessions": [], "error": f"{type(exc).__name__}: {exc}"})
+        return JSONResponse({"sessions": sessions})
+
+    @app.get("/studio/sessions/{session_id}/turns")
+    async def studio_session_turns_route(session_id: str):  # noqa: ANN202
+        """Hydrate one session's full transcript (typed AND persisted spoken turns,
+        in seq order) so switching sessions restores its real conversation."""
+        from fastapi.responses import JSONResponse
+
+        try:
+            turns = await asyncio.to_thread(
+                lambda: _chat_store(get_dsn()).history(session_id)
+            )
+        except Exception as exc:
+            return JSONResponse(
+                {"sessionId": session_id, "turns": [], "error": f"{type(exc).__name__}: {exc}"}
+            )
+        return JSONResponse(
+            {
+                "sessionId": session_id,
+                "turns": [
+                    {
+                        "id": t.id,
+                        "role": t.role,
+                        "text": t.text,
+                        "model": t.model,
+                        "at": t.created_at if isinstance(t.created_at, str) else (
+                            t.created_at.isoformat() if t.created_at else None
+                        ),
+                    }
+                    for t in turns
+                ],
+            }
+        )
+
     @app.get("/studio/fleet")
     async def studio_fleet_route():  # noqa: ANN202
         """`initech status` for the marketing agents: one row per recent run with
