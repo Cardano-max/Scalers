@@ -146,11 +146,16 @@ def record_pending_action(
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s,%s,%s,%s)
             -- Bare ON CONFLICT so BOTH unique guards are absorbed silently (nmh.11):
             --   (1) idempotency_key UNIQUE  — same run_id:cust_id exactly-once (nmh.2);
-            --   (2) the partial-unique recipient guard
-            --       actions_pending_recipient_uniq (tenant_id, worker, target)
-            --       WHERE status='pending' — ONE pending draft per recipient per
-            --       worker, so a RETRY (fresh run_id) re-staging the same recipient is
-            --       a structural no-op instead of a phantom-duplicate pending row.
+            --   (2) the partial-unique recipient guard actions_pending_recipient_uniq
+            --       (tenant_id, worker, target) WHERE status='pending' AND is_seeded=false
+            --       AND worker='studio_provided_leads' — at most ONE pending real draft
+            --       per recipient on the provided-leads path, so a RE-LAUNCH (fresh
+            --       run_id) re-staging the same recipient is a structural no-op instead
+            --       of a phantom-duplicate pending row. The guard is scoped to that one
+            --       worker: the research path (studio_agui_research) uses a batch-stable,
+            --       goal-discriminated run_id (nmh.2) and MUST keep two distinct-goal
+            --       drafts to one customer, so it is not covered by this index and only
+            --       ever conflicts on idempotency_key.
             ON CONFLICT DO NOTHING
             RETURNING id
             """,

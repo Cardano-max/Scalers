@@ -128,16 +128,21 @@ def test_cohort_shortfall_is_reconciled_with_a_counted_reason() -> None:
         _teardown(tenant)
 
 
-def test_request_above_output_cap_reconciles_with_an_honest_cap_reason() -> None:
-    """A request above the output hard cap (12) is clipped BY THE CAP, not falsely
-    reported as a contact shortage: 20 contactable + request 20 -> 12 drafts + a skip
-    that says 8 are beyond the cap (honest cause), and the ledger reconciles."""
-    from archetypes.compose import _OUTPUT_HARD_CAP
-
-    tenant = _seed_tenant(n_contactable=_OUTPUT_HARD_CAP + 8, n_warm=2)
+def test_request_above_output_cap_reconciles_with_an_honest_cap_reason(monkeypatch) -> None:
+    """A request above the SEQUENTIAL provided/cohort path's hard cap is clipped BY THE
+    CAP, not falsely reported as a contact shortage. nmh.11 DECOUPLED this path's cap
+    from compose's parallel-fan-out ``_OUTPUT_HARD_CAP`` (=12) to the env-tunable
+    ``ENGINE_COHORT_HARD_CAP`` (default 1000) so an operator's N reaches N — the AC
+    (N=10/25/30 exact, all > 12) is proven in test_provided_leads_retry_stability_pg.
+    Here we pin the cohort cap LOW to exercise clip-honesty without seeding 1000 rows:
+    20 contactable + request 20, cap 12 -> 12 drafts + a skip that says 8 are beyond the
+    cap (honest cause), and the ledger reconciles."""
+    monkeypatch.setenv("ENGINE_COHORT_HARD_CAP", "12")
+    cap = 12
+    tenant = _seed_tenant(n_contactable=cap + 8, n_warm=2)
     try:
-        led = _run(tenant, _OUTPUT_HARD_CAP + 8)["output_ledger"]
-        assert led["drafted"] == _OUTPUT_HARD_CAP  # cap-limited, but FULL to the cap
+        led = _run(tenant, cap + 8)["output_ledger"]
+        assert led["drafted"] == cap  # cap-limited, but FULL to the cap
         assert led["reconciled"] is True
         cap_rows = [s for s in led["skipped"] if "beyond the output cap" in s["reason"]]
         assert len(cap_rows) == 1 and cap_rows[0]["count"] == 8

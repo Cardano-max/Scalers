@@ -79,6 +79,10 @@ def test_voice_state_briefing_reads_seeded_postgres():
 
     dsn = os.environ.get("ENGINE_DATABASE_URL") or "postgresql://scalers:scalers@localhost:5432/scalers"
     run_id = f"team-camp_vbtest{uuid.uuid4().hex[:6]}-{uuid.uuid4().hex[:8]}"
+    # THROWAWAY tenant (was a shared real tenant): seeds its own row + reads it back by
+    # run_id, so the tenant is incidental. Isolated so the nmh.11 recipient guard cannot
+    # collapse this fixed "Sarah Kim" target onto a leaked pending row from a prior run.
+    tenant = f"vbtest_{uuid.uuid4().hex[:10]}"
     ensure_schema(dsn)
     ts = TeamStore(dsn)
     ts.setup()
@@ -87,7 +91,7 @@ def test_voice_state_briefing_reads_seeded_postgres():
                             role="strategist", model="m", input={},
                             output={"status": "failed", "error": "ModelHTTPError: 402"})
         record_pending_action(
-            tenant_id="ladies8391", decision_id=None, type="outreach", channel="gmail",
+            tenant_id=tenant, decision_id=None, type="outreach", channel="gmail",
             worker="studio_provided_leads", target="Sarah Kim", draft="Hi Sarah",
             subject="We miss you", context='{"skill_used": "re-engagement"}',
             conf=None, threshold=None, esc_kind="approval_required", esc_label="x",
@@ -98,6 +102,8 @@ def test_voice_state_briefing_reads_seeded_postgres():
         assert "strategist" in said.lower() and "fail" in said.lower()
     finally:
         with psycopg.connect(dsn, connect_timeout=5) as conn:
-            conn.execute("DELETE FROM actions WHERE run_id=%s", (run_id,))
+            # Delete by TENANT (not just run_id): a recipient-guard collapse would leave a
+            # row under a different run_id that a run_id-scoped delete would leak.
+            conn.execute("DELETE FROM actions WHERE tenant_id=%s", (tenant,))
             conn.execute("DELETE FROM agent_runs WHERE run_id=%s", (run_id,))
             conn.commit()

@@ -182,7 +182,13 @@ def test_campaign_state_reads_seeded_postgres_rows():
 
     dsn = os.environ.get("ENGINE_DATABASE_URL") or "postgresql://scalers:scalers@localhost:5432/scalers"
     run_id = f"team-camp_cstest{uuid.uuid4().hex[:6]}-{uuid.uuid4().hex[:8]}"
-    tenant = "ladies8391"
+    # THROWAWAY tenant (was a shared real tenant): this test SEEDS its own rows and
+    # reads them back by run_id, so the tenant is incidental. It must be isolated because
+    # the nmh.11 recipient guard (one pending studio_provided_leads draft per recipient
+    # per tenant) would otherwise collapse this test's fixed name-targets onto any leaked
+    # pending row from an interrupted prior run in a shared tenant -> 0 drafts under this
+    # run_id. A per-run tenant + cleanup-by-tenant keeps it deterministic and pollution-free.
+    tenant = f"cstest_{uuid.uuid4().hex[:10]}"
     ensure_schema(dsn)
     ts = TeamStore(dsn)
     ts.setup()
@@ -210,6 +216,8 @@ def test_campaign_state_reads_seeded_postgres_rows():
         assert state["agents"]["strategist"] == "done"
     finally:
         with psycopg.connect(dsn, connect_timeout=5) as conn:
-            conn.execute("DELETE FROM actions WHERE run_id=%s", (run_id,))
+            # Delete by TENANT (not just run_id): a recipient-guard collapse would leave a
+            # row under a different run_id, which a run_id-scoped delete would leak.
+            conn.execute("DELETE FROM actions WHERE tenant_id=%s", (tenant,))
             conn.execute("DELETE FROM agent_runs WHERE run_id=%s", (run_id,))
             conn.commit()
