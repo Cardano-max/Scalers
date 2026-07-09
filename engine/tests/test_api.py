@@ -73,7 +73,9 @@ def test_sse_stream_relays_graph_frames_then_decision():
     assert '"node": "research"' in body
     assert '"node": "assemble"' in body
     assert "event: decision" in body
-    assert '"decision": "auto"' in body  # 3 findings -> 0.9 clears the auto bar
+    # 4jx.13: the demo tenant is HELD by the fail-safe default registry, so the
+    # server-side resolution forces REVIEW even though confidence clears the bar.
+    assert '"decision": "review"' in body
     assert '"draft"' in body and "launch" in body
     assert "data: [DONE]" in body
 
@@ -91,3 +93,57 @@ def test_sse_review_autonomy_forces_review():
         params={"topic": "x", "thread_id": "rev", "autonomy": "review"},
     )
     assert '"decision": "review"' in resp.text
+
+
+# ── 4jx.13: autonomy is resolved server-side via HoldRegistry ────────────────
+
+
+def test_held_tenant_can_never_emit_auto_even_requesting_auto():
+    """AC 2: with the default (held) registry, an explicit client autonomy=auto
+    is powerless — the decision frame is REVIEW and no auto frame/record exists,
+    at the demo path's maximum confidence."""
+    resp = client.get(
+        "/runs/stream",
+        params={"topic": "x", "thread_id": "held-auto", "autonomy": "auto"},
+    )
+    assert '"decision": "review"' in resp.text
+    assert '"decision": "auto"' not in resp.text
+
+
+def test_lifted_tenant_with_auto_dial_still_autos():
+    """AC 3 regression: an operator-lifted tenant with the AUTO dial keeps its
+    auto path (the resolution only reduces, it does not break lifting)."""
+    import asyncio
+
+    from harness.hold import HoldRegistry
+    from harness.state import AutonomyMode
+    from main import _run_event_stream
+
+    async def collect():
+        return "".join([
+            f async for f in _run_event_stream(
+                "x", "lifted-1", "demo", AutonomyMode.AUTO,
+                hold_registry=HoldRegistry().lift("demo"),
+            )
+        ])
+
+    assert '"decision": "auto"' in asyncio.run(collect())
+
+
+def test_client_param_can_still_reduce_when_lifted():
+    """Even lifted, a client requesting REVIEW gets REVIEW (reduce-only holds)."""
+    import asyncio
+
+    from harness.hold import HoldRegistry
+    from harness.state import AutonomyMode
+    from main import _run_event_stream
+
+    async def collect():
+        return "".join([
+            f async for f in _run_event_stream(
+                "x", "lifted-2", "demo", AutonomyMode.REVIEW,
+                hold_registry=HoldRegistry().lift("demo"),
+            )
+        ])
+
+    assert '"decision": "review"' in asyncio.run(collect())
