@@ -102,6 +102,11 @@ class Dossier(BaseModel):
     personalization_level: str = "low"  # low | medium | high
     missing_data: list[str] = Field(default_factory=list)
 
+    # The structured customer-research read that filled this dossier (nmh.7): interests /
+    # style / tattoo-signals / business-context / confidence + the gated public-research
+    # block. Empty for a draft-time dossier built without the research agent.
+    research_findings: dict[str, Any] = Field(default_factory=dict)
+
     def linked_fields(self) -> dict[str, DossierField]:
         """The provenance-carrying fields, keyed by name — for the evidence panel."""
         return {
@@ -149,6 +154,7 @@ def build_dossier(
     cta_kind: str | None = None,
     evidence_used: list[str] | None = None,
     run_id: str | None = None,
+    customer_research: Any = None,
 ) -> Dossier:
     """Assemble a :class:`Dossier` from the REAL facts the loop already holds. Pure — no DB,
     no model, no skill load. Every field traces to a real source or is honestly empty.
@@ -292,6 +298,28 @@ def build_dossier(
         if n_research else _field(None, "none", "none")
     )
 
+    # --- nmh.7: the customer RESEARCH AGENT fills the research surface --------------- #
+    # When a :class:`~studio.customer_research_agent.CustomerResearch` is supplied it is
+    # the authoritative research read: its interests/style/summary override the base
+    # projection above (each still grounded + honest), and its full structured block +
+    # the gated public-research note are attached as ``research_findings``.
+    research_findings: dict[str, Any] = {}
+    if customer_research is not None:
+        cr = customer_research
+        research_findings = (cr.model_dump() if hasattr(cr, "model_dump")
+                             else dict(cr) if isinstance(cr, dict) else {})
+        cr_interests = getattr(cr, "interests", None) or research_findings.get("interests")
+        if cr_interests:
+            known_interests = [str(i) for i in cr_interests if i]
+        _sp = getattr(cr, "style_preference", None)
+        _sp_present = getattr(_sp, "present", False) if _sp is not None else False
+        if _sp_present and not tattoo_style_pref.present:
+            tattoo_style_pref = _field(getattr(_sp, "value", None), "high",
+                                       f"research:{getattr(_sp, 'source', 'agent')}")
+        _summary = cr.summary_line() if hasattr(cr, "summary_line") else ""
+        if _summary and not research_summary.present:
+            research_summary = _field(_summary, "high", "research:agent")
+
     # --- MISSING-DATA contract (spec §8: "if data is missing, say missing") ---------- #
     # Name every §8 field that is genuinely absent for this lead, so the dossier states
     # its gaps plainly instead of implying a depth it does not have.
@@ -334,12 +362,14 @@ def build_dossier(
         evidence_used=list(evidence_used or []),
         limited_personalization=limited, personalization_note=note,
         personalization_level=personalization_level, missing_data=missing_data,
+        research_findings=research_findings,
     )
 
 
 def build_customer_dossier(
     tenant_id: str, customer_id: str, *, dsn: str | None = None,
     use_llm: bool = False, research: list[dict[str, Any]] | None = None,
+    allow_web: bool | None = None,
 ) -> "Dossier | None":
     """Build a customer's dossier ON DEMAND from durable DB state (spec §8, nmh.6) — for
     "open a customer -> see their dossier". Returns ``None`` when the customer does not
@@ -353,6 +383,7 @@ def build_customer_dossier(
     deterministic psych floor) so this is cheap + hermetic; no sends, no skill load."""
     from studio.conversations import get_conversation
     from studio.customer_research import lookup_lead
+    from studio.customer_research_agent import research_customer
     from studio.psych_profile import analyze_customer
 
     facts = lookup_lead(tenant_id, customer_id=customer_id, dsn=dsn)
@@ -365,4 +396,16 @@ def build_customer_dossier(
                                    use_llm=use_llm)
     except Exception:
         profile = None  # honest: no psych read rather than a crash
-    return build_dossier(facts, profile=profile, research=research)
+    # nmh.7: the REAL research agent fills the dossier's research surface from available
+    # data (interests/style/signals/business-context + the gated public-research note).
+    # Default to CONSULTING the sec gate (allow_web=True) so the dossier's public-research
+    # note reflects the real registry status — inert now, lit up when a skill is
+    # REGISTERED-IN-USE — rather than a generic "not requested".
+    try:
+        cr = research_customer(
+            facts, conv, dsn=dsn,
+            allow_web=True if allow_web is None else allow_web,
+        )
+    except Exception:
+        cr = None
+    return build_dossier(facts, profile=profile, research=research, customer_research=cr)
