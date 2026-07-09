@@ -795,7 +795,28 @@ def _build_email_prompt(
     as a WARM LEAD / past customer of the studio (not a peer studio), the objection they
     voiced is surfaced as context, and any REAL ``offer`` is the ONLY discount that may be
     mentioned. Personalization stays ethical — never 'I looked at your Instagram'."""
-    warm = profile is not None
+    # wwy.7 r8 follow-through: a psych profile is ALWAYS produced (deterministic floor
+    # read), so profile-PRESENCE is not relationship evidence. Warm/past-customer
+    # framing must gate on the SAME evidence the personalization guard accepts — real
+    # tattoo history, a relationship-implying lifecycle, a win-back persona signal, or
+    # a REAL prior conversation — else every name+email-only lead is framed as a
+    # "re-engagement ... past customer" and the guard (rightly) rejects the copy,
+    # bleeding the run's quota.
+    from cells.personalization_guard import (
+        _had_conversation,
+        _normalize_lifecycle,
+        _RELATIONSHIP_LIFECYCLES,
+    )
+
+    _traits0 = facts.get("persona_traits") or {}
+    _lifecycle0 = _traits0.get("lifecycle_stage") or facts.get("lifecycle_stage")
+    _relationship_evidence = (
+        bool(facts.get("tattoo_history"))
+        or _normalize_lifecycle(_lifecycle0) in _RELATIONSHIP_LIFECYCLES
+        or bool(_traits0.get("win_back_candidate"))
+        or _had_conversation(profile)
+    )
+    warm = profile is not None and _relationship_evidence
     # FLAG A fix (65w.13, wired by ju1.4): peer-studio (B2B) framing must gate on the
     # lead's REAL type, not merely on profile-presence — else a COLD CONSUMER lead (no
     # psych profile yet, a normal person) was told the model it was writing "to a REAL
@@ -855,7 +876,10 @@ def _build_email_prompt(
     # Prior-relationship evidence: real history on file (tattoos / lifecycle / win-back
     # persona signal) or a real prior conversation (the grounded warm-lead profile).
     # This gates BOTH the goal line and the first-contact rule below.
-    has_relationship = bool(tattoos or lifecycle or win_back or warm)
+    # Mirrors the personalization guard's grounds exactly: bare lifecycle values like
+    # "lead-no-visit" (never visited) are NOT relationship evidence — only the
+    # relationship-implying lifecycles are (wwy.7 r8).
+    has_relationship = _relationship_evidence
 
     goal_line = (goal or "open a genuine conversation").strip()
     # SMOKING-GUN FIX (wwy.7 r8): the operator's INTERNAL goal ("win back lapsed

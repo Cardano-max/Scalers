@@ -31,3 +31,4 @@ minio/
 .DS_Store
 .idea/
 .vscode/
+.inbound/

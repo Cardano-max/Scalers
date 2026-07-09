@@ -1882,11 +1882,49 @@ def _execute_provided_leads_sync(
             except Exception:
                 _durable = None
 
+    # DRAFT-COUNT EXACTNESS under guard skips (nmh.1 follow-through, spec §14): a draft
+    # killed by a post-generation guard (foreign-identity / offer / personalization)
+    # frees a quota slot. On the DB-COHORT path we REFILL that slot from the next valid
+    # contactable customer (bounded at 2x quota), so "ask 3, get 3" holds even when a
+    # guard rejects a draft — never a silent under-delivery. The uploaded-CSV path NEVER
+    # substitutes leads the operator did not provide: there a skip stays a skip, with
+    # its concrete reason in the ledger (spec: "Requested 25, valid 18 -> Created 18").
+    _quota = min(int(expected), effective_cap) if requested_ids else min(limit, effective_cap)
+    _refill_cap = _quota * 2
+    _refilled = 0
+
+    def _lead_stream():
+        nonlocal _refilled
+        for _f in leads:
+            yield _f
+        if requested_ids:
+            return  # operator-provided rows only — no substitution
+        while len(pending) < _quota and _refilled < _refill_cap:
+            _batch = contactable_leads(
+                tenant_id,
+                limit=max(_quota - len(pending), 1),
+                exclude_ids=list(picked),
+                dsn=dsn,
+                memory_store=store,
+            )
+            _fresh = [
+                f for f in _batch
+                if f.get("customer_id") and f["customer_id"] not in picked
+            ]
+            if not _fresh:
+                return  # contact supply exhausted — the skip ledger stays the honest record
+            for _f in _fresh:
+                if len(pending) >= _quota or _refilled >= _refill_cap:
+                    return
+                picked.add(_f["customer_id"])
+                _refilled += 1
+                yield _f
+
     # 2) Per-lead: real DB history + research ABOUT this lead + brand-voiced draft.
     # The blueprint's stop_conditions + the hard cap bound the fan-out: draft at most
     # ``effective_cap`` leads. This makes the plan load-bearing — the executor stops when
     # the plan says stop, never an unbounded 5000× fan-out.
-    for facts in leads:
+    for facts in _lead_stream():
         if len(pending) >= effective_cap:
             break  # stop_condition: per-run quota / hard cap met
         cust_id = facts["customer_id"]
