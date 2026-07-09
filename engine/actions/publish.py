@@ -38,6 +38,7 @@ so a mock can never perform a real IG/Gmail/FB send: it fails honestly instead.
 from __future__ import annotations
 
 import inspect
+import json
 import logging
 import os
 import re
@@ -104,6 +105,91 @@ def _with_mode(row: ActionRow | None, mode: str) -> ActionRow | None:
     if row is not None:
         row.mode = mode
     return row
+
+
+def _action_context(action: ActionRow) -> dict[str, Any]:
+    """The action's ``context`` JSON as a dict — DEFENSIVE: ``context`` is a nullable
+    TEXT column written by other paths (the studio worktree adds
+    ``attachment_artifact_id`` / ``artwork`` for drafts with artwork). Absent /
+    unparseable / non-object context degrades to ``{}`` — a graceful no-op, never a
+    crash on a legacy row."""
+    raw = getattr(action, "context", None)
+    if not raw:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    try:
+        out = json.loads(raw)
+        return out if isinstance(out, dict) else {}
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return {}
+
+
+def _context_attachment_artifact_id(ctx: dict[str, Any]) -> str | None:
+    """The artifact id the draft PROMISED as its attachment/media, or ``None``.
+
+    Reads ``context.attachment_artifact_id`` (snake_case and camelCase) first, then
+    ``context.artwork.artifactId``/``artifact_id`` (the studio's artwork block).
+    ``None`` = the draft never promised media → the send proceeds without any."""
+    for key in ("attachment_artifact_id", "attachmentArtifactId"):
+        v = ctx.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    art = ctx.get("artwork")
+    if isinstance(art, dict):
+        for key in ("artifactId", "artifact_id"):
+            v = art.get(key)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+    return None
+
+
+def _record_send_audit_row(
+    action: ActionRow,
+    *,
+    mode: str | None,
+    result: str | None,
+    transport: str,
+    provider_id: str | None = None,
+    attachments: tuple[Any, ...] = (),
+    detail: str | None = None,
+    dsn: str | None = None,
+) -> None:
+    """ONE consistent ``send_audit`` row per publish attempt (every channel/transport).
+
+    ``kind='send'`` (additive next to the campaign-level 'send_eligible'/'override'
+    rows); ``mode`` = 'live' | 'test_redirect' | 'sandbox' | 'blocked'; ``reason``
+    carries a compact JSON note: transport ('gmail-api' | 'gmail-smtp-fallback' |
+    'sandbox' | 'instagram-graph' | 'facebook-graph'), the provider id, and any
+    attachment receipts (filename + sha256 prefix — NEVER content). Best-effort:
+    auditing must never break (or double-fire) the send itself."""
+    try:
+        from actions.audit import record_send_audit
+
+        note: dict[str, Any] = {"transport": transport}
+        if provider_id:
+            note["provider_id"] = provider_id
+        if attachments:
+            note["attachments"] = [
+                r.audit_label() if hasattr(r, "audit_label") else str(r) for r in attachments
+            ]
+        if detail:
+            note["detail"] = detail[:500]
+        record_send_audit(
+            action_id=action.id,
+            kind="send",
+            run_id=getattr(action, "run_id", None),
+            tenant_id=getattr(action, "tenant_id", None),
+            reason=json.dumps(note, ensure_ascii=False),
+            conf=getattr(action, "conf", None),
+            threshold=getattr(action, "threshold", None),
+            esc_kind=getattr(action, "esc_kind", None),
+            result=result,
+            mode=mode,
+            dsn=dsn,
+        )
+    except Exception:  # noqa: BLE001 — the audit row is best-effort, the send record is the DB row
+        _log.debug("send_audit row write failed (non-fatal)", exc_info=True)
 
 
 def _ensure_real(conn: Any) -> None:
@@ -342,30 +428,79 @@ def _publish_gmail(action: ActionRow, connector: Any | None, dsn: str | None) ->
             mode,
         )
 
+    # ATTACHMENT (spec §10/§13) — FAIL CLOSED. If the draft's context promised an
+    # artifact (context.attachment_artifact_id / context.artwork.artifactId), load
+    # its bytes and attach; ANY failure to load/validate marks the action failed
+    # with the concrete reason and sends NOTHING — a promised attachment is never
+    # silently dropped. No promise (absent/legacy context) → clean no-op.
+    attachments: list[dict[str, Any]] = []
+    attachment_receipts: tuple[Any, ...] = ()
+    promised_artifact = _context_attachment_artifact_id(_action_context(action))
+    if promised_artifact:
+        from connectors.mail_message import MailAttachmentError, validate_attachments
+        from sideeffects.artifact_media import ArtifactMediaError, load_artifact_media
+
+        try:
+            media = load_artifact_media(promised_artifact, dsn=dsn)
+            attachments, attachment_receipts = validate_attachments([media.as_attachment()])
+        except (ArtifactMediaError, MailAttachmentError) as exc:
+            return _with_mode(
+                update_status(
+                    action.id, "failed", dsn=dsn,
+                    last_error=(
+                        f"draft promised attachment (artifact {promised_artifact}) but it "
+                        f"could not be attached: {exc} — refusing to send without it"
+                    ),
+                ),
+                mode,
+            )
+        _log.info(
+            "gmail publish: action=%s attaching artifact=%s %s (source=%s)",
+            action.id, promised_artifact,
+            " + ".join(r.audit_label() for r in attachment_receipts),
+            media.source,
+        )
+
     _log.info(
-        "gmail publish: action=%s mode=%s to=%s clean_subject=%s",
-        action.id, mode, to_addr, mode == "live",
+        "gmail publish: action=%s mode=%s to=%s clean_subject=%s attachments=%d",
+        action.id, mode, to_addr, mode == "live", len(attachments),
     )
 
+    # Only pass the kwarg when an attachment exists: connectors/fakes that predate
+    # attachment support keep working unchanged, and one that cannot take the
+    # promised attachment fails LOUDLY (TypeError -> failed) — never a silent drop.
+    send_kwargs: dict[str, Any] = {"attachments": attachments} if attachments else {}
     try:
         _ensure_real(conn)  # real-only: a mock never live-sends
         result = conn.send(
             to=to_addr,
             subject=subject,
             body=body,
+            **send_kwargs,
         )
     except Exception as exc:  # noqa: BLE001 — surface the REAL error, never fake success
+        _record_send_audit_row(
+            action, mode=mode, result="failed", transport="gmail-api",
+            attachments=attachment_receipts, detail=str(exc), dsn=dsn,
+        )
         return _with_mode(update_status(action.id, "failed", dsn=dsn, last_error=str(exc)), mode)
-    return _with_mode(
-        update_status(
-            action.id, "sent", dsn=dsn,
-            deep_link=getattr(result, "deep_link", None),
-            sent_at=_now(),
-            outcome_label="Sent",
-            outcome_kind="success",
-        ),
-        mode,
+    _record_send_audit_row(
+        action, mode=mode, result="sent", transport="gmail-api",
+        provider_id=getattr(result, "message_id", None),
+        attachments=getattr(result, "attachments", None) or attachment_receipts,
+        dsn=dsn,
     )
+    row = update_status(
+        action.id, "sent", dsn=dsn,
+        deep_link=getattr(result, "deep_link", None),
+        sent_at=_now(),
+        outcome_label="Sent",
+        outcome_kind="success",
+    )
+    if row is not None:
+        # Transient audit facts for the caller/UI (filename + sha256 prefix only).
+        row.attachment_receipts = attachment_receipts
+    return _with_mode(row, mode)
 
 
 def _publish_demo(action: ActionRow, connector: Any | None, dsn: str | None) -> ActionRow:

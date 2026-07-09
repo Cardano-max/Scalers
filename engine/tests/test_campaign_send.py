@@ -253,10 +253,13 @@ def test_override_audits_then_sends_through_approve_path(monkeypatch):
                            operator="op@x", connectors={"gmail": gmail})
 
     # The override was audited BEFORE the send, with the reason + the (non-)eligibility.
-    assert len(audits) == 1
-    assert audits[0]["kind"] == "override"
-    assert audits[0]["reason"] == "operator manually reviewed; approved"
-    assert audits[0]["eligible"] is False
+    # (The publish path additionally writes its own per-send kind='send' audit row —
+    # the unified delivery trail — so filter to the override rows here.)
+    overrides = [a for a in audits if a["kind"] == "override"]
+    assert len(overrides) == 1
+    assert audits[0] is overrides[0]  # the override row is written FIRST (pre-send)
+    assert overrides[0]["reason"] == "operator manually reviewed; approved"
+    assert overrides[0]["eligible"] is False
     # And it sent through the real approve path.
     assert gmail.calls == [("vip@lead.com", "Hi", "Body")]
     assert out["result"] == "sent" and out["was_eligible"] is False

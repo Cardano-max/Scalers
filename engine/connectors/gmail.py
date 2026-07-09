@@ -32,11 +32,12 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from email.message import EmailMessage
+from typing import Any
 
 from connectors.base import GatedConnector, redact
+from connectors.mail_message import AttachmentReceipt, build_mail_message
 
 # Official Google endpoints (also on the gmail OFFICIAL_API_HOSTS allowlist).
 TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
@@ -68,13 +69,17 @@ class HttpResult:
 
 @dataclass(frozen=True)
 class GmailSendResult:
-    """The result of a real Gmail send — what the console deep-links to."""
+    """The result of a real Gmail send — what the console deep-links to.
+
+    ``attachments`` records exactly what rode along (filename + sha256 + size,
+    never the content bytes) so the send audit can state what was attached."""
 
     message_id: str
     deep_link: str | None
     thread_id: str | None = None
     to: str | None = None
     subject: str | None = None
+    attachments: tuple[AttachmentReceipt, ...] = ()
 
 
 # The injectable transport seam: a callable that performs one HTTPS request and
@@ -156,17 +161,35 @@ class GmailConnector(GatedConnector):
 
     # ── the real send path ────────────────────────────────────────────────────
 
-    def send(self, to: str, subject: str, body: str, *, from_addr: str | None = None) -> GmailSendResult:
+    def send(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        *,
+        from_addr: str | None = None,
+        attachments: Sequence[Mapping[str, Any]] | None = None,
+    ) -> GmailSendResult:
         """Send a real email via Gmail. Disabled-by-default; raises on the real
-        provider error (never a fake success)."""
+        provider error (never a fake success).
+
+        ``attachments`` (optional): list of ``{filename, content_bytes, mime_type}``.
+        Validated FAIL-CLOSED before any network call (allowed types png/jpeg/webp/pdf,
+        20MB total cap — :mod:`connectors.mail_message`): an invalid attachment raises
+        :class:`connectors.mail_message.MailAttachmentError` and NOTHING is sent — a
+        promised attachment is never silently dropped."""
         self._require_enabled()
         if not (self._client_id and self._client_secret and self._refresh_token):
             raise GmailAuthError(
                 "gmail connector missing client_id/client_secret/refresh_token "
                 "(key-from-env required)"
             )
+        # Build (and thereby validate) the message BEFORE the token exchange: an
+        # invalid attachment must refuse the send without touching the network.
+        raw, receipts = self._build_raw_message(
+            to=to, subject=subject, body=body, from_addr=from_addr, attachments=attachments
+        )
         access_token = self._exchange_refresh_token()
-        raw = self._build_raw_message(to=to, subject=subject, body=body, from_addr=from_addr)
         resp = self._transport(
             method="POST",
             url=SEND_ENDPOINT,
@@ -190,6 +213,7 @@ class GmailConnector(GatedConnector):
             deep_link=f"https://mail.google.com/mail/u/0/#sent/{message_id}" if message_id else None,
             to=to,
             subject=subject,
+            attachments=receipts,
         )
 
     def _exchange_refresh_token(self) -> str:
@@ -221,15 +245,21 @@ class GmailConnector(GatedConnector):
         return str(token)
 
     @staticmethod
-    def _build_raw_message(*, to: str, subject: str, body: str, from_addr: str | None) -> str:
-        """Build an RFC822 message and base64url-encode it for the Gmail ``raw`` field."""
-        msg = EmailMessage()
-        msg["To"] = to
-        if from_addr:
-            msg["From"] = from_addr
-        msg["Subject"] = subject
-        msg.set_content(body)
-        return base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
+    def _build_raw_message(
+        *,
+        to: str,
+        subject: str,
+        body: str,
+        from_addr: str | None,
+        attachments: Sequence[Mapping[str, Any]] | None = None,
+    ) -> tuple[str, tuple[AttachmentReceipt, ...]]:
+        """Build an RFC822 message (shared :func:`build_mail_message` — validates any
+        attachments FAIL-CLOSED) and base64url-encode it for the Gmail ``raw`` field.
+        Returns ``(raw, attachment_receipts)``."""
+        msg, receipts = build_mail_message(
+            to=to, subject=subject, body=body, from_addr=from_addr, attachments=attachments
+        )
+        return base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii"), receipts
 
 
 def _safe_json(raw: bytes | str) -> dict:
