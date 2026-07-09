@@ -2,17 +2,19 @@
 
 /**
  * AgencyCanvas — the "Agency at Work" war-room. PRESENTATIONAL: it binds ONLY to a
- * real RunState (run-trace steps written by campaign_runner.py) and renders the run
- * as a cinematic agency narrative — every label, count, and active flag traces to
- * real agent_runs data:
+ * real RunState (run-trace steps written by the engine) and renders the run as an
+ * agency narrative — every lane IS a real recorded role:
  *
  *   roster (who is working) · lane (the workflow + handoffs) · timeline (real spans,
  *   the evidence of what they produced) · Deep-research citations · the spec artifact.
  *
- * HONESTY: empty/loading run → skeleton + idle CTA, never a fake agent. ×N badges =
- * real counts. Active pulse = the single earliest stage with no landed step. Handoff
- * edges draw only when the downstream step's createdAt appears. Sources = real
- * research_sources or an honest empty state. Nothing here sends.
+ * HONESTY: the lanes are DERIVED from the roles that actually appear in steps[] —
+ * an email run shows the email crew, an IG run its IG crew, and a role the engine
+ * never emitted never renders (NO hardcoded agent list). ×N badges = real counts;
+ * model badges = the real per-step models. Empty/loading run → idle CTA, never a
+ * fake agent. Sources = real research_sources or an honest empty state. A run
+ * paused on an artwork pick (awaiting_selection) renders the pick — nothing here
+ * sends anything.
  */
 import { useMemo } from 'react';
 import type { RunState } from '@/lib/studio/run-trace';
@@ -61,15 +63,18 @@ export function AgencyCanvas({
     () => (runState?.steps ?? []).slice().sort((a, b) => a.seq - b.seq),
     [runState],
   );
+  // Role-driven lookups — match on the REAL role names (any crew), no fixed list.
+  const researchStage = stages.find((s) => /research/.test(s.key));
   const sources = useMemo(
-    () => extractResearchSources(stages.find((s) => s.key === 'research')?.steps ?? []),
-    [stages],
+    () => extractResearchSources(researchStage?.steps ?? []),
+    [researchStage],
   );
 
-  const juryStage = stages.find((s) => s.key === 'jury');
+  const juryStage = stages.find((s) => /jury/.test(s.key));
   const juryDone = !!juryStage?.done;
   const completed = runState?.status === 'completed';
-  const hasRun = steps.length > 0 || running;
+  const awaitingSelection = runState?.status === 'awaiting_selection';
+  const hasRun = steps.length > 0 || running || awaitingSelection;
   // Real HELD draft rows for this run. The run transitions into review mode (per-draft
   // Approve / Reject / Deep-Review) once it completes (or the jury has landed) and
   // there are staged drafts — never fabricated; empty list renders nothing.
@@ -90,14 +95,14 @@ export function AgencyCanvas({
         }}
       >
         <div style={{ maxWidth: 460, textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 14, alignItems: 'center' }}>
-          <AgencyRosterPreview />
           <h2 style={{ margin: 0, fontSize: 19, fontWeight: 590, letterSpacing: '-0.01em', color: 'var(--ink)' }}>
             The agency is ready
           </h2>
           <p style={{ margin: 0, fontSize: 13.5, lineHeight: 1.55, color: 'var(--text-secondary)' }}>
-            On <strong>Run campaign</strong> you watch the team work live: deep research on
-            the web → the strategist sets the angle → copywriters draft → critics re-verify
-            each draft → the supervising jury evaluates. Every draft is HELD for your approval.
+            On <strong>Run campaign</strong> you watch the team work live. The agents that
+            ACTUALLY run for this campaign appear here as they land — each with its real
+            model and output; the crew differs per channel. Every draft is HELD for your
+            approval.
           </p>
           {connected && onRunCampaign ? (
             <button
@@ -146,20 +151,32 @@ export function AgencyCanvas({
       <header style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: compact ? '0 2px' : '2px 2px' }}>
         <span
           aria-hidden
-          className={running ? 'active-pulse' : undefined}
+          className={running || awaitingSelection ? 'active-pulse' : undefined}
           style={{
             width: 10,
             height: 10,
             borderRadius: '50%',
-            background: running ? TEAL : completed ? 'var(--success-dot)' : 'var(--text-faint)',
+            background: awaitingSelection
+              ? 'var(--amber-dot, #B58A2A)'
+              : running
+                ? TEAL
+                : completed
+                  ? 'var(--success-dot)'
+                  : 'var(--text-faint)',
             flex: '0 0 auto',
             // @ts-expect-error custom prop for the pulse keyframe color
-            '--pulse-color': 'rgba(15,138,130,0.5)',
+            '--pulse-color': awaitingSelection ? 'rgba(181,138,42,0.5)' : 'rgba(15,138,130,0.5)',
           }}
         />
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 17, fontWeight: 590, letterSpacing: '-0.01em', color: 'var(--ink)' }}>
-            {running ? 'Orchestrating now' : completed ? 'Run complete' : 'Agency at work'}
+            {awaitingSelection
+              ? 'Paused — your pick is needed'
+              : running
+                ? 'Orchestrating now'
+                : completed
+                  ? 'Run complete'
+                  : 'Agency at work'}
           </div>
           <div style={{ fontSize: 12.5, color: 'var(--text-muted)', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <span style={{ fontVariantNumeric: 'tabular-nums' }}>
@@ -279,8 +296,10 @@ export function AgencyCanvas({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <ResearchSourcesRail
             sources={sources}
-            researchRan={!!stages.find((s) => s.key === 'research')?.done}
-            skipped={!!stages.find((s) => s.key === 'research')?.skipped}
+            researchRan={!!researchStage}
+            /* Honest "skipped: not required" only when the run FINISHED without any
+               research role landing — never a forever-queued placeholder. */
+            skipped={!researchStage && (completed || runState?.status === 'error')}
           />
           {juryStage?.done && juryStage.steps.length > 0 && (
             <JuryEvidence summary={stepSummaryLine(juryStage.steps[juryStage.steps.length - 1])} />
@@ -308,6 +327,14 @@ function AgencyLane({ stages }: { stages: AgencyStage[] }) {
         overflowX: 'auto',
       }}
     >
+      {stages.length === 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 44 }}>
+          <span className="shimmer" aria-hidden style={{ width: 34, height: 34, borderRadius: '50%' }} />
+          <span style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>
+            Waiting for the first agent to land — lanes appear as the real crew runs.
+          </span>
+        </div>
+      )}
       {stages.map((stage, i) => (
         <div key={stage.key} style={{ display: 'flex', alignItems: 'center', flex: 1, minWidth: 132 }}>
           <LaneNode stage={stage} />
@@ -422,6 +449,11 @@ function Roster({ stages }: { stages: AgencyStage[] }) {
       }}
     >
       <h3 style={{ margin: '0 0 2px 2px', fontSize: 13, fontWeight: 590, color: 'var(--ink)' }}>Roster</h3>
+      {stages.length === 0 && (
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: '4px 2px' }}>
+          No agent has landed yet — the real crew appears here as it runs.
+        </div>
+      )}
       {stages.map((stage) => {
         const on = stage.done || stage.active;
         return (
@@ -464,11 +496,11 @@ function Roster({ stages }: { stages: AgencyStage[] }) {
                   <span style={{ fontVariantNumeric: 'tabular-nums', color: stage.accent }}>{`  ×${stage.count}`}</span>
                 )}
               </div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', gap: 6, alignItems: 'baseline', flexWrap: 'wrap' }}>
                 {stage.active ? (
                   <span style={{ color: stage.accent }}>{stage.verb}…</span>
                 ) : stage.done ? (
-                  'done'
+                  <span>done</span>
                 ) : (
                   <span
                     style={{
@@ -482,44 +514,28 @@ function Roster({ stages }: { stages: AgencyStage[] }) {
                     {AGENT_STATUS_LABEL[stage.status]}
                   </span>
                 )}
+                {stage.model && (
+                  <span
+                    title="model"
+                    style={{
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: 9.5,
+                      color: 'var(--text-faint)',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      maxWidth: 130,
+                    }}
+                  >
+                    {stage.model}
+                  </span>
+                )}
               </div>
             </div>
           </div>
         );
       })}
     </section>
-  );
-}
-
-function AgencyRosterPreview() {
-  const order = ['researcher', 'strategist', 'draft', 'critic', 'jury'] as const;
-  return (
-    <div style={{ display: 'flex', gap: -6 }}>
-      {order.map((k, i) => {
-        const p = AGENT_PERSONAS[k];
-        return (
-          <span
-            key={k}
-            style={{
-              width: 38,
-              height: 38,
-              borderRadius: '50%',
-              display: 'grid',
-              placeItems: 'center',
-              fontFamily: 'var(--font-mono)',
-              fontSize: 11,
-              fontWeight: 600,
-              color: '#fff',
-              background: p.accent,
-              border: '2px solid var(--warroom-canvas)',
-              marginLeft: i === 0 ? 0 : -8,
-            }}
-          >
-            {p.initials}
-          </span>
-        );
-      })}
-    </div>
   );
 }
 

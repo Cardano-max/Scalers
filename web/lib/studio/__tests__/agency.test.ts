@@ -9,106 +9,93 @@ import {
 import type { RunState, RunStep } from '../run-trace';
 
 /**
- * The Agency-at-Work mapping is REAL-data only. Every count, active flag, and
- * handoff-gate timestamp must come from the actual RunState.steps (agent_runs rows).
- * These tests pin that: no fabricated stage is ever "done", counts are real lengths,
- * the active stage is the earliest expected stage with no landed step, and the
- * handoff edge gate (firstCreatedAt) is the real first step's createdAt.
+ * The Agency-at-Work mapping is REAL-data + ROLE-DRIVEN. The lanes are EXACTLY the
+ * roles that appear in steps[] (order of first appearance): no expected-pipeline
+ * skeleton, no channel assumptions, and NO hardcoded agent list — an IG crew
+ * (artist_memory / trend_research / …) renders just like the email crew because a
+ * lane IS a recorded role. These tests pin that.
  */
-function step(seq: number, role: string, output: unknown, createdAt?: string): RunStep {
-  return { seq, role, model: 'gpt-x', input: null, output, createdAt };
+function step(seq: number, role: string, output: unknown, createdAt?: string, model = 'gpt-x'): RunStep {
+  return { seq, role, model, input: null, output, createdAt };
 }
 
 function runState(steps: RunStep[], status: RunState['status'] = 'running'): RunState {
   return { runId: 'r1', status, steps, nPending: null, pending: [], archetype: 'outreach', error: null };
 }
 
-describe('deriveAgencyStages — real counts + active + handoff gate', () => {
-  it('derives real ×N fan-out counts and done flags from the run steps', () => {
+describe('deriveAgencyStages — exactly the roles that appear, in first-seen order', () => {
+  it('derives one lane per REAL role in order of first appearance, with real ×N counts', () => {
     const rs = runState([
-      step(1, 'researcher', { sources: [] }, '2026-06-30T10:00:00Z'),
-      step(2, 'strategist', { primary_angle: 'speed' }, '2026-06-30T10:00:02Z'),
-      step(3, 'draft', { hook: 'h1' }, '2026-06-30T10:00:04Z'),
-      step(4, 'draft', { hook: 'h2' }, '2026-06-30T10:00:05Z'),
-      step(5, 'critic', { verdict: 'pass' }, '2026-06-30T10:00:06Z'),
+      step(1, 'planner', { blueprint: {} }, '2026-06-30T09:59:58Z', 'anthropic:claude-sonnet-4-5'),
+      step(2, 'researcher', { sources: [] }, '2026-06-30T10:00:00Z'),
+      step(3, 'strategist', { primary_angle: 'speed' }, '2026-06-30T10:00:02Z'),
+      step(4, 'draft', { hook: 'h1' }, '2026-06-30T10:00:04Z'),
+      step(5, 'draft', { hook: 'h2' }, '2026-06-30T10:00:05Z'),
+      step(6, 'critic', { verdict: 'pass' }, '2026-06-30T10:00:06Z'),
     ]);
-    const byKey = Object.fromEntries(deriveAgencyStages(rs, true).map((s) => [s.key, s]));
-    expect(byKey.research.done).toBe(true);
-    expect(byKey.strategy.done).toBe(true);
-    expect(byKey.drafts.count).toBe(2);
-    expect(byKey.critics.count).toBe(1);
-    // jury hasn't landed -> not done, and (running) it is the active stage.
-    expect(byKey.jury.done).toBe(false);
-    expect(byKey.jury.active).toBe(true);
-    // exactly one active stage while running.
-    expect(deriveAgencyStages(rs, true).filter((s) => s.active)).toHaveLength(1);
+    const stages = deriveAgencyStages(rs, true);
+    // Every landed role appears — INCLUDING planner (dropped by the old fixed list).
+    expect(stages.map((s) => s.key)).toEqual([
+      'planner',
+      'researcher',
+      'strategist',
+      'draft',
+      'critic',
+    ]);
+    const byKey = Object.fromEntries(stages.map((s) => [s.key, s]));
+    expect(byKey.draft.count).toBe(2);
+    expect(byKey.draft.countable).toBe(true);
+    expect(byKey.critic.count).toBe(1);
+    expect(byKey.critic.countable).toBe(false);
+    // Real model surfaces per lane.
+    expect(byKey.planner.model).toBe('anthropic:claude-sonnet-4-5');
+    // No lane is fabricated for a role that never landed (no jury here).
+    expect(stages.some((s) => s.key === 'jury')).toBe(false);
   });
 
-  it('gates the handoff edge on the downstream first step createdAt (firstCreatedAt)', () => {
+  it('renders an IG-specific crew exactly as recorded — no email pipeline assumed', () => {
+    const rs = runState([
+      step(1, 'artist_memory', { notes: 'style profile' }, '2026-06-30T10:00:00Z'),
+      step(2, 'trend_research', { trends: [] }, '2026-06-30T10:00:01Z'),
+      step(3, 'draft', { hook: 'ig caption' }, '2026-06-30T10:00:02Z'),
+    ]);
+    const stages = deriveAgencyStages(rs, true);
+    expect(stages.map((s) => s.key)).toEqual(['artist_memory', 'trend_research', 'draft']);
+    const byKey = Object.fromEntries(stages.map((s) => [s.key, s]));
+    // Unknown roles get honest humanized labels + a deterministic persona.
+    expect(byKey.artist_memory.label).toBe('Artist memory');
+    expect(byKey.trend_research.persona.name).toBe('Trend research');
+    // And crucially: no strategist/critic/jury lanes were invented.
+    expect(stages).toHaveLength(3);
+  });
+
+  it('gates the handoff edge on the real first step createdAt (firstCreatedAt)', () => {
     const stages = deriveAgencyStages(
       runState([step(1, 'researcher', {}, '2026-06-30T10:00:00Z')]),
       true,
     );
-    expect(stages.find((s) => s.key === 'research')!.firstCreatedAt).toBe('2026-06-30T10:00:00Z');
-    // strategy hasn't landed -> no createdAt to draw its incoming edge.
-    expect(stages.find((s) => s.key === 'strategy')!.firstCreatedAt).toBeNull();
+    expect(stages.find((s) => s.key === 'researcher')!.firstCreatedAt).toBe('2026-06-30T10:00:00Z');
   });
 
-  it('marks every stage not-done and none active for an empty / unknown run', () => {
-    const stages = deriveAgencyStages(null, false);
-    expect(stages.every((s) => !s.done)).toBe(true);
-    expect(stages.every((s) => !s.active)).toBe(true);
+  it('returns [] for an empty / unknown run — never a fabricated skeleton', () => {
+    expect(deriveAgencyStages(null, false)).toEqual([]);
+    expect(deriveAgencyStages(runState([]), true)).toEqual([]);
   });
 });
 
-describe('deriveAgencyStages — honest per-agent status (never silent "queued")', () => {
-  it('marks un-run agents of a COMPLETED run skipped-not-required, never queued', () => {
-    // The P1 bug repro: the provided-leads path records researcher + draft×N + jury
-    // and NO strategist / critic, yet the run is completed. Those two must read an
-    // honest "skipped-not-required", not a forever-"queued".
-    const rs = runState(
-      [
-        step(1, 'researcher', { sources: [] }, '2026-06-30T10:00:00Z'),
-        step(2, 'draft', { hook: 'h1' }, '2026-06-30T10:00:04Z'),
-        step(3, 'draft', { hook: 'h2' }, '2026-06-30T10:00:05Z'),
-        step(4, 'jury', { decision: 'review' }, '2026-06-30T10:00:08Z'),
-      ],
-      'completed',
-    );
-    const byKey = Object.fromEntries(deriveAgencyStages(rs, false).map((s) => [s.key, s]));
-    expect(byKey.research.status).toBe('done');
-    expect(byKey.drafts.status).toBe('done');
-    expect(byKey.jury.status).toBe('done');
-    expect(byKey.strategy.status).toBe('skipped-not-required');
-    expect(byKey.strategy.skipped).toBe(true);
-    expect(byKey.critics.status).toBe('skipped-not-required');
-    // No agent anywhere is left in the dishonest "queued" state.
-    expect(deriveAgencyStages(rs, false).every((s) => (s.status as string) !== 'queued')).toBe(true);
-  });
-
-  it('reports running / waiting honestly mid-run', () => {
-    const rs = runState([step(1, 'strategist', { primary_angle: 'speed' }, '2026-06-30T10:00:00Z')]);
+describe('deriveAgencyStages — honest statuses (done / running / failed only)', () => {
+  it('a landed role with an output is done; an in-flight (no-output) latest step is running', () => {
+    const rs = runState([
+      step(1, 'strategist', { primary_angle: 'speed' }, '2026-06-30T10:00:00Z'),
+      step(2, 'draft', null, '2026-06-30T10:00:02Z'), // engine wrote the row on start
+    ]);
     const byKey = Object.fromEntries(deriveAgencyStages(rs, true).map((s) => [s.key, s]));
-    expect(byKey.strategy.status).toBe('done');
-    expect(byKey.drafts.status).toBe('running');
-    expect(byKey.critics.status).toBe('waiting-for-prev');
-    expect(byKey.jury.status).toBe('waiting-for-prev');
-  });
-
-  it('reports failed / blocked honestly for an errored run', () => {
-    const rs = runState(
-      [step(1, 'strategist', { primary_angle: 'speed' }, '2026-06-30T10:00:00Z')],
-      'error',
-    );
-    const byKey = Object.fromEntries(deriveAgencyStages(rs, false).map((s) => [s.key, s]));
-    expect(byKey.drafts.status).toBe('failed');
-    expect(byKey.critics.status).toBe('blocked-missing-input');
-    expect(byKey.jury.status).toBe('blocked-missing-input');
+    expect(byKey.strategist.status).toBe('done');
+    expect(byKey.draft.status).toBe('running');
+    expect(byKey.draft.active).toBe(true);
   });
 
   it('a landed-but-FAILED strategist/critic reads failed, not done (completed run)', () => {
-    // The provided-leads path records a failed cell as a real step and CONTINUES; the
-    // lane must surface the failure, never a fake "done". Other lanes stay honest.
     const rs = runState(
       [
         step(1, 'strategist', { status: 'failed', error: 'model timeout' }, '2026-06-30T10:00:00Z'),
@@ -120,14 +107,28 @@ describe('deriveAgencyStages — honest per-agent status (never silent "queued")
       'completed',
     );
     const byKey = Object.fromEntries(deriveAgencyStages(rs, false).map((s) => [s.key, s]));
-    // Failed cells surface 'failed' (one bad critic among several still fails the lane).
-    expect(byKey.strategy.status).toBe('failed');
-    expect(byKey.strategy.done).toBe(false);
-    expect(byKey.critics.status).toBe('failed');
-    // The genuinely-successful lanes stay done; nothing reads a silent "queued".
-    expect(byKey.drafts.status).toBe('done');
+    expect(byKey.strategist.status).toBe('failed');
+    expect(byKey.strategist.done).toBe(false);
+    expect(byKey.critic.status).toBe('failed');
+    expect(byKey.draft.status).toBe('done');
     expect(byKey.jury.status).toBe('done');
+    // Nothing anywhere reads a silent "queued".
     expect(deriveAgencyStages(rs, false).every((s) => (s.status as string) !== 'queued')).toBe(true);
+  });
+});
+
+describe('personaForRunRole — exact-first, generated for unknown roles', () => {
+  it('maps the known roles to their fixed personas', () => {
+    expect(personaForRunRole('critic').key).toBe('critic');
+    expect(personaForRunRole('jury').key).toBe('jury');
+    expect(personaForRunRole('planner').key).toBe('planner');
+  });
+  it('does NOT collapse crew-specific roles onto the generic researcher', () => {
+    expect(personaForRunRole('trend_research').key).toBe('trend_research');
+    expect(personaForRunRole('trend_research').name).toBe('Trend research');
+  });
+  it('is deterministic for the same unknown role', () => {
+    expect(personaForRunRole('artist_memory').accent).toBe(personaForRunRole('artist_memory').accent);
   });
 });
 
@@ -160,9 +161,5 @@ describe('step summary + duration helpers', () => {
   it('computes a human duration between two real createdAt timestamps', () => {
     expect(durationBetween('2026-06-30T10:00:00.000Z', '2026-06-30T10:00:01.800Z')).toBe('1.8s');
     expect(durationBetween(null, '2026-06-30T10:00:01Z')).toBeNull();
-  });
-  it('maps raw roles to their persona accents', () => {
-    expect(personaForRunRole('critic').key).toBe('critic');
-    expect(personaForRunRole('jury').key).toBe('jury');
   });
 });

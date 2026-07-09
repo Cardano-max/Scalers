@@ -126,8 +126,8 @@ describe('AgencyCanvas — honest research skipped vs queued', () => {
   });
 });
 
-describe('AgencyCanvas — renders ONLY real landed steps', () => {
-  it('renders the real run header, lane vocabulary, HELD count, and the landed agents', () => {
+describe('AgencyCanvas — renders ONLY real landed steps (role-driven, no fixed crew)', () => {
+  it('renders the real run header, the landed lanes, HELD count — and NO un-landed lane', () => {
     wrap(<AgencyCanvas runState={liveRun} running connected />);
     // operator-vocabulary header + real HELD count from runState.nPending.
     expect(screen.getByText('Orchestrating now')).toBeInTheDocument();
@@ -135,12 +135,35 @@ describe('AgencyCanvas — renders ONLY real landed steps', () => {
     // lane stages in the operator's words ("Deep research" also titles the sources rail).
     expect(screen.getAllByText('Deep research').length).toBeGreaterThan(0);
     expect(screen.getByText('Copywriters drafting')).toBeInTheDocument();
-    expect(screen.getByText('Supervising jury evaluating')).toBeInTheDocument();
+    // the jury has NOT landed -> its lane is NOT fabricated (role-driven lanes).
+    expect(screen.queryByText('Supervising jury evaluating')).not.toBeInTheDocument();
     // the real landed steps appear in the timeline (persona names), three of them.
     expect(screen.getByText('Timeline')).toBeInTheDocument();
     expect(screen.getAllByText('Researcher').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Strategist').length).toBeGreaterThan(0);
     // jury has NOT landed -> no fabricated jury-evaluated evidence card.
     expect(screen.queryByText('Supervising jury · evaluated')).not.toBeInTheDocument();
+  });
+
+  it('renders an IG-specific crew (artist_memory / trend_research) exactly as recorded', () => {
+    const igRun: RunState = {
+      runId: 'run_ig',
+      status: 'running',
+      steps: [
+        step(1, 'artist_memory', { notes: 'style profile' }, '2026-06-30T10:00:00Z'),
+        step(2, 'trend_research', { trends: [] }, '2026-06-30T10:00:01Z'),
+      ],
+      nPending: null,
+      pending: [],
+      archetype: 'ig_post',
+      error: null,
+    };
+    wrap(<AgencyCanvas runState={igRun} running connected />);
+    // The IG crew renders under its own (honest, humanized) names…
+    expect(screen.getAllByText('Artist memory').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Trend research').length).toBeGreaterThan(0);
+    // …and the email pipeline is NOT painted over it.
+    expect(screen.queryByText('Copywriters drafting')).not.toBeInTheDocument();
+    expect(screen.queryByText('Strategist planning')).not.toBeInTheDocument();
   });
 });

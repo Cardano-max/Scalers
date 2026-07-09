@@ -31,7 +31,7 @@ import {
   userMessage,
 } from './agui';
 import { fetchStudioHistory } from './studio-history';
-import { startRun, fetchRunState, type RunState } from './run-trace';
+import { startRun, fetchRunState, selectArtwork, type RunState } from './run-trace';
 
 export interface PendingApproval {
   interrupt: AguiInterrupt;
@@ -112,6 +112,9 @@ export interface UseStudioAgui {
   /** Begin polling a run launched elsewhere (e.g. the voice GO-gate) so the shared
    *  reasoning stream renders its real per-agent steps. Does NOT start a run itself. */
   attachRun: (runId: string) => void;
+  /** Resolve a paused run's artwork pick (status 'awaiting_selection'): POST
+   *  select-artwork with the chosen assetId; polling continues and the run resumes. */
+  pickArtwork: (assetId: string) => void;
   approve: () => void;
   reject: () => void;
 }
@@ -390,16 +393,20 @@ export function useStudioAgui(
   // traces + host summary replace the live placeholders. NOTHING sends (HELD/PENDING).
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Shared poll loop: GET /studio/run/{id} every ~1.5s, surfacing per-agent steps as
-  // they land, until the run completes/errors or the ~2 min safety cap. Used by both
-  // the button-triggered runCampaign and attachRun (a run launched elsewhere, e.g. the
-  // voice GO-gate) so a single, honest poller drives the live reasoning stream.
+  // Shared poll loop: GET /studio/run/{id} every ~2s, surfacing per-agent steps as
+  // they land, until the run completes/errors or a no-progress safety cap. Used by
+  // both the button-triggered runCampaign and attachRun (a run launched elsewhere,
+  // e.g. the voice GO-gate) so a single, honest poller drives the live stream.
+  //
+  // The cap is PROGRESS-AWARE: any newly-landed step resets it (long multi-agent
+  // runs keep streaming), and a run paused on an operator pick (awaiting_selection)
+  // never times out — the operator can take as long as they need to choose.
   const pollRun = useCallback(
     (runId: string) => {
       if (pollRef.current) clearTimeout(pollRef.current);
-      let attempts = 0;
+      let stalls = 0;
+      let lastProgress = -1;
       const poll = async () => {
-        attempts += 1;
         try {
           const st = await fetchRunState(aguiUrl, runId);
           setRunState(st);
@@ -411,18 +418,26 @@ export function useStudioAgui(
             await refreshHistory();
             return;
           }
+          if (st.steps.length !== lastProgress || st.status === 'awaiting_selection') {
+            lastProgress = st.steps.length;
+            stalls = 0;
+          } else {
+            stalls += 1;
+          }
         } catch {
-          /* transient poll error — keep polling until the safety cap */
+          // transient poll error — count as a stall; keep polling until the cap.
+          stalls += 1;
         }
-        if (attempts >= 80) {
-          // ~2 min safety cap: stop polling but keep whatever steps we have.
+        if (stalls >= 90) {
+          // ~3 min with no landed step and no operator pause: stop polling but keep
+          // whatever steps we have (honest stall, not a fake completion).
           setRunningCampaign(false);
           setBusy(false);
           return;
         }
-        pollRef.current = setTimeout(poll, 1500);
+        pollRef.current = setTimeout(poll, 2000);
       };
-      pollRef.current = setTimeout(poll, 1200);
+      pollRef.current = setTimeout(poll, 1000);
     },
     [aguiUrl, refreshHistory],
   );
@@ -467,6 +482,30 @@ export function useStudioAgui(
     [runningCampaign, pollRun],
   );
 
+  // Resolve a paused run's artwork pick (spec section 22). POSTs the REAL assetId to
+  // select-artwork; on success the pause is cleared optimistically and polling
+  // re-arms immediately so the resumed steps stream in without a dead gap.
+  const pickArtwork = useCallback(
+    (assetId: string) => {
+      const runId = runState?.runId;
+      if (!runId || !assetId) return;
+      setError(null);
+      (async () => {
+        try {
+          await selectArtwork(aguiUrl, runId, assetId);
+          setRunState((prev) =>
+            prev ? { ...prev, status: 'running', selectionRequest: null } : prev,
+          );
+          setRunningCampaign(true);
+          pollRun(runId);
+        } catch (e) {
+          setError(e instanceof Error ? e.message : 'artwork selection failed');
+        }
+      })();
+    },
+    [aguiUrl, runState?.runId, pollRun],
+  );
+
   // Stop polling on unmount.
   useEffect(() => () => {
     if (pollRef.current) clearTimeout(pollRef.current);
@@ -491,6 +530,7 @@ export function useStudioAgui(
     applyEditsAndReplan,
     runCampaign,
     attachRun,
+    pickArtwork,
     approve: () => resolveApproval(true),
     reject: () => resolveApproval(false),
   };

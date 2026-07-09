@@ -118,6 +118,15 @@ export const AGENT_PERSONAS = {
     initials: 'Re',
     side: 'left',
   },
+  planner: {
+    key: 'planner',
+    name: 'Planner',
+    accent: '#7A5AF8',
+    bg: '#F0EDFE',
+    border: '#D3C9FB',
+    initials: 'Pl',
+    side: 'left',
+  },
   safety: {
     key: 'safety',
     name: 'Safety',
@@ -137,6 +146,57 @@ export const AGENT_PERSONAS = {
     side: 'left',
   },
 } as const satisfies Record<string, StudioPersona>;
+
+/** Human label from a raw engine role: 'artist_memory' -> 'Artist memory'. */
+export function humanizeRole(role: string): string {
+  const cleaned = (role || '').trim().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
+  if (!cleaned) return 'Agent';
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1).toLowerCase();
+}
+
+/** Distinct, deterministic accents for roles OUTSIDE the fixed palette above, so a
+ *  new crew (e.g. the IG-specific roles) still renders attributed and readable. */
+const GENERATED_ACCENTS = [
+  '#2563C9',
+  '#0B7E76',
+  '#9A6B00',
+  '#B4531F',
+  '#4338CA',
+  '#1D6FB8',
+  '#7A5AF8',
+  '#8A6D3B',
+];
+
+function hashString(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+/**
+ * Build a persona for ANY engine role not in the fixed palette. Deterministic
+ * (same role -> same accent), honestly labeled with the role's own name — this is
+ * what lets the console render whatever crew the engine actually ran (planner /
+ * artist_memory / trend_research / …) instead of a hardcoded agent list.
+ */
+export function generatedPersona(role: string): StudioPersona {
+  const name = humanizeRole(role);
+  const accent = GENERATED_ACCENTS[hashString(role.toLowerCase()) % GENERATED_ACCENTS.length];
+  const words = name.split(' ').filter(Boolean);
+  const initials =
+    words.length >= 2
+      ? (words[0][0] + words[1][0]).toUpperCase()
+      : name.slice(0, 2).replace(/^\w/, (c) => c.toUpperCase());
+  return {
+    key: role.toLowerCase(),
+    name,
+    accent,
+    bg: `${accent}14`,
+    border: `${accent}40`,
+    initials,
+    side: 'left',
+  };
+}
 
 /** Role fallback when the label is generic/unknown. */
 function personaForRole(role: StudioRole): StudioPersona {
