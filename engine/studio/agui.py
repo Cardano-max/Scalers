@@ -1865,7 +1865,8 @@ def _execute_provided_leads_sync(
             })
 
     goal = plan.goal or "win back lapsed clients"
-    deep = _research_enabled(plan.deep_research)
+    # research_depth == "deep" (the interview answer) opts research in too (spec §7).
+    deep = _research_enabled(plan.deep_research, plan.research_depth or None)
     agent_runs: list[dict[str, Any]] = []
     pending: list[str] = []
 
@@ -2239,6 +2240,7 @@ def _execute_provided_leads_sync(
                 tenant_id=tenant_id,
                 plan_channels=plan.channels or None,
                 deep_research=plan.deep_research,
+                research_depth=plan.research_depth or None,
                 research=research,
                 profile=profile,
                 offer=chosen_offer,
