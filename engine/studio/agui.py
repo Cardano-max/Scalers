@@ -376,9 +376,7 @@ def _memory_and_db_context(ctx: RunContext[StudioDeps]) -> str:
                 "research/campaign, or none match) — do not invent any."
             )
     except Exception:
-        lines.append(
-            "MEMORIES: memory layer present; no memories loaded this turn."
-        )
+        lines.append("MEMORIES: memory layer present; no memories loaded this turn.")
     return "\n".join(lines)
 
 
@@ -474,6 +472,84 @@ def _brand_voice_context(ctx: RunContext[StudioDeps]) -> str:
     )
 
 
+@studio_agent.instructions
+def _artifacts_context_instruction(ctx: RunContext[StudioDeps]) -> str:
+    """Surface the UNIVERSAL uploaded-file registry to the host on EVERY turn (nmh.4),
+    so it can truthfully answer "can you see my CSV / brand voice / artwork — how many
+    images?" and the run's agents can ground on the parsed content of every uploaded
+    file. Best-effort + honest-empty (never claims a file it does not have)."""
+    try:
+        from studio.artifacts import build_artifacts_context
+
+        return build_artifacts_context(ctx.deps.tenant_id, dsn=ctx.deps.dsn)
+    except Exception:
+        return ""
+
+
+def _register_document_artifact(
+    tenant_id: str,
+    name: str,
+    artifact_type: str,
+    content: str,
+    *,
+    summary: str | None,
+    document_id: str,
+    dsn: str | None,
+) -> str:
+    """Register an uploaded text document (brand voice / doc / pdf) as a universal
+    context artifact linked to its ``tenant_documents`` row. Deterministic id off the
+    doc id so re-uploading the same doc refreshes rather than duplicates."""
+    from studio.artifacts import register_artifact
+
+    return register_artifact(
+        tenant_id,
+        name,
+        artifact_type,
+        media_type="text/markdown" if artifact_type != "pdf" else "application/pdf",
+        summary=summary,
+        parsed_content=content,
+        source="upload",
+        meta={"document_id": document_id},
+        artifact_id=f"art_doc_{document_id}",
+        dsn=dsn,
+    )
+
+
+def _register_image_artifact(
+    tenant_id: str,
+    name: str,
+    artifact_type: str,
+    media_type: str | None,
+    preview: str,
+    n_bytes: int,
+    *,
+    linked_artist_id: str | None,
+    dsn: str | None,
+) -> str:
+    """Register an uploaded image/artwork/screenshot as a universal context artifact.
+
+    HONESTY: ``parsed_content`` stays empty — the image's visual content is not
+    captured here (VLM captioning is a separate capability); the artifact is
+    countable/previewable/listable but never carries an invented description."""
+    from studio.artifacts import register_artifact
+
+    summary = f"{(media_type or 'image').split('/')[-1].upper()} image, {n_bytes:,} bytes"
+    return register_artifact(
+        tenant_id,
+        name,
+        artifact_type,
+        media_type=media_type,
+        summary=summary,
+        parsed_content="",
+        preview=preview,
+        source="upload",
+        linked_entity_type="artist" if linked_artist_id else None,
+        linked_entity_id=linked_artist_id,
+        meta={"bytes": n_bytes},
+        dsn=dsn,
+    )
+
+
 def build_documents_context(tenant_id: str, plan: CampaignPlan, dsn: str | None) -> str:
     """Assemble the host's per-turn view of the PERSISTENT tenant document store.
 
@@ -553,13 +629,19 @@ def _documents_context(ctx: RunContext[StudioDeps]) -> str:
 # reports. Unknown statuses fall through to their own raw name (honest — a status
 # the data shows is never silently dropped or relabelled).
 _SPAN_STATUS_BUCKET: dict[str, str] = {
-    "ok": "completed", "completed": "completed", "success": "completed",
+    "ok": "completed",
+    "completed": "completed",
+    "success": "completed",
     "done": "completed",
-    "failed": "failed", "error": "failed",
-    "running": "running", "in_progress": "running",
-    "queued": "queued", "pending": "queued",
+    "failed": "failed",
+    "error": "failed",
+    "running": "running",
+    "in_progress": "running",
+    "queued": "queued",
+    "pending": "queued",
     "skipped": "skipped",
-    "needs-review": "needs_review", "needs_review": "needs_review",
+    "needs-review": "needs_review",
+    "needs_review": "needs_review",
 }
 
 
@@ -694,13 +776,9 @@ def build_progress_context(tenant_id: str, plan: CampaignPlan, dsn: str | None) 
     ordered = [b for b in order if status_counts.get(b)]
     ordered += [b for b in status_counts if b not in order and status_counts[b]]
     agents_line = (
-        ", ".join(f"{b}={status_counts[b]}" for b in ordered)
-        if ordered
-        else "none recorded yet"
+        ", ".join(f"{b}={status_counts[b]}" for b in ordered) if ordered else "none recorded yet"
     )
-    drafts_line = f"{drafts_created} created" + (
-        f" / {expected} expected" if expected else ""
-    )
+    drafts_line = f"{drafts_created} created" + (f" / {expected} expected" if expected else "")
 
     lines = [
         "CAMPAIGN PROGRESS — the REAL, live state of the most recent campaign run for "
@@ -730,6 +808,7 @@ def _progress_context(ctx: RunContext[StudioDeps]) -> str:
 # own input, and says so plainly when a step failed. No canned script, no fake
 # "lead 8 of 10" totals the data does not support — the timeline IS the data.
 # --------------------------------------------------------------------------- #
+
 
 def _step_failed(output: Any) -> bool:
     """Whether a recorded step's output reads as a genuine failure (honest — a failed
@@ -786,8 +865,11 @@ def _narration_line(step: dict[str, Any], progress: str = "") -> str:
         if failed:
             return "The strategist hit a snag setting the angle, so the team is drafting straight from your goal."
         angle = str(out.get("target_angle") or out.get("angle") or "").strip()
-        return f"The strategist set the campaign angle: “{angle}”." if angle else \
-            "The strategist set the campaign angle for the team."
+        return (
+            f"The strategist set the campaign angle: “{angle}”."
+            if angle
+            else "The strategist set the campaign angle for the team."
+        )
     if role == "analyst":
         who = lead or "this lead"
         if failed:
@@ -806,8 +888,11 @@ def _narration_line(step: dict[str, Any], progress: str = "") -> str:
         return f"Researching {who}{prog} — pulling their history and profile."
     if role == "draft":
         ch = f"{channel} " if channel else ""
-        base = f"The copywriter is drafting a personalized {ch}message for {lead}" if lead else \
-            f"The copywriter is drafting a personalized {ch}message"
+        base = (
+            f"The copywriter is drafting a personalized {ch}message for {lead}"
+            if lead
+            else f"The copywriter is drafting a personalized {ch}message"
+        )
         return f"{base}{prog}."
     if role == "critic":
         ch = f"{channel} " if channel else ""
@@ -815,12 +900,18 @@ def _narration_line(step: dict[str, Any], progress: str = "") -> str:
         if failed:
             return f"The critic couldn't finish its review on the {ch}draft{who}{prog} — flagged for you to check."
         verdict = str(out.get("verdict") or "").strip()
-        return f"The critic reviewed the {ch}draft{who}{prog} — verdict: {verdict}." if verdict else \
-            f"The critic is reviewing the {ch}draft{who}{prog}."
+        return (
+            f"The critic reviewed the {ch}draft{who}{prog} — verdict: {verdict}."
+            if verdict
+            else f"The critic is reviewing the {ch}draft{who}{prog}."
+        )
     if role == "jury":
         note = str(out.get("note") or "").strip()
-        return f"Wrapping up — {note}" if note else \
-            "Wrapping up — aggregating confidence across the drafts; everything is held for your approval."
+        return (
+            f"Wrapping up — {note}"
+            if note
+            else "Wrapping up — aggregating confidence across the drafts; everything is held for your approval."
+        )
     # Honest fallback: a role we don't have bespoke copy for is still narrated, not dropped.
     label = role or "the team"
     return f"{label.capitalize()} step {'failed' if failed else 'completed'}."
@@ -848,12 +939,14 @@ def run_narration(steps: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
             role_done[role] = role_done.get(role, 0) + 1
             if total:
                 progress = f"{role_done[role]} of {total}"
-        out.append({
-            "seq": step.get("seq", i),
-            "role": str(step.get("role") or ""),
-            "line": _narration_line(step, progress),
-            "failed": _step_failed(step.get("output")),
-        })
+        out.append(
+            {
+                "seq": step.get("seq", i),
+                "role": str(step.get("role") or ""),
+                "line": _narration_line(step, progress),
+                "failed": _step_failed(step.get("output")),
+            }
+        )
     return out
 
 
@@ -1073,9 +1166,7 @@ async def revise_plan(
     # lazily so importing this module never requires the ag-ui protocol package.
     from ag_ui.core import EventType, StateSnapshotEvent
 
-    return StateSnapshotEvent(
-        type=EventType.STATE_SNAPSHOT, snapshot=plan.model_dump()
-    )
+    return StateSnapshotEvent(type=EventType.STATE_SNAPSHOT, snapshot=plan.model_dump())
 
 
 @studio_agent.tool
@@ -1145,7 +1236,10 @@ async def brainstorm_with_roles(ctx: RunContext[StudioDeps]) -> str:
     plan.assets = [a.model_dump() for a in funnel.assets]
     await asyncio.to_thread(_persist_plan, dsn, sid, plan)
     await asyncio.to_thread(
-        _log_turn, dsn, sid, "funnel_architect",
+        _log_turn,
+        dsn,
+        sid,
+        "funnel_architect",
         f"[funnel_architect] {funnel.primary_conversion} | "
         + "; ".join(f"{a.stage.value}:{a.asset_type}" for a in funnel.assets),
         FUNNEL_MODEL if isinstance(FUNNEL_MODEL, str) else str(FUNNEL_MODEL),
@@ -1158,7 +1252,10 @@ async def brainstorm_with_roles(ctx: RunContext[StudioDeps]) -> str:
     )
     top = copy.variants[0]
     await asyncio.to_thread(
-        _log_turn, dsn, sid, "copywriter",
+        _log_turn,
+        dsn,
+        sid,
+        "copywriter",
         f"[copywriter] hook: {top.hook} | CTA: {top.call_to_action}",
         "anthropic:claude-haiku-4-5",
     )
@@ -1169,7 +1266,10 @@ async def brainstorm_with_roles(ctx: RunContext[StudioDeps]) -> str:
         f"Caption: {top.caption}\nCTA: {top.call_to_action}"
     )
     await asyncio.to_thread(
-        _log_turn, dsn, sid, "critic",
+        _log_turn,
+        dsn,
+        sid,
+        "critic",
         f"[critic] verdict={critique.verdict.value} — {critique.rationale[:160]}",
         CRITIC_MODEL if isinstance(CRITIC_MODEL, str) else str(CRITIC_MODEL),
     )
@@ -1190,9 +1290,7 @@ async def brainstorm_with_roles(ctx: RunContext[StudioDeps]) -> str:
         f"Copy hook: {top.hook}\nCritic verdict: {critique.verdict.value} "
         f"({critique.rationale[:200]})"
     )
-    await asyncio.to_thread(
-        _log_turn, dsn, sid, "jury", f"[jury] {verdict.output}", JURY_MODEL
-    )
+    await asyncio.to_thread(_log_turn, dsn, sid, "jury", f"[jury] {verdict.output}", JURY_MODEL)
 
     return (
         f"Brainstorm complete: {len(funnel.assets)} planned assets, "
@@ -1231,7 +1329,9 @@ def _brief_from_plan(plan: CampaignPlan) -> str:
     cust = plan.customers or {}
     if cust.get("rows"):
         cols = ", ".join(str(x) for x in (cust.get("columns") or []))
-        brief += f"\nUploaded customer list: {cust['rows']} row(s)" + (f"; columns: {cols}" if cols else "")
+        brief += f"\nUploaded customer list: {cust['rows']} row(s)" + (
+            f"; columns: {cols}" if cols else ""
+        )
     # Carry uploaded brand / strategy notes into the run brief too. Bounded so a large
     # notes file can't blow the brief out.
     notes = plan.notes.strip()
@@ -1346,23 +1446,33 @@ def _record_planner_run(
         ts = TeamStore(dsn)
         ts.setup()
         ts.record_agent_run(
-            id=f"ar_planner_{_uuid.uuid4().hex[:16]}", campaign_id=campaign_id, run_id=run_id,
-            role="planner", model=blueprint.planner_model,
+            id=f"ar_planner_{_uuid.uuid4().hex[:16]}",
+            campaign_id=campaign_id,
+            run_id=run_id,
+            role="planner",
+            model=blueprint.planner_model,
             input={"goal": blueprint.goal, "target_category": blueprint.targets.category},
             output=_planner_run_output(blueprint),
         )
         from studio import blueprint_store
 
         blueprint_store.upsert_blueprint(
-            run_id, blueprint.model_dump(), campaign_id=campaign_id, tenant_id=tenant_id,
-            planner_model=blueprint.planner_model, dsn=dsn,
+            run_id,
+            blueprint.model_dump(),
+            campaign_id=campaign_id,
+            tenant_id=tenant_id,
+            planner_model=blueprint.planner_model,
+            dsn=dsn,
         )
     except Exception:
         pass
 
 
 def _execute_campaign_sync(
-    plan: CampaignPlan, session_id: str, tenant_id: str, dsn: str | None,
+    plan: CampaignPlan,
+    session_id: str,
+    tenant_id: str,
+    dsn: str | None,
     run_id: str | None = None,
 ) -> dict[str, Any]:
     """SYNC: run the real traced Phase-A campaign for ``plan`` and persist its visible
@@ -1385,7 +1495,10 @@ def _execute_campaign_sync(
     from studio.campaign_runner import run_and_trace
 
     summary = run_and_trace(
-        brief=_brief_from_plan(plan), tenant_id=tenant_id, dsn=dsn, run_id=run_id,
+        brief=_brief_from_plan(plan),
+        tenant_id=tenant_id,
+        dsn=dsn,
+        run_id=run_id,
         force_research=bool(plan.deep_research),
         output_count=plan.output_count or 0,
         campaign_type=plan.campaign_type or None,
@@ -1394,8 +1507,11 @@ def _execute_campaign_sync(
     # the compose spine either (the provided path records it inline as its first step).
     if summary.get("run_id"):
         _record_planner_run(
-            dsn, str(summary["run_id"]), str(summary.get("campaign_id") or ""),
-            tenant_id, blueprint,
+            dsn,
+            str(summary["run_id"]),
+            str(summary.get("campaign_id") or ""),
+            tenant_id,
+            blueprint,
         )
     # ONE collapsed, client-readable turn per role (tlv.3) — never the raw per-lead
     # output_summary spam; the full detail stays on agent_runs (Runs tab).
@@ -1416,8 +1532,12 @@ def _execute_campaign_sync(
 
 
 def _execute_provided_leads_sync(
-    plan: CampaignPlan, session_id: str, tenant_id: str, dsn: str | None,
-    run_id: str | None = None, blueprint: Any = None,
+    plan: CampaignPlan,
+    session_id: str,
+    tenant_id: str,
+    dsn: str | None,
+    run_id: str | None = None,
+    blueprint: Any = None,
 ) -> dict[str, Any]:
     """SYNC: the LEAD-SOURCE=provided compliance run. Targets ONLY the operator's own
     leads — the uploaded CSV (its ingested ``customer_ids``) or, if none uploaded, the
@@ -1471,7 +1591,11 @@ def _execute_provided_leads_sync(
         run_id = f"team-{campaign_id}-{_uuid.uuid4().hex[:12]}"
     else:
         parts = run_id.split("-")
-        campaign_id = parts[1] if len(parts) >= 2 and parts[1].startswith("camp_") else f"camp_{_uuid.uuid4().hex[:12]}"
+        campaign_id = (
+            parts[1]
+            if len(parts) >= 2 and parts[1].startswith("camp_")
+            else f"camp_{_uuid.uuid4().hex[:12]}"
+        )
 
     store = MemoryStore(dsn=dsn)
     store.ensure_schema()
@@ -1493,9 +1617,7 @@ def _execute_provided_leads_sync(
     # stages AT MOST this many actions, never 5000×(analyst+draft+critic).
     from archetypes.compose import _OUTPUT_HARD_CAP
 
-    effective_cap = min(
-        blueprint.stop_conditions.total_quota or _OUTPUT_HARD_CAP, _OUTPUT_HARD_CAP
-    )
+    effective_cap = min(blueprint.stop_conditions.total_quota or _OUTPUT_HARD_CAP, _OUTPUT_HARD_CAP)
 
     # 1) Resolve ONLY the operator's leads — uploaded CSV ids first, else DB cohort. The
     # cust-id list is capped to ``effective_cap`` BEFORE the DB lookup so a huge CSV never
@@ -1515,8 +1637,9 @@ def _execute_provided_leads_sync(
         expected = int(n_requested)
         # Rows beyond the hard cap are SKIPPED with a reason (not silently dropped).
         for idx, cid in enumerate(cust_ids[effective_cap:], start=effective_cap + 1):
-            skipped.append({"row": idx, "lead": cid,
-                            "reason": f"beyond output cap of {effective_cap}"})
+            skipped.append(
+                {"row": idx, "lead": cid, "reason": f"beyond output cap of {effective_cap}"}
+            )
         cust_ids = cust_ids[:effective_cap]
         leads = lookup_leads(
             tenant_id, [{"customer_id": i} for i in cust_ids], dsn=dsn, memory_store=store
@@ -1525,8 +1648,13 @@ def _execute_provided_leads_sync(
         resolved_ids = {f.get("customer_id") for f in leads}
         for idx, cid in enumerate(cust_ids, start=1):
             if cid not in resolved_ids:
-                skipped.append({"row": idx, "lead": cid,
-                                "reason": "not found in database (row did not match a customer)"})
+                skipped.append(
+                    {
+                        "row": idx,
+                        "lead": cid,
+                        "reason": "not found in database (row did not match a customer)",
+                    }
+                )
         capped_note = f", capped to {effective_cap}" if n_requested > effective_cap else ""
         source_note = (
             f"uploaded CSV ({len(leads)} of {n_requested} rows resolved in DB{capped_note})"
@@ -1624,13 +1752,23 @@ def _execute_provided_leads_sync(
 
     def _rec(role: str, model: str, inp: dict[str, Any], out: dict[str, Any]) -> None:
         ts.record_agent_run(
-            id=f"ar_{_uuid.uuid4().hex[:16]}", campaign_id=campaign_id, run_id=run_id,
-            role=role, model=model, input=inp, output=out,
+            id=f"ar_{_uuid.uuid4().hex[:16]}",
+            campaign_id=campaign_id,
+            run_id=run_id,
+            role=role,
+            model=model,
+            input=inp,
+            output=out,
         )
-        agent_runs.append({
-            "role": role, "model": model, "input": inp, "output": out,
-            "output_summary": _summarize_output(role, out),
-        })
+        agent_runs.append(
+            {
+                "role": role,
+                "model": model,
+                "input": inp,
+                "output": out,
+                "output_summary": _summarize_output(role, out),
+            }
+        )
 
     def _cell_model(cell: Any) -> str:
         m = getattr(cell, "model", None)
@@ -1652,17 +1790,27 @@ def _execute_provided_leads_sync(
     )
 
     _rec(
-        "planner", blueprint.planner_model,
-        {"goal": blueprint.goal, "target_category": blueprint.targets.category,
-         "scope": blueprint.targets.scope, "channels": list(plan.channels or [])},
+        "planner",
+        blueprint.planner_model,
+        {
+            "goal": blueprint.goal,
+            "target_category": blueprint.targets.category,
+            "scope": blueprint.targets.scope,
+            "channels": list(plan.channels or []),
+        },
         _planner_run_output(blueprint),
     )
 
     def _persist_blueprint() -> None:
         try:
             blueprint_store.upsert_blueprint(
-                run_id, blueprint.model_dump(), campaign_id=campaign_id, tenant_id=tenant_id,
-                session_id=session_id, planner_model=blueprint.planner_model, dsn=dsn,
+                run_id,
+                blueprint.model_dump(),
+                campaign_id=campaign_id,
+                tenant_id=tenant_id,
+                session_id=session_id,
+                planner_model=blueprint.planner_model,
+                dsn=dsn,
             )
         except Exception:
             pass  # the blueprint row is a read convenience; never break a real run
@@ -1685,13 +1833,15 @@ def _execute_provided_leads_sync(
         strategy = strat_cell.run_sync(build_strategy_prompt(tenant_id, _brief_from_plan(plan)))
         campaign_angle = (strategy.target_angle or "").strip() or None
         _rec(
-            "strategist", strat_model,
+            "strategist",
+            strat_model,
             {"goal": goal, "n_leads": len(leads), "lead_source": "provided"},
             strategy.model_dump(),
         )
     except Exception as exc:  # honest failed run, never a fabricated strategy
         _rec(
-            "strategist", strat_model,
+            "strategist",
+            strat_model,
             {"goal": goal, "lead_source": "provided"},
             {"status": "failed", "error": f"{type(exc).__name__}: {exc}"},
         )
@@ -1703,7 +1853,9 @@ def _execute_provided_leads_sync(
 
     # The per-lead draft leads with the strategist's real angle when one was produced,
     # so the strategist is load-bearing (the angle flows into the copy), not decoration.
-    draft_goal = goal if not campaign_angle else f"{goal}. Lead with this campaign angle: {campaign_angle}"
+    draft_goal = (
+        goal if not campaign_angle else f"{goal}. Lead with this campaign angle: {campaign_angle}"
+    )
 
     # DURABLE STEP LEDGER (fr1.2 / OPS-2): make the per-lead loop crash-safe. Active
     # when ENGINE_DATABASE_URL is set (the same activation seam as the checkpointer);
@@ -1749,19 +1901,27 @@ def _execute_provided_leads_sync(
         traits = facts.get("persona_traits", {}) or {}
         sources = [
             {
-                "url": r.get("url"), "title": r.get("title"), "snippet": r.get("snippet"),
-                "source_type": r.get("source_type"), "customer_id": r.get("customer_id") or cust_id,
+                "url": r.get("url"),
+                "title": r.get("title"),
+                "snippet": r.get("snippet"),
+                "source_type": r.get("source_type"),
+                "customer_id": r.get("customer_id") or cust_id,
             }
-            for r in research if r.get("url")
+            for r in research
+            if r.get("url")
         ][:5]
         _rec(
-            "researcher", "firecrawl+customer_db",
+            "researcher",
+            "firecrawl+customer_db",
             {"customer_id": cust_id, "name": facts.get("name")},
             {
-                "cited": len(sources), "sources": sources,
-                "lead": facts.get("name"), "customer_id": cust_id,
+                "cited": len(sources),
+                "sources": sources,
+                "lead": facts.get("name"),
+                "customer_id": cust_id,
                 "db_history": {
-                    "city": facts.get("city"), "past_tattoos": len(th),
+                    "city": facts.get("city"),
+                    "past_tattoos": len(th),
                     "interests": facts.get("interests", []),
                     "lifecycle": traits.get("lifecycle_stage"),
                     "win_back_candidate": traits.get("win_back_candidate"),
@@ -1784,18 +1944,25 @@ def _execute_provided_leads_sync(
             thread = None  # not-connected/stub source -> honest no conversation
         try:
             profile = analyze_customer(
-                facts, thread, known_artists=[facts["artist"]] if facts.get("artist") else None,
+                facts,
+                thread,
+                known_artists=[facts["artist"]] if facts.get("artist") else None,
             )
             po = profile.primary_objection
             objection_val = po.value if po.signal in ("stated", "inferred") else ""
             _rec(
-                "analyst", (psych_llm_model() if profile.source.endswith("llm")
-                            else "grounded_rules"),
-                {"customer_id": cust_id, "name": facts.get("name"),
-                 "had_conversation": profile.had_conversation},
+                "analyst",
+                (psych_llm_model() if profile.source.endswith("llm") else "grounded_rules"),
+                {
+                    "customer_id": cust_id,
+                    "name": facts.get("name"),
+                    "had_conversation": profile.had_conversation,
+                },
                 {
                     "umbrella_category": profile.umbrella_category.value,
-                    "primary_objection": (po.value if po.signal != "insufficient-signal" else "none-found"),
+                    "primary_objection": (
+                        po.value if po.signal != "insufficient-signal" else "none-found"
+                    ),
                     "objection_signal": po.signal,
                     "objection_evidence": po.evidence,
                     "readiness_stage": profile.readiness_stage.value,
@@ -1808,7 +1975,8 @@ def _execute_provided_leads_sync(
         except Exception as exc:  # honest failed analyst run; never a fabricated profile
             profile = None
             _rec(
-                "analyst", "grounded_rules",
+                "analyst",
+                "grounded_rules",
                 {"customer_id": cust_id},
                 {"status": "failed", "error": f"{type(exc).__name__}: {exc}"},
             )
@@ -1832,21 +2000,36 @@ def _execute_provided_leads_sync(
         # rather than staging an undeliverable draft. (A lead with a name but no email still
         # drafts: the existing path downgrades the channel and targets the handle/name — that
         # is NOT an undercount, so it is not skipped here.)
-        if not (facts.get("email") or facts.get("phone") or facts.get("ig_handle")
-                or facts.get("name")):
-            skipped.append({"row": _row, "lead": cust_id,
-                            "reason": "no contact method (no email, phone, handle, or name)"})
+        if not (
+            facts.get("email") or facts.get("phone") or facts.get("ig_handle") or facts.get("name")
+        ):
+            skipped.append(
+                {
+                    "row": _row,
+                    "lead": cust_id,
+                    "reason": "no contact method (no email, phone, handle, or name)",
+                }
+            )
             continue
 
         try:
             draft = build_outreach_draft(
-                facts, goal=draft_goal, plan_channels=plan.channels or None,
-                deep_research=plan.deep_research, research=research,
-                profile=profile, offer=chosen_offer,
+                facts,
+                goal=draft_goal,
+                plan_channels=plan.channels or None,
+                deep_research=plan.deep_research,
+                research=research,
+                profile=profile,
+                offer=chosen_offer,
             )
         except Exception as exc:  # honest per-row skip; never a crash or a fake draft
-            skipped.append({"row": _row, "lead": facts.get("name") or cust_id,
-                            "reason": f"draft generation failed: {type(exc).__name__}"})
+            skipped.append(
+                {
+                    "row": _row,
+                    "lead": facts.get("name") or cust_id,
+                    "reason": f"draft generation failed: {type(exc).__name__}",
+                }
+            )
             continue
 
         # OFFER ANTI-FABRICATION (65w.14, the ARTLOVER audit): every offer/discount
@@ -1854,10 +2037,16 @@ def _execute_provided_leads_sync(
         # offers substantiate nothing. A violating draft is skipped with the concrete
         # reason; it never reaches the pending queue.
         _offer_viol = offer_violations(
-            f"{draft.get('subject') or ''}\n{draft.get('draft') or ''}", _guard_offers)
+            f"{draft.get('subject') or ''}\n{draft.get('draft') or ''}", _guard_offers
+        )
         if _offer_viol:
-            skipped.append({"row": _row, "lead": facts.get("name") or cust_id,
-                            "reason": f"unsubstantiated offer language: {_offer_viol[0]}"})
+            skipped.append(
+                {
+                    "row": _row,
+                    "lead": facts.get("name") or cust_id,
+                    "reason": f"unsubstantiated offer language: {_offer_viol[0]}",
+                }
+            )
             continue
 
         # ANTI-FAKE-PERSONALIZATION (ju1.3, the anti-theater core): every second-person
@@ -1869,25 +2058,43 @@ def _execute_provided_leads_sync(
         # stage a draft that fakes knowledge.
         _pers_facts = personalization_facts_view(facts, objection=objection_val, profile=profile)
         _pers_viol = personalization_violations(
-            f"{draft.get('subject') or ''}\n{draft.get('draft') or ''}", _pers_facts)
+            f"{draft.get('subject') or ''}\n{draft.get('draft') or ''}", _pers_facts
+        )
         if _pers_viol:
-            skipped.append({"row": _row, "lead": facts.get("name") or cust_id,
-                            "reason": f"fake personalization: {_pers_viol[0]}"})
+            skipped.append(
+                {
+                    "row": _row,
+                    "lead": facts.get("name") or cust_id,
+                    "reason": f"fake personalization: {_pers_viol[0]}",
+                }
+            )
             continue
 
         # First-class per-lead DOSSIER (P2-C, 65w.7): assemble the evidence-linked record
         # from the REAL facts already gathered (identity/contact, persona, the grounded
         # objection, the chosen angle, the resolved CTA). Pure — no fabrication.
-        _cta_kind = ("booking-link" if any(g == "cta=booking-link"
-                     for g in draft.get("grounding", []))
-                     else "reply-based" if draft["channel"] in ("gmail", "email") else None)
+        _cta_kind = (
+            "booking-link"
+            if any(g == "cta=booking-link" for g in draft.get("grounding", []))
+            else "reply-based"
+            if draft["channel"] in ("gmail", "email")
+            else None
+        )
         dossier = build_dossier(
             facts,
             profile=profile,
-            angle={"label": draft.get("angle"), "key": draft.get("angle_key"),
-                   "generic": draft.get("generic"), "inferred": draft.get("inferred")},
-            offer=chosen_offer, research=research, channel=draft["channel"],
-            cta_kind=_cta_kind, evidence_used=draft.get("grounding", []), run_id=run_id,
+            angle={
+                "label": draft.get("angle"),
+                "key": draft.get("angle_key"),
+                "generic": draft.get("generic"),
+                "inferred": draft.get("inferred"),
+            },
+            offer=chosen_offer,
+            research=research,
+            channel=draft["channel"],
+            cta_kind=_cta_kind,
+            evidence_used=draft.get("grounding", []),
+            run_id=run_id,
         )
         # SKILL SELECTION per lead (P2-B, 65w.6): route the dossier to the right first-party
         # marketing play (objection-recovery / re-engagement / loyalty / warm-intro ...).
@@ -1901,20 +2108,27 @@ def _execute_provided_leads_sync(
         # that could drift from the copywriter cell's actual pin.
         copy_model = draft.get("copy_model") or "grounded_template"
         _rec(
-            "draft", copy_model,
+            "draft",
+            copy_model,
             {"customer_id": cust_id, "channel": draft["channel"]},
             {
-                "hook": draft.get("subject") or "", "headline": draft.get("subject") or "",
-                "caption": draft.get("draft") or "", "channel": draft["channel"],
+                "hook": draft.get("subject") or "",
+                "headline": draft.get("subject") or "",
+                "caption": draft.get("draft") or "",
+                "channel": draft["channel"],
                 "grounding": draft.get("grounding", []),
                 # Per-lead personalization proof (the distinct angle + honest rationale),
                 # so the evidence panel can show WHY this draft differs from the others.
-                "angle": draft.get("angle"), "angle_key": draft.get("angle_key"),
+                "angle": draft.get("angle"),
+                "angle_key": draft.get("angle_key"),
                 "why_different": draft.get("why_different"),
-                "generic": draft.get("generic"), "inferred": draft.get("inferred"),
+                "generic": draft.get("generic"),
+                "inferred": draft.get("inferred"),
                 # P2-B: the selected marketing skill/play + why (evidence, not a pack load).
-                "skill_used": selection.skill_id, "skill_why": selection.why,
-                "skill_tone": selection.tone, "skill_aligned_pack": selection.aligned_pack,
+                "skill_used": selection.skill_id,
+                "skill_why": selection.why,
+                "skill_tone": selection.tone,
+                "skill_aligned_pack": selection.aligned_pack,
                 "skill_pack_status": selection.pack_status,
                 # P2-C: the full evidence-linked dossier this draft was written from.
                 "dossier": dossier.model_dump(),
@@ -1929,7 +2143,8 @@ def _execute_provided_leads_sync(
         # fabricated approval for a draft the critic could not actually judge.
         caption = draft.get("draft") or draft.get("subject") or ""
         crit_prompt = "\n".join(
-            p for p in [
+            p
+            for p in [
                 f"Campaign objective: {campaign_angle or goal}",
                 f"Channel: {draft['channel']}",
                 f"ASSET TO JUDGE (the outreach copy):\n{caption}",
@@ -1937,7 +2152,8 @@ def _execute_provided_leads_sync(
                 "Judge whether this is ship-quality outreach for this lead; flag any "
                 "off-voice phrasing, unsupported claim, or weak/absent call to action as "
                 "a concrete issue. Do not invent praise.",
-            ] if p
+            ]
+            if p
         )
         # Capture the critic's REAL verdict + confidence so it can land on the draft's
         # conf field (the operator saw conf=None on every draft). A failed critic leaves
@@ -1948,19 +2164,23 @@ def _execute_provided_leads_sync(
             crit = critic_cell.run_sync(crit_prompt)
             crit_verdict, crit_confidence = crit.verdict.value, float(crit.confidence)
             _rec(
-                "critic", _cell_model(critic_cell),
+                "critic",
+                _cell_model(critic_cell),
                 {"customer_id": cust_id, "channel": draft["channel"]},
                 {
-                    "verdict": crit_verdict, "confidence": crit_confidence,
+                    "verdict": crit_verdict,
+                    "confidence": crit_confidence,
                     "rationale": crit.rationale,
                 },
             )
         except Exception as exc:  # honest failed verdict, never fabricated praise
             _rec(
-                "critic", _cell_model(critic_cell),
+                "critic",
+                _cell_model(critic_cell),
                 {"customer_id": cust_id, "channel": draft["channel"]},
                 {
-                    "verdict": "error", "confidence": 0.0,
+                    "verdict": "error",
+                    "confidence": 0.0,
                     "rationale": f"critic cell failed: {type(exc).__name__}: {exc}",
                 },
             )
@@ -1972,32 +2192,51 @@ def _execute_provided_leads_sync(
         # LINK the staged draft to its dossier + selected skill (P2-B/-C): the Review-Queue
         # row carries the evidence-linked dossier in ``context`` so the UI can deep-link from
         # the draft to exactly what we knew about this lead and which play was chosen.
-        _context = _json.dumps({
-            "skill_used": selection.skill_id, "skill_why": selection.why,
-            "aligned_pack": selection.aligned_pack, "pack_status": selection.pack_status,
-            "limited_personalization": dossier.limited_personalization,
-            "personalization_note": dossier.personalization_note,
-            "dossier": dossier.model_dump(),
-        })
+        _context = _json.dumps(
+            {
+                "skill_used": selection.skill_id,
+                "skill_why": selection.why,
+                "aligned_pack": selection.aligned_pack,
+                "pack_status": selection.pack_status,
+                "limited_personalization": dossier.limited_personalization,
+                "personalization_note": dossier.personalization_note,
+                "dossier": dossier.model_dump(),
+            }
+        )
         action_id = record_pending_action(
-            tenant_id=tenant_id, decision_id=None, type="outreach",
-            channel=draft["channel"], worker="studio_provided_leads",
-            target=draft["target"], draft=draft["draft"], subject=draft.get("subject"),
+            tenant_id=tenant_id,
+            decision_id=None,
+            type="outreach",
+            channel=draft["channel"],
+            worker="studio_provided_leads",
+            target=draft["target"],
+            draft=draft["draft"],
+            subject=draft.get("subject"),
             context=_context,
-            conf=draft_conf, threshold=None, esc_kind="approval_required",
+            conf=draft_conf,
+            threshold=None,
+            esc_kind="approval_required",
             esc_label="Provided-lead outreach — operator approval required",
-            idempotency_key=f"{run_id}:{cust_id}", run_id=run_id, dsn=dsn,
+            idempotency_key=f"{run_id}:{cust_id}",
+            run_id=run_id,
+            dsn=dsn,
         )
         pending.append(action_id)
         try:
             store.write(
-                tenant_id=tenant_id, subject_type="customer", subject_id=cust_id,
+                tenant_id=tenant_id,
+                subject_type="customer",
+                subject_id=cust_id,
                 text=(
                     f"Staged {draft['channel']} outreach to {facts.get('name')} for goal "
                     f"'{goal}'. Grounded on: {', '.join(draft.get('grounding', []))}."
                 ),
-                metadata={"kind": "outreach", "session_id": session_id,
-                          "action_id": action_id, "run_id": run_id},
+                metadata={
+                    "kind": "outreach",
+                    "session_id": session_id,
+                    "action_id": action_id,
+                    "run_id": run_id,
+                },
             )
         except Exception:
             pass
@@ -2013,7 +2252,9 @@ def _execute_provided_leads_sync(
                 _durable.step(
                     _step_key,
                     lambda conn, _aid=action_id, _cid=cust_id: {
-                        "action_id": _aid, "customer_id": _cid, "staged": True,
+                        "action_id": _aid,
+                        "customer_id": _cid,
+                        "staged": True,
                     },
                 )
                 _durable.checkpoint(cursor=len(pending))
@@ -2034,7 +2275,9 @@ def _execute_provided_leads_sync(
     if delta is not None:
         contradictions.append(delta.reason)
         sample_n = sum(
-            1 for ar in agent_runs if ar["role"] == "analyst"
+            1
+            for ar in agent_runs
+            if ar["role"] == "analyst"
             and (ar["output"].get("objection_signal") in ("stated", "inferred"))
         )
         replan_out = {
@@ -2052,16 +2295,23 @@ def _execute_provided_leads_sync(
         # summary/board see the replan too.
         rid = replan_event_id(run_id, delta.from_objection, delta.to_objection, sample_n)
         ts.record_agent_run(
-            id=rid, campaign_id=campaign_id, run_id=run_id, role="planner",
+            id=rid,
+            campaign_id=campaign_id,
+            run_id=run_id,
+            role="planner",
             model=blueprint.planner_model,
             input={"phase": "replan", "assumed_dominant_objection": delta.from_objection},
             output=replan_out,
         )
-        agent_runs.append({
-            "role": "planner", "model": blueprint.planner_model,
-            "input": {"phase": "replan"}, "output": replan_out,
-            "output_summary": _summarize_output("planner", replan_out),
-        })
+        agent_runs.append(
+            {
+                "role": "planner",
+                "model": blueprint.planner_model,
+                "input": {"phase": "replan"},
+                "output": replan_out,
+                "output_summary": _summarize_output("planner", replan_out),
+            }
+        )
         # Apply the delta to the in-memory blueprint (the plan the summary returns) and
         # re-persist the authored plan row; the replan EVENT itself is the deterministic
         # agent_run above.
@@ -2097,9 +2347,7 @@ def _execute_provided_leads_sync(
         "reconciled": (len(pending) + accounted_skips) >= expected_n,
     }
 
-    board = board_for_run(
-        run_id, None, agent_runs, run_actions_rows, plan, ledger=output_ledger
-    )
+    board = board_for_run(run_id, None, agent_runs, run_actions_rows, plan, ledger=output_ledger)
 
     # 3) A final jury summary over the per-lead drafts (offline aggregate, HELD). Carries
     # the output-count ledger so the on-demand board can derive it from this real row too.
@@ -2107,8 +2355,9 @@ def _execute_provided_leads_sync(
     if skipped:
         _rows = ", ".join(str(s["row"]) for s in skipped if s.get("row"))
         _reasons = "; ".join(sorted({str(s["reason"]) for s in skipped}))
-        _skip_phrase = (f"; {len(skipped)} skipped"
-                        + (f" (rows {_rows})" if _rows else "") + f": {_reasons}")
+        _skip_phrase = (
+            f"; {len(skipped)} skipped" + (f" (rows {_rows})" if _rows else "") + f": {_reasons}"
+        )
     # FAIL-CLOSED (0dy/37y): the jury cannot certify drafts on top of a required gate that
     # FAILED. If the strategist or the critic could not run (credit-out), the jury records
     # an HONEST ``blocked`` verdict (aggregate 0.0) — drafts stay pending_review, NOT
@@ -2117,26 +2366,39 @@ def _execute_provided_leads_sync(
     if _upstream_failures:
         _blocked_gates = ", ".join(sorted({f["agent"] for f in _upstream_failures}))
         _jury_output = {
-            "aggregate": 0.0, "decision": "blocked", "status": "failed",
-            "error": (f"cannot certify drafts: required step(s) failed ({_blocked_gates}); "
-                      f"drafts held pending_review, not approved"),
+            "aggregate": 0.0,
+            "decision": "blocked",
+            "status": "failed",
+            "error": (
+                f"cannot certify drafts: required step(s) failed ({_blocked_gates}); "
+                f"drafts held pending_review, not approved"
+            ),
             "output_ledger": output_ledger,
-            "note": (f"{len(pending)} draft(s) staged but NOT approved — {_blocked_gates} "
-                     f"failed; run held for retry (nothing sent)"),
+            "note": (
+                f"{len(pending)} draft(s) staged but NOT approved — {_blocked_gates} "
+                f"failed; run held for retry (nothing sent)"
+            ),
         }
     else:
         _jury_output = {
-            "aggregate": 1.0 if pending else 0.0, "decision": "review",
+            "aggregate": 1.0 if pending else 0.0,
+            "decision": "review",
             "output_ledger": output_ledger,
-            "note": (f"{len(pending)} of {expected_n} per-lead draft(s) staged HELD from "
-                     f"{source_note}{_skip_phrase}; approve-first — nothing sent"),
+            "note": (
+                f"{len(pending)} of {expected_n} per-lead draft(s) staged HELD from "
+                f"{source_note}{_skip_phrase}; approve-first — nothing sent"
+            ),
         }
     # HONEST TRACE (65w.15): this verdict was computed by pure code above — record the
     # deterministic label, never a model id claiming a jury that never ran.
     from autonomy.jury import DETERMINISTIC_JURY_MODEL
 
-    _rec("jury", DETERMINISTIC_JURY_MODEL,
-         {"n_leads": len(leads), "lead_source": "provided"}, _jury_output)
+    _rec(
+        "jury",
+        DETERMINISTIC_JURY_MODEL,
+        {"n_leads": len(leads), "lead_source": "provided"},
+        _jury_output,
+    )
 
     # The FAIL-CLOSED terminal status decided from the REAL agent_runs (incl. the honest
     # jury above): 'failed' when any required gate failed, else 'completed'. The runs row,
@@ -2146,7 +2408,10 @@ def _execute_provided_leads_sync(
     failure_summary = required_step_failures(agent_runs, FAILCLOSED_REQUIRED_ROLES)
 
     runs_row = _materialize_runs_row(
-        dsn=dsn, run_id=run_id, tenant_id=tenant_id, agent_runs=agent_runs,
+        dsn=dsn,
+        run_id=run_id,
+        tenant_id=tenant_id,
+        agent_runs=agent_runs,
         terminal_status=run_status,
     )
 
@@ -2156,14 +2421,26 @@ def _execute_provided_leads_sync(
         role = role if role in VALID_ROLES else "host"
         _log_turn(dsn, session_id, role, text, model)
 
-    channels = sorted({str(ar["input"].get("channel")) for ar in agent_runs if ar["role"] == "draft" and ar["input"].get("channel")})
+    channels = sorted(
+        {
+            str(ar["input"].get("channel"))
+            for ar in agent_runs
+            if ar["role"] == "draft" and ar["input"].get("channel")
+        }
+    )
     n_critics = sum(1 for ar in agent_runs if ar["role"] == "critic")
     n_analysts = sum(1 for ar in agent_runs if ar["role"] == "analyst")
-    n_offers = sum(1 for ar in agent_runs if ar["role"] == "draft"
-                   and any(str(g).startswith("offer=") for g in (ar["output"].get("grounding") or [])))
+    n_offers = sum(
+        1
+        for ar in agent_runs
+        if ar["role"] == "draft"
+        and any(str(g).startswith("offer=") for g in (ar["output"].get("grounding") or []))
+    )
     plan.tasks_per_role = {
         "analyst": [f"psych-analyzed {n_analysts} lead(s): category + grounded objection"],
-        "strategist": [f"angle: {campaign_angle}" if campaign_angle else "campaign strategy step recorded"],
+        "strategist": [
+            f"angle: {campaign_angle}" if campaign_angle else "campaign strategy step recorded"
+        ],
         "researcher": [f"researched {len(leads)} provided lead(s) from {source_note}"],
         "draft": [f"{len(pending)} per-lead brand-voiced draft(s) staged HELD"],
         "critic": [f"{n_critics} independent critic pass(es) over the staged draft(s)"],
@@ -2200,9 +2477,8 @@ def _execute_provided_leads_sync(
             f"staged {len(pending)} brand-voiced draft(s) HELD (approve-first); nothing sent"
             + (f"; {n_offers} referenced a REAL substantiated offer" if n_offers else ""),
             f"critic ran {n_critics} independent pass(es) over the staged draft(s)",
-            f"output count: {len(pending)} of {expected_n} drafted" + (
-                _skip_phrase.replace("; ", "", 1) if _skip_phrase else " (all rows accounted for)"
-            ),
+            f"output count: {len(pending)} of {expected_n} drafted"
+            + (_skip_phrase.replace("; ", "", 1) if _skip_phrase else " (all rows accounted for)"),
         ],
         "runs_row": runs_row,
         # Fail-closed outcome (0dy/37y): 'completed' only when every required gate passed;
@@ -2214,8 +2490,11 @@ def _execute_provided_leads_sync(
 
 
 def _persist_campaign_spec(
-    plan: CampaignPlan, summary: dict[str, Any], session_id: str,
-    tenant_id: str, dsn: str | None,
+    plan: CampaignPlan,
+    summary: dict[str, Any],
+    session_id: str,
+    tenant_id: str,
+    dsn: str | None,
 ) -> None:
     """Assemble the per-campaign spec from ALREADY-REAL fields and upsert it.
 
@@ -2241,9 +2520,7 @@ def _persist_campaign_spec(
                 archetype_meta = {
                     "success_metric": aspec.success_metric,
                     "trigger": trig,
-                    "steps_enabled": sorted(
-                        getattr(s, "value", s) for s in aspec.steps_enabled
-                    ),
+                    "steps_enabled": sorted(getattr(s, "value", s) for s in aspec.steps_enabled),
                 }
             except Exception:
                 archetype_meta = None
@@ -2327,9 +2604,12 @@ async def launch_studio_run(
             runs_registry[run_id] = {
                 "status": _run_status,
                 "summary": summary,
-                "error": (None if _run_status == "completed"
-                          else "; ".join(f"{f['agent']}: {f['error']}" for f in _failures)
-                          or "required step failed"),
+                "error": (
+                    None
+                    if _run_status == "completed"
+                    else "; ".join(f"{f['agent']}: {f['error']}" for f in _failures)
+                    or "required step failed"
+                ),
             }
             try:
                 await asyncio.to_thread(
@@ -2339,11 +2619,14 @@ async def launch_studio_run(
                 pass
         except Exception as exc:  # honest failure, never a fake success
             runs_registry[run_id] = {
-                "status": "error", "summary": None, "error": f"{type(exc).__name__}: {exc}"
+                "status": "error",
+                "summary": None,
+                "error": f"{type(exc).__name__}: {exc}",
             }
 
     asyncio.create_task(_bg())
     return {"runId": run_id, "campaignId": campaign_id, "status": "running"}
+
 
 @studio_agent.tool
 async def run_campaign(ctx: RunContext[StudioDeps]) -> str:
@@ -2391,8 +2674,13 @@ async def generate_example_campaign(
 
     def _run() -> tuple[Any, str, list[str]]:
         campaign = generate_campaign(
-            ctx.deps.tenant_id, artist=artist, offer_price_usd=offer_price_usd,
-            payment_plan=payment_plan, spots=spots, follow_up=follow_up, dsn=ctx.deps.dsn,
+            ctx.deps.tenant_id,
+            artist=artist,
+            offer_price_usd=offer_price_usd,
+            payment_plan=payment_plan,
+            spots=spots,
+            follow_up=follow_up,
+            dsn=ctx.deps.dsn,
         )
         run_id = f"studio-gen-{ctx.deps.session_id}-{uuid.uuid4().hex[:8]}"
         staged = stage_campaign(campaign, run_id=run_id, dsn=ctx.deps.dsn)
@@ -2538,9 +2826,7 @@ def _research_and_stage_sync(
     ensure_schema(dsn)
 
     if emails:
-        leads = lookup_leads(
-            tenant_id, [{"email": e} for e in emails], dsn=dsn, memory_store=store
-        )
+        leads = lookup_leads(tenant_id, [{"email": e} for e in emails], dsn=dsn, memory_store=store)
         requested = len(emails)
     else:
         leads = churn_risk_leads(tenant_id, limit=limit, dsn=dsn, memory_store=store)
@@ -2572,9 +2858,7 @@ def _research_and_stage_sync(
     # ``n_drafts`` equals the number of rows that actually appear in the Review Queue.
     seen_action_ids: set[str] = set()
     for facts in leads:
-        draft = build_outreach_draft(
-            facts, goal=goal, plan_channels=plan.channels or None
-        )
+        draft = build_outreach_draft(facts, goal=goal, plan_channels=plan.channels or None)
         cust_id = facts["customer_id"]
         action_id = record_pending_action(
             tenant_id=tenant_id,
@@ -2824,9 +3108,7 @@ def mount_studio_agui(app) -> None:
         last_user = _operator_turn_text(payload.get("messages"))
         if last_user:
             try:
-                await asyncio.to_thread(
-                    _log_turn, dsn, session_id, "operator", last_user, None
-                )
+                await asyncio.to_thread(_log_turn, dsn, session_id, "operator", last_user, None)
             except Exception:
                 pass
 
@@ -2854,9 +3136,7 @@ def mount_studio_agui(app) -> None:
                 # the thinking-view can show the reasoning behind this reply.
                 segments = _extract_thinking(result)
                 if segments:
-                    await asyncio.to_thread(
-                        _persist_thinking, dsn, session_id, segments
-                    )
+                    await asyncio.to_thread(_persist_thinking, dsn, session_id, segments)
                 if text:
                     await asyncio.to_thread(
                         _log_turn, dsn, session_id, "host", text, HOST_AGUI_MODEL
@@ -2950,18 +3230,18 @@ def mount_studio_agui(app) -> None:
                 ).fetchall()
                 for i, ar in enumerate(rows):
                     ca = ar.get("created_at")
-                    steps.append({
-                        "seq": i,
-                        "role": ar.get("role"),
-                        "model": ar.get("model"),
-                        "input": ar.get("input"),
-                        "output": ar.get("output"),
-                        "createdAt": ca.isoformat() if hasattr(ca, "isoformat") else str(ca),
-                    })
+                    steps.append(
+                        {
+                            "seq": i,
+                            "role": ar.get("role"),
+                            "model": ar.get("model"),
+                            "input": ar.get("input"),
+                            "output": ar.get("output"),
+                            "createdAt": ca.isoformat() if hasattr(ca, "isoformat") else str(ca),
+                        }
+                    )
                 try:
-                    row = c.execute(
-                        "SELECT status FROM runs WHERE run_id=%s", (run_id,)
-                    ).fetchone()
+                    row = c.execute("SELECT status FROM runs WHERE run_id=%s", (run_id,)).fetchone()
                     runs_status = str(row["status"]).lower() if row else None
                 except Exception:
                     runs_status = None
@@ -2985,15 +3265,17 @@ def mount_studio_agui(app) -> None:
                     ).fetchall()
                     for ar in pend:
                         draft_txt = ar.get("draft") or ""
-                        pending_actions.append({
-                            "id": ar.get("id"),
-                            "channel": ar.get("channel"),
-                            "target": ar.get("target"),
-                            "subject": ar.get("subject"),
-                            "draft": draft_txt,
-                            "idempotencyKey": ar.get("idempotency_key"),
-                            "status": ar.get("status"),
-                        })
+                        pending_actions.append(
+                            {
+                                "id": ar.get("id"),
+                                "channel": ar.get("channel"),
+                                "target": ar.get("target"),
+                                "subject": ar.get("subject"),
+                                "draft": draft_txt,
+                                "idempotencyKey": ar.get("idempotency_key"),
+                                "status": ar.get("status"),
+                            }
+                        )
                 except Exception:
                     pending_actions = []
 
@@ -3027,7 +3309,11 @@ def mount_studio_agui(app) -> None:
             if blueprint is None:
                 for st in steps:
                     out = st.get("output")
-                    if st.get("role") == "planner" and isinstance(out, dict) and out.get("blueprint"):
+                    if (
+                        st.get("role") == "planner"
+                        and isinstance(out, dict)
+                        and out.get("blueprint")
+                    ):
                         blueprint = out["blueprint"]
                         break
             board = None
@@ -3040,8 +3326,7 @@ def mount_studio_agui(app) -> None:
                 chans = list(((blueprint or {}).get("per_channel_quota") or {}).keys())
                 plan_ctx = SimpleNamespace(output_count=quota, lead_count=0, channels=chans)
                 run_actions = [
-                    SimpleNamespace(run_id=run_id, status=p.get("status"))
-                    for p in pending_actions
+                    SimpleNamespace(run_id=run_id, status=p.get("status")) for p in pending_actions
                 ]
                 # Reflect the REAL run status on the board (board_for_run passes record=None,
                 # which would otherwise always read 'running' even for a completed run).
@@ -3162,7 +3447,11 @@ def mount_studio_agui(app) -> None:
             content = raw.decode("utf-8", "replace")
 
         session_id = (
-            (payload.get("sessionId") or payload.get("threadId") if isinstance(payload, dict) else None)
+            (
+                payload.get("sessionId") or payload.get("threadId")
+                if isinstance(payload, dict)
+                else None
+            )
             or request.query_params.get("session_id")
             or "studio-default"
         )
@@ -3186,9 +3475,7 @@ def mount_studio_agui(app) -> None:
 
             reader = _csv.DictReader(_io.StringIO((content or "").lstrip("﻿")))
             rows = [{(k or "").strip(): (v or "") for k, v in r.items()} for r in reader]
-            ingest = await asyncio.to_thread(
-                lambda: ingest_leads(tenant_id, rows, dsn=dsn)
-            )
+            ingest = await asyncio.to_thread(lambda: ingest_leads(tenant_id, rows, dsn=dsn))
             result["ingested"] = True
             result["ingest"] = ingest
         except Exception as exc:  # honest: report the failure, keep the preview
@@ -3201,6 +3488,7 @@ def mount_studio_agui(app) -> None:
         # brand notes are surfaced. Honest: only a real parse is stored; if no rows
         # parsed nothing is attached, and a persistence hiccup is reported, not hidden.
         try:
+
             def _attach_customers() -> None:
                 plan = _load_plan(session_id, dsn)
                 # Capture the ingested customer_ids so the provided-leads run can target
@@ -3231,6 +3519,55 @@ def mount_studio_agui(app) -> None:
         except Exception as exc:  # honest: report, never claim the supervisor can see it
             result["attachedToPlan"] = False
             result["attach_error"] = f"{type(exc).__name__}: {exc}"
+
+        # REGISTER the CSV as a universal context artifact (nmh.4) so the voice
+        # supervisor and every agent can see "the customer CSV" alongside every other
+        # uploaded file and answer "can you see the CSV / how many files" from real
+        # state. Best-effort: a registry hiccup never fails the upload (the plan attach
+        # above already made the list visible to the chat host).
+        try:
+
+            def _register_csv() -> None:
+                import hashlib
+
+                from studio.artifacts import register_artifact
+
+                csv_name = result.get("filename") or filename
+                # Deterministic id keyed on (tenant, filename) so re-uploading the same
+                # CSV (a typo fix, a re-export) REFRESHES the one artifact rather than
+                # piling up duplicates that would inflate the supervisor's file count.
+                art_id = (
+                    "art_csv_" + hashlib.sha1(f"{tenant_id}:{csv_name}".encode()).hexdigest()[:16]
+                )
+                # Bounded parsed_content — the full rows live in `customers`; the
+                # artifact carries the header + a sample so an agent can see the shape
+                # without the whole file entering per-turn context.
+                header = ",".join(str(c) for c in (result.get("columns") or []))
+                sample_lines = [str(r) for r in (result.get("sample") or [])[:20]]
+                parsed = (header + "\n" + "\n".join(sample_lines)).strip()
+                register_artifact(
+                    tenant_id,
+                    csv_name,
+                    "csv",
+                    media_type="text/csv",
+                    summary=result.get("summary") or "",
+                    parsed_content=parsed,
+                    source="upload",
+                    artifact_id=art_id,
+                    meta={
+                        "rows": int(result.get("rows") or 0),
+                        "columns": list(result.get("columns") or []),
+                        "ingested": bool(result.get("ingested")),
+                    },
+                    dsn=dsn,
+                )
+
+            if result.get("rows"):
+                await asyncio.to_thread(_register_csv)
+                result["registeredArtifact"] = True
+        except Exception as exc:
+            result["registeredArtifact"] = False
+            result["artifact_error"] = f"{type(exc).__name__}: {exc}"
         return JSONResponse(result)
 
     @app.post("/studio/notes")
@@ -3325,6 +3662,31 @@ def mount_studio_agui(app) -> None:
             return JSONResponse(
                 {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500
             )
+
+        # REGISTER the doc as a universal context artifact (nmh.4) so it shows up in
+        # the one file inventory the voice supervisor + every agent read, alongside the
+        # CSV and any images. A brand-voice doc (kind='brand') registers as a
+        # 'brand_voice' artifact so "can you see the brand voice file?" answers YES from
+        # real state. The artifact links back to the doc via meta['document_id'] (the
+        # RAG chunks stay in tenant_documents; the artifact is the unified index).
+        # Best-effort: a registry hiccup never fails the doc upload.
+        artifact_type = (
+            "brand_voice" if kind == "brand" else ("pdf" if kind == "pdf" else "document")
+        )
+        try:
+            await asyncio.to_thread(
+                lambda: _register_document_artifact(
+                    tenant_id,
+                    name,
+                    artifact_type,
+                    content,
+                    summary=(info or {}).get("summary"),
+                    document_id=doc_id,
+                    dsn=dsn,
+                )
+            )
+        except Exception:
+            pass  # the doc is stored; the artifact index is a best-effort convenience
         return JSONResponse(
             {
                 "ok": True,
@@ -3335,6 +3697,91 @@ def mount_studio_agui(app) -> None:
                 "chunks": (info or {}).get("chunks", 0),
                 "note": "Document stored persistently — the whole team (host, run "
                 "agents, voice) reads it from now on. Nothing was sent.",
+            }
+        )
+
+    @app.post("/studio/upload/image")
+    async def studio_upload_image_route(request: Request):  # noqa: ANN202
+        """Upload an IMAGE / artwork / screenshot as a universal context artifact (nmh.4).
+
+        Accepts JSON ``{name, contentBase64, mediaType?, kind?, linkedArtistId?}``.
+        Stores a bounded data-uri preview + real byte size so the voice supervisor and
+        every agent can SEE and COUNT it ("how many images are uploaded?") from real
+        state. HONESTY: the image's VISUAL content is NOT described here (VLM captioning
+        is a separate capability) — the artifact carries an empty parsed_content and
+        says so, never an invented description. Nothing is sent."""
+        import base64
+
+        from fastapi.responses import JSONResponse
+
+        dsn = get_dsn()
+        try:
+            payload = json.loads(await request.body() or b"{}")
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        name = (payload.get("name") or payload.get("filename") or "").strip()
+        b64 = payload.get("contentBase64") or payload.get("content") or ""
+        media_type = (payload.get("mediaType") or payload.get("media_type") or "").strip() or None
+        kind = (payload.get("kind") or "image").strip().lower()
+        artifact_type = kind if kind in ("image", "artwork", "screenshot") else "image"
+        if not name or not b64:
+            return JSONResponse(
+                {"ok": False, "error": "image upload needs a name and contentBase64"},
+                status_code=400,
+            )
+        # Accept either a raw base64 payload or a full data-URI: strip a leading
+        # `data:<media>;base64,` prefix (and adopt its media type when none was given)
+        # so a data-URI upload does not decode to garbage / double-prefix the preview.
+        if b64.startswith("data:"):
+            head, _, rest = b64.partition(",")
+            if rest:
+                if media_type is None and ";" in head:
+                    media_type = head[len("data:") : head.index(";")] or media_type
+                b64 = rest
+        # Decode only to measure real bytes (never fabricate a size); reject non-image.
+        try:
+            raw = base64.b64decode(b64, validate=False)
+        except Exception:
+            return JSONResponse(
+                {"ok": False, "error": "contentBase64 is not valid base64"}, status_code=400
+            )
+        if media_type and not media_type.startswith("image/"):
+            return JSONResponse(
+                {"ok": False, "error": f"mediaType {media_type!r} is not an image/*"},
+                status_code=400,
+            )
+        preview = f"data:{media_type or 'image/png'};base64,{b64}"
+        linked_artist = (payload.get("linkedArtistId") or "").strip() or None
+        try:
+            aid = await asyncio.to_thread(
+                lambda: _register_image_artifact(
+                    tenant_id,
+                    name,
+                    artifact_type,
+                    media_type,
+                    preview,
+                    len(raw),
+                    linked_artist_id=linked_artist,
+                    dsn=dsn,
+                )
+            )
+        except Exception as exc:
+            return JSONResponse(
+                {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500
+            )
+        return JSONResponse(
+            {
+                "ok": True,
+                "id": aid,
+                "name": name,
+                "type": artifact_type,
+                "bytes": len(raw),
+                "note": "Image registered — the supervisor and team can now SEE and "
+                "COUNT it. Visual understanding is not captured yet (no invented "
+                "description). Nothing was sent.",
             }
         )
 
@@ -3351,9 +3798,7 @@ def mount_studio_agui(app) -> None:
         tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
         await asyncio.to_thread(_ensure_docs_seeded, app, dsn, tenant_id)
         try:
-            docs = await asyncio.to_thread(
-                lambda: docstore.active_docs_index(tenant_id, dsn=dsn)
-            )
+            docs = await asyncio.to_thread(lambda: docstore.active_docs_index(tenant_id, dsn=dsn))
         except Exception as exc:
             return JSONResponse(
                 {"ok": False, "error": f"{type(exc).__name__}: {exc}", "documents": []},
@@ -3401,9 +3846,7 @@ def mount_studio_agui(app) -> None:
         tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
         doc_id = (payload.get("id") or payload.get("documentId") or "").strip()
         if not doc_id:
-            return JSONResponse(
-                {"ok": False, "error": "missing document id"}, status_code=400
-            )
+            return JSONResponse({"ok": False, "error": "missing document id"}, status_code=400)
         try:
             removed = await asyncio.to_thread(
                 lambda: docstore.deactivate_document(tenant_id, doc_id, dsn=dsn)
@@ -3430,9 +3873,7 @@ def mount_studio_agui(app) -> None:
         try:
             ev = await asyncio.to_thread(build_action_evidence, action_id, dsn=dsn)
         except Exception as exc:
-            return JSONResponse(
-                {"error": f"{type(exc).__name__}: {exc}"}, status_code=500
-            )
+            return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
         if ev is None:
             return JSONResponse({"error": "no such action"}, status_code=404)
         return JSONResponse(ev.model_dump(by_alias=True))
