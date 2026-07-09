@@ -40,7 +40,13 @@ def test_conversation_leads_resolves_the_seeded_warm_cohort_incl_sarah() -> None
     leads = conversation_leads("ladies8391", limit=20, dsn=_DSN, memory_store=store)
     ids = {f["customer_id"] for f in leads}
     # The warm cohort is NON-empty and includes Sarah Kim (the price-objection SMS lead).
+    # Resolve her id by EMAIL (the seeder's stable natural key): upsert_lead mints a
+    # random cust_ id per DB, so a hardcoded id only ever matched the original dev DB.
     assert len(leads) >= 1
-    assert "cust_fd6337c6058947d7" in ids  # Sarah Kim
+    from studio.customer_research import lookup_lead
+
+    sarah = lookup_lead("ladies8391", email="sarah.kim@example.com", dsn=_DSN)
+    assert sarah is not None, "seed_warm_leads did not resolve Sarah Kim by email"
+    assert sarah["customer_id"] in ids  # Sarah Kim
     # Every resolved lead carries grounded facts (real customer, not a fabricated stub).
     assert all(f.get("customer_id") and f.get("name") for f in leads)

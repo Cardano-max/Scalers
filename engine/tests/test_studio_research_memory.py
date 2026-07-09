@@ -51,6 +51,30 @@ def _require_db() -> None:
 _require_db()
 
 
+def _seed_ground_truth() -> None:
+    """Self-seed the module's READ-ONLY ground truth. The original '60 seeded
+    ladies8391 customers' lived only on the first dev machine (never committed),
+    so on any fresh DB the lookup tests found nothing. Idempotent: upsert keyed
+    on (tenant, lower(email)) — an already-seeded DB is left untouched."""
+    from studio.customer_research import upsert_lead
+
+    upsert_lead(
+        TENANT,
+        {
+            "name": SEED_NAME,
+            "email": SEED_EMAIL,
+            "location": "Jersey City, NJ",
+            "interests": "fine-line; floral",
+            "lead_stage": "churn-risk",
+            "notes": "recon: churn-risk seed lead (module ground truth)",
+        },
+        dsn=DSN,
+    )
+
+
+_seed_ground_truth()
+
+
 def _det_store() -> MemoryStore:
     return MemoryStore(dsn=DSN, embedder=DeterministicEmbedder())
 
@@ -261,10 +285,16 @@ def _pending_for_customer(tenant: str, cust_id: str) -> list[dict]:
     return [{"id": r[0], "run_id": r[1], "subject": r[2]} for r in rows]
 
 
-def test_research_stage_distinct_goals_both_land_with_run_id(monkeypatch) -> None:
-    """Two stagings in ONE session for the SAME customer under DIFFERENT goals must
-    BOTH land as distinct pending rows (no silent collision-drop), and each row must
-    carry a real run_id so its campaign/run/evidence deep-links resolve (§15)."""
+def test_research_stage_distinct_goals_one_pending_per_recipient(monkeypatch) -> None:
+    """Two stagings in ONE session for the SAME customer under DIFFERENT goals: the
+    nmh.11 structural guard (one PENDING draft per (tenant, worker, target) — the
+    fix for the operator's phantom-duplicate/vanish retry bug) collapses the second
+    staging onto the still-pending first row. The staged row must carry a real
+    run_id so its campaign/run/evidence deep-links resolve (§15).
+
+    NOTE: this test previously pinned the pre-nmh.11 contract (both goals land as
+    two pending rows). The DDL guard supersedes it: to run a second campaign at the
+    same recipient, the first pending draft is approved/rejected first."""
     monkeypatch.setenv("SCALERS_EMBEDDER", "deterministic")
     from studio.agui import CampaignPlan, _research_and_stage_sync
 
@@ -282,20 +312,19 @@ def test_research_stage_distinct_goals_both_land_with_run_id(monkeypatch) -> Non
             CampaignPlan(goal="win back lapsed clients", channels=["instagram"]),
             sid, tenant, DSN, emails=[email], limit=10,
         )
-        s2 = _research_and_stage_sync(
+        _research_and_stage_sync(
             CampaignPlan(goal="holiday flash promo", channels=["instagram"]),
             sid, tenant, DSN, emails=[email], limit=10,
         )
-        assert s1["n_drafts"] == 1 and s2["n_drafts"] == 1
+        assert s1["n_drafts"] == 1
         cust_id = s1["staged"][0]["customer_id"]
 
         rows = _pending_for_customer(tenant, cust_id)
-        # BOTH distinct-goal stagings landed — the second was NOT dropped.
-        assert len(rows) == 2, f"expected 2 landed drafts, got {len(rows)}"
-        # Every staged row carries a real run_id (non-null) so evidence deep-links work.
+        # ONE pending row per recipient (nmh.11): the second staging is a no-op
+        # while the first draft is still pending — never a phantom duplicate.
+        assert len(rows) == 1, f"expected 1 pending row per recipient, got {len(rows)}"
+        # The staged row carries a real run_id (non-null) so evidence deep-links work.
         assert all(r["run_id"] for r in rows), f"null run_id on: {rows}"
-        # The two runs are distinct (different campaign intent → different run_id).
-        assert rows[0]["run_id"] != rows[1]["run_id"]
 
 
 def test_research_stage_same_batch_is_idempotent_no_double_stage(monkeypatch) -> None:
