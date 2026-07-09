@@ -30,6 +30,7 @@ keep their own pins; jury = Opus 4.8.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import uuid
@@ -2546,7 +2547,30 @@ def _research_and_stage_sync(
         requested = len(leads)
 
     goal = plan.goal or "win back lapsed clients"
+    # BATCH-STABLE run id (CustomerAcq-nmh.2): every staged draft is keyed to a run so
+    # (a) each DISTINCT campaign intent stages fresh rows — the old
+    # ``studio:{session}:{cust}:outreach`` key had no run/goal discriminator, so a
+    # second campaign for the same customer collided and was SILENTLY dropped by
+    # ``ON CONFLICT DO NOTHING``; and (b) the staged ``actions`` row carries a real
+    # ``run_id`` so its campaign/run/evidence deep-links resolve (§15).
+    #
+    # The id is DERIVED from (session, goal, target-set) — NOT a fresh uuid — so it is
+    # STABLE across a crash-then-re-drive of the SAME request: re-staging hits the same
+    # ``{run_id}:{cust_id}`` keys and ``ON CONFLICT DO NOTHING`` makes it exactly-once
+    # (no double-stage). A genuinely different request (different goal / target set)
+    # derives a different id and stages fresh. This re-keys STAGING only; SEND
+    # exactly-once is guarded separately by ``claim_for_send`` on the action id.
+    _batch_seed = "|".join([
+        session_id, goal,
+        ",".join(sorted(emails)) if emails else f"cohort:{limit}",
+    ])
+    run_id = f"studio-stage-{hashlib.sha1(_batch_seed.encode()).hexdigest()[:16]}"
     staged: list[dict[str, Any]] = []
+    # Guard the reported count against over-counting (nmh.2 honesty gate): a lead that
+    # appears twice in the batch, or one already staged under this run, resolves to the
+    # SAME action row via ON CONFLICT — count each distinct landed row ONCE so
+    # ``n_drafts`` equals the number of rows that actually appear in the Review Queue.
+    seen_action_ids: set[str] = set()
     for facts in leads:
         draft = build_outreach_draft(
             facts, goal=goal, plan_channels=plan.channels or None
@@ -2565,9 +2589,15 @@ def _research_and_stage_sync(
             threshold=None,
             esc_kind="approval_required",
             esc_label="Studio per-lead outreach — operator approval required",
-            idempotency_key=f"studio:{session_id}:{cust_id}:outreach",
+            idempotency_key=f"{run_id}:{cust_id}",
+            run_id=run_id,
             dsn=dsn,
         )
+        # A repeated lead (dup in the batch, or already staged under this run) resolves
+        # to the SAME action row — count it once so n_drafts == rows in the queue.
+        if action_id in seen_action_ids:
+            continue
+        seen_action_ids.add(action_id)
         # Persistent memory of this outreach (per customer) — internal context only.
         store.write(
             tenant_id=tenant_id,
