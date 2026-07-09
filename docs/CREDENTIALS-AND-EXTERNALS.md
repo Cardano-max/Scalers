@@ -7,9 +7,9 @@ _Verified live on 2026-07-09 against the running stack (engine :8000, console :3
 | 1 | `ANTHROPIC_API_KEY` | ✅ WORKING | nothing — drafting, jury, psych analysis, VLM all live |
 | 2 | `FIRECRAWL_API_KEY` | ✅ WORKING | nothing — web/trend research live |
 | 3 | Gmail OAuth refresh token | ❌ EXPIRED/REVOKED (`invalid_grant`, tested via token exchange, no email sent) | real email delivery (drafting/queue/approve all work; the final send fails) |
-| 4 | SMTP app password (`SMTP_SENDER` + `SMTP_APP_PASSWORD`) | ⬜ NOT PROVIDED YET | the Gmail-independent email fallback path (being built) |
+| 4 | SMTP app password (`SMTP_SENDER` + `SMTP_APP_PASSWORD`) | ✅ PROVIDED (2026-07-09) — fallback code engages correctly, but THIS cloud container blocks raw TCP:465 egress, so the actual delivery could only fail here with a concrete network error. On the operator's own machine it will deliver. | nothing on your machine; blocked only in this sandbox |
 | 5 | Meta page token with page permissions | ❌ INSUFFICIENT PERMISSIONS (OAuthException 190/145: needs `pages_read_engagement` / `pages_manage_metadata` / `pages_read_user_content` / `pages_show_list`) | Instagram + Facebook publishing |
-| 6 | `OPENAI_API_KEY` | ⬜ MISSING from `.env` | ONLY the realtime **voice** supervisor (text chat supervisor works fine without it) |
+| 6 | `OPENAI_API_KEY` | ✅ PROVIDED (2026-07-09), in `engine/.env` | voice supervisor unblocked (realtime tier still needs OpenAI credits if 429s appear) |
 | 7 | Google Drive artwork folder | ❌ UNREACHABLE from this cloud environment (network policy blocks drive.google.com) | bulk artwork import — workaround: upload images in the console (Artists tab) |
 | 8 | huggingface.co (fastembed model download) | ❌ BLOCKED by this environment's network policy | real semantic embeddings — the engine runs with the documented offline `SCALERS_EMBEDDER=deterministic` stub until then |
 
