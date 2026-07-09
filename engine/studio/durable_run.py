@@ -69,6 +69,7 @@ __all__ = [
     "DurableRun",
     "ensure_schema",
     "default_dsn",
+    "list_running_cohort_runs",
 ]
 
 # Same default DSN chain the rest of the engine uses (actions/store.py,
@@ -365,6 +366,23 @@ class DurableRun:
             self.cursor = cursor
         self._persist(status="running", interrupt=None)
 
+    def finish(self, status: str, *, result: Any = None) -> None:
+        """Persist a TERMINAL status ('completed' or 'failed') for a run driven
+        imperatively (i.e. NOT through :meth:`run`/:meth:`_drive`, which set the
+        status themselves).
+
+        The live campaign loop (``_execute_provided_leads_sync``) uses the
+        imperative surface (``checkpoint``/``step``/``has_run_step``) rather than
+        the ``run(fn)`` driver, so nothing advanced its checkpoint row past
+        ``'running'`` — a stranded-looking row forever, which a startup re-drive
+        scanner cannot distinguish from a genuinely-crashed run (tlv.1). Calling
+        ``finish('completed')`` (or ``'failed'``) at the end of the loop closes
+        that gap: the scanner keys on ``status='running'`` and so never re-drives
+        a finished run. Idempotent — re-finishing is a harmless re-UPSERT."""
+        if status not in ("completed", "failed"):
+            raise ValueError(f"finish() status must be 'completed' or 'failed', got {status!r}")
+        self._persist(status=status, interrupt=None, result=result)
+
     # ---- drivers --------------------------------------------------------- #
 
     def run(self, fn: RunFn) -> RunOutcome:
@@ -497,6 +515,31 @@ def _fetch_row(run_id: str, dsn: str | None) -> dict[str, Any] | None:
         return conn.execute(
             "SELECT * FROM durable_run_checkpoint WHERE run_id = %s", (run_id,)
         ).fetchone()
+
+
+def list_running_cohort_runs(dsn: str | None = None) -> list[dict[str, Any]]:
+    """Every checkpoint row that is a STRANDED cohort-executor run: ``status='running'``
+    with an ``executor='cohort'`` tag in ``state`` (tlv.1). The startup re-drive
+    supervisor calls this to find runs a crash/restart left mid-flight.
+
+    Only ``executor='cohort'`` rows are returned, so unrelated durable runs (or a
+    finished run — which carries a terminal status) are never surfaced. Rows are
+    oldest-first (``created_at``) so the earliest-stranded run is re-driven first.
+    Best-effort: if the table does not exist yet, returns ``[]`` rather than raising."""
+    try:
+        with _connect(dsn) as conn:
+            return conn.execute(
+                """
+                SELECT run_id, tenant_id, cursor, state, created_at
+                FROM durable_run_checkpoint
+                WHERE status = 'running' AND state->>'executor' = 'cohort'
+                ORDER BY created_at ASC
+                """
+            ).fetchall()
+    except psycopg.errors.UndefinedTable:
+        return []
+    except Exception:
+        return []
 
 
 # --------------------------------------------------------------------------- #
