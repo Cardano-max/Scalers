@@ -316,5 +316,9 @@ def studio_memory_state(tenant_id: str, artist: str | None = None) -> dict:
 
 
 def mount_console_api(app: FastAPI) -> None:
-    """Attach the console read endpoints (ju1.5 lineage + nmh.6 dossier/memory-state)."""
+    """Attach the console read endpoints (ju1.5 lineage + nmh.6 dossier/memory-state),
+    plus the library read API (artifacts + artists — engine-core item 2)."""
     app.include_router(router)
+    from studio.library_api import mount_library_api
+
+    mount_library_api(app)

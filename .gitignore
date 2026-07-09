@@ -27,6 +27,8 @@ coverage.xml
 .dbos/
 data/
 minio/
+# Uploaded artifact bytes (engine/var/artifacts/{tenant}/{sha}.{ext}) — runtime data
+var/
 # OS / editor
 .DS_Store
 .idea/

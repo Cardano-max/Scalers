@@ -233,6 +233,13 @@ _SYSTEM = (
     "5. NEVER send or publish anything yourself. If the operator wants something "
     "posted/emailed, call `stage_publish` — it stages a PENDING action that a "
     "human must approve; it is held, never sent.\n"
+    "5b. LIVE STATE: when the operator asks which leads a run finalized/targeted, "
+    "what the agents are doing right now, what files or images exist ('I added a "
+    "new tattoo design, can you check which one it is?'), which artworks an artist "
+    "has, or what changed recently for an artist — call the matching live-state "
+    "tool (`get_run_leads`, `get_agent_activity`, `get_uploaded_files`, "
+    "`get_artist_artworks`, `get_artist_memory`). These read the database fresh "
+    "on every call; NEVER answer such questions from memory or guess.\n"
     "6. After acting, reply in 2-4 sentences: reflect the current plan and ask 1 "
     "high-leverage clarifying question. Be honest — never claim a tool ran that "
     "did not, never claim anything was sent, and never claim a customer fact the "
@@ -513,41 +520,6 @@ def _register_document_artifact(
         source="upload",
         meta={"document_id": document_id},
         artifact_id=f"art_doc_{document_id}",
-        dsn=dsn,
-    )
-
-
-def _register_image_artifact(
-    tenant_id: str,
-    name: str,
-    artifact_type: str,
-    media_type: str | None,
-    preview: str,
-    n_bytes: int,
-    *,
-    linked_artist_id: str | None,
-    dsn: str | None,
-) -> str:
-    """Register an uploaded image/artwork/screenshot as a universal context artifact.
-
-    HONESTY: ``parsed_content`` stays empty — the image's visual content is not
-    captured here (VLM captioning is a separate capability); the artifact is
-    countable/previewable/listable but never carries an invented description."""
-    from studio.artifacts import register_artifact
-
-    summary = f"{(media_type or 'image').split('/')[-1].upper()} image, {n_bytes:,} bytes"
-    return register_artifact(
-        tenant_id,
-        name,
-        artifact_type,
-        media_type=media_type,
-        summary=summary,
-        parsed_content="",
-        preview=preview,
-        source="upload",
-        linked_entity_type="artist" if linked_artist_id else None,
-        linked_entity_id=linked_artist_id,
-        meta={"bytes": n_bytes},
         dsn=dsn,
     )
 
@@ -1379,6 +1351,16 @@ def _summary_text(summary: dict[str, Any]) -> str:
     # message, never a fabricated "ran the campaign / 0 drafts" line.
     if summary.get("run_status") == "not_built":
         return str(summary.get("message") or "That pipeline isn't built yet — nothing ran.")
+    # Mid-run artwork pause (item 3): the run is WAITING on the operator's pick —
+    # say so honestly (no drafts exist yet; nothing failed, nothing was sent).
+    if summary.get("run_status") == "awaiting_selection":
+        req = summary.get("selection_request") or {}
+        n = len(req.get("options") or [])
+        return (
+            f"{req.get('question') or f'{n} artwork option(s) found.'} The run is "
+            "paused before drafting until you pick one — nothing has been drafted "
+            "or sent."
+        )
     chans = ", ".join(summary.get("channels", [])) or "the selected channels"
     runs_note = (
         " You can watch each agent's step in the Runs tab."
@@ -1539,8 +1521,72 @@ def _execute_campaign_sync(
     # workflow (archetype + channels prove it), not the email path. Email/default keeps
     # today's campaign_type-driven archetype selection.
     force_archetype = decision.archetype_id if decision.pipeline is Pipeline.INSTAGRAM else None
+
+    brief = _brief_from_plan(plan)
+    ig_artwork: dict[str, Any] | None = None
+    ig_artwork_note: str | None = None
+    if decision.pipeline is Pipeline.INSTAGRAM:
+        # An IG post needs a run id UP FRONT (for the artwork pause + the channel-crew
+        # trace rows) — mint one in the same camp/team format the launcher uses.
+        if not run_id:
+            campaign_id = f"camp_{uuid.uuid4().hex[:12]}"
+            run_id = f"team-{campaign_id}-{uuid.uuid4().hex[:12]}"
+
+        # ARTWORK GATE (item 3): every IG run attaches real artwork when the library
+        # has it — surface the top picks and PAUSE for the operator's choice BEFORE
+        # any drafting. An empty library proceeds with the honest note, never a pause.
+        from studio.artwork_flow import (
+            artwork_gate,
+            awaiting_selection_summary,
+            theme_terms_from_plan,
+        )
+
+        _gate_state, _gate_payload = artwork_gate(
+            run_id,
+            tenant_id,
+            session_id,
+            plan,
+            artist=(plan.artist or "").strip() or None,
+            theme_terms=theme_terms_from_plan(plan),
+            dsn=dsn,
+        )
+        if _gate_state == "pause":
+            try:
+                _log_turn(
+                    dsn, session_id, "host",
+                    str(_gate_payload.get("question") or "Artwork pick needed."), None,
+                )
+            except Exception:
+                pass
+            return awaiting_selection_summary(
+                run_id, _campaign_id_from_run_id(run_id), _gate_payload,
+                channel=decision.channel,
+            )
+        if _gate_state == "selected":
+            ig_artwork = _gate_payload
+        else:
+            ig_artwork_note = str(_gate_payload)
+
+        # IG PIPELINE DEPTH (item 6): ground the brief in the artist's REAL memory
+        # (profile + past campaigns + artwork tags) and live trend research, recorded
+        # as channel-specific agent_runs so the IG crew is visibly different.
+        try:
+            from studio.ig_pipeline import build_ig_brief_block
+
+            brief += build_ig_brief_block(
+                plan,
+                tenant_id,
+                run_id=run_id,
+                campaign_id=_campaign_id_from_run_id(run_id),
+                artwork=ig_artwork,
+                artwork_note=ig_artwork_note,
+                dsn=dsn,
+            )
+        except Exception:
+            pass  # grounding is additive; a hiccup never blocks the real run
+
     summary = run_and_trace(
-        brief=_brief_from_plan(plan),
+        brief=brief,
         tenant_id=tenant_id,
         dsn=dsn,
         run_id=run_id,
@@ -1551,6 +1597,29 @@ def _execute_campaign_sync(
     )
     summary["routed_channel"] = decision.channel
     summary["pipeline_built"] = True
+    if decision.pipeline is Pipeline.INSTAGRAM:
+        summary["artwork"] = ig_artwork
+        summary["artwork_note"] = ig_artwork_note
+        if ig_artwork_note:
+            summary.setdefault("step_notes", []).append(f"artwork: {ig_artwork_note}")
+        # Post-staging: land artist + artwork + hashtags/cta on every post action's
+        # context so the review UI / evidence shows them (item 6c). Best-effort.
+        try:
+            from studio.ig_pipeline import enrich_post_actions
+
+            enriched = enrich_post_actions(
+                summary.get("run_id") or run_id,
+                tenant_id,
+                artist=(plan.artist or "").strip() or None,
+                artwork=ig_artwork,
+                dsn=dsn,
+            )
+            if enriched:
+                summary.setdefault("step_notes", []).append(
+                    f"attached artist/artwork/hashtags context to {enriched} staged post(s)"
+                )
+        except Exception:
+            pass
     # Record the planner into the SAME compose run so the plan step is not decorative for
     # the compose spine either (the provided path records it inline as its first step).
     if summary.get("run_id"):
@@ -1809,9 +1878,15 @@ def _execute_provided_leads_sync(
     _guard_offers = as_substantiated(offers)
     conv_source = DbConversationSource(tenant_id, dsn=dsn)
 
-    def _rec(role: str, model: str, inp: dict[str, Any], out: dict[str, Any]) -> None:
+    def _rec(
+        role: str, model: str, inp: dict[str, Any], out: dict[str, Any],
+        *, id_: str | None = None,
+    ) -> None:
+        # ``id_`` lets ONE-SHOT roles (planner/strategist/jury) use a DETERMINISTIC id:
+        # a run resumed after the artwork-selection pause re-records them as a no-op
+        # (record_agent_run is ON CONFLICT DO NOTHING) instead of duplicating steps.
         ts.record_agent_run(
-            id=f"ar_{_uuid.uuid4().hex[:16]}",
+            id=id_ or f"ar_{_uuid.uuid4().hex[:16]}",
             campaign_id=campaign_id,
             run_id=run_id,
             role=role,
@@ -1858,6 +1933,7 @@ def _execute_provided_leads_sync(
             "channels": list(plan.channels or []),
         },
         _planner_run_output(blueprint),
+        id_=f"ar_planner_{hashlib.sha1(str(run_id).encode()).hexdigest()[:16]}",
     )
 
     def _persist_blueprint() -> None:
@@ -1899,6 +1975,7 @@ def _execute_provided_leads_sync(
             strat_model,
             {"goal": goal, "n_leads": len(leads), "lead_source": "provided"},
             strategy.model_dump(),
+            id_=f"ar_strategist_{hashlib.sha1(str(run_id).encode()).hexdigest()[:16]}",
         )
     except Exception as exc:  # honest failed run, never a fabricated strategy
         _rec(
@@ -1906,7 +1983,50 @@ def _execute_provided_leads_sync(
             strat_model,
             {"goal": goal, "lead_source": "provided"},
             {"status": "failed", "error": f"{type(exc).__name__}: {exc}"},
+            id_=f"ar_strategist_{hashlib.sha1(str(run_id).encode()).hexdigest()[:16]}",
         )
+
+    # ARTWORK ATTACH GATE (engine-core item 3, spec §9/10/22) — AFTER strategy, BEFORE
+    # any drafting. When the operator asked for artwork on this cohort, surface the TOP
+    # matching pieces and PAUSE for their pick; a durable prior pick resumes straight
+    # through (the planner/strategist above re-recorded as no-ops via deterministic
+    # ids). An empty library NEVER pauses — the run proceeds with the honest note.
+    selected_artwork: dict[str, Any] | None = None
+    artwork_note: str | None = None
+    if bool(getattr(plan, "attach_artwork", False)):
+        from studio.artwork_flow import (
+            artwork_gate,
+            awaiting_selection_summary,
+            theme_terms_from_plan,
+        )
+
+        _gate_state, _gate_payload = artwork_gate(
+            run_id,
+            tenant_id,
+            session_id,
+            plan,
+            artist=(plan.artist or "").strip() or None,
+            theme_terms=theme_terms_from_plan(
+                plan, extra=[campaign_angle] if campaign_angle else None
+            ),
+            dsn=dsn,
+        )
+        if _gate_state == "pause":
+            try:
+                _log_turn(
+                    dsn, session_id, "host",
+                    str(_gate_payload.get("question") or "Artwork pick needed."), None,
+                )
+            except Exception:
+                pass
+            return awaiting_selection_summary(
+                run_id, campaign_id, _gate_payload,
+                channel="email", agent_runs=agent_runs,
+            )
+        if _gate_state == "selected":
+            selected_artwork = _gate_payload
+        else:  # "none" — honest note, proceed without artwork
+            artwork_note = str(_gate_payload)
 
     # The real critic cell, built once and run PER draft below (independent pass).
     from cells.critic import build_critic_cell
@@ -2304,17 +2424,27 @@ def _execute_provided_leads_sync(
         # LINK the staged draft to its dossier + selected skill (P2-B/-C): the Review-Queue
         # row carries the evidence-linked dossier in ``context`` so the UI can deep-link from
         # the draft to exactly what we knew about this lead and which play was chosen.
-        _context = _json.dumps(
-            {
-                "skill_used": selection.skill_id,
-                "skill_why": selection.why,
-                "aligned_pack": selection.aligned_pack,
-                "pack_status": selection.pack_status,
-                "limited_personalization": dossier.limited_personalization,
-                "personalization_note": dossier.personalization_note,
-                "dossier": dossier.model_dump(),
+        _context_obj: dict[str, Any] = {
+            "skill_used": selection.skill_id,
+            "skill_why": selection.why,
+            "aligned_pack": selection.aligned_pack,
+            "pack_status": selection.pack_status,
+            "limited_personalization": dossier.limited_personalization,
+            "personalization_note": dossier.personalization_note,
+            "dossier": dossier.model_dump(),
+        }
+        # The operator-SELECTED artwork rides on every staged action (item 3): the
+        # UI/evidence shows it, and the gmail delivery layer reads
+        # ``attachment_artifact_id`` to attach the real file (wired separately).
+        if selected_artwork is not None:
+            _context_obj["artwork"] = {
+                "assetId": selected_artwork.get("assetId"),
+                "artifactId": selected_artwork.get("artifactId"),
+                "vlmSummary": selected_artwork.get("vlmSummary"),
             }
-        )
+            if draft["channel"] in ("gmail", "email") and selected_artwork.get("artifactId"):
+                _context_obj["attachment_artifact_id"] = selected_artwork["artifactId"]
+        _context = _json.dumps(_context_obj)
         action_id = record_pending_action(
             tenant_id=tenant_id,
             decision_id=None,
@@ -2602,7 +2732,14 @@ def _execute_provided_leads_sync(
         "channels": channels,
         "blueprint": blueprint.model_dump(),
         "board": board.model_dump(),
-        "step_notes": [
+        "artwork": selected_artwork,
+        "artwork_note": artwork_note,
+        "step_notes": ([f"artwork: {artwork_note}"] if artwork_note else [])
+        + ([
+            f"artwork attached to every staged draft: asset {selected_artwork.get('assetId')}"
+            + (f" ({selected_artwork.get('vlmSummary')})" if selected_artwork.get("vlmSummary") else "")
+        ] if selected_artwork else [])
+        + [
             f"planner built the executable blueprint first (target '{blueprint.targets.category}', "
             f"quota {blueprint.stop_conditions.total_quota or 'uncapped'}, "
             f"{sum(1 for r in blueprint.offer_logic if r.offer_code)} objection(s) with a real offer) "
@@ -2717,14 +2854,35 @@ async def launch_studio_run(
     reads) and schedule the real work as a background task."""
     if not hasattr(app.state, "_studio_runs"):
         app.state._studio_runs = {}
-    runs_registry: dict[str, dict] = app.state._studio_runs
 
     campaign_id = f"camp_{uuid.uuid4().hex[:12]}"
     run_id = f"team-{campaign_id}-{uuid.uuid4().hex[:12]}"
-    runs_registry[run_id] = {"status": "running", "summary": None, "error": None}
 
     try:
         await asyncio.to_thread(_log_turn, dsn, session_id, "operator", trigger_note, None)
+    except Exception:
+        pass
+
+    start_registered_run(app, dsn, session_id, tenant_id, plan, run_id)
+    return {"runId": run_id, "campaignId": campaign_id, "status": "running"}
+
+
+def start_registered_run(
+    app, dsn: str | None, session_id: str, tenant_id: str, plan: CampaignPlan, run_id: str
+) -> None:
+    """Register ``run_id`` as running and execute the campaign in the background —
+    shared by the fresh launch (:func:`launch_studio_run`) AND the artwork-selection
+    RESUME (``POST /studio/campaign/{run_id}/select-artwork``), which re-invokes the
+    executor with the SAME run id (the durable replay-skip + deterministic one-shot
+    agent-run ids make the resume idempotent). Must be called from an event loop."""
+    if not hasattr(app.state, "_studio_runs"):
+        app.state._studio_runs = {}
+    runs_registry: dict[str, dict] = app.state._studio_runs
+    runs_registry[run_id] = {"status": "running", "summary": None, "error": None}
+    try:  # let the live-state tools report this in-flight run's status (item 4)
+        from studio.live_state import set_runs_registry
+
+        set_runs_registry(runs_registry)
     except Exception:
         pass
 
@@ -2739,13 +2897,14 @@ async def launch_studio_run(
             _run_status = summary.get("run_status") or "completed"
             _failures = summary.get("failure_summary") or []
             # 'not_built' (nmh.9) is an HONEST terminal, not a failure — a routed
-            # channel with no pipeline yet. It carries no error (the message explains).
+            # channel with no pipeline yet. 'awaiting_selection' (item 3) is a PAUSE
+            # (the operator's artwork pick resumes it). Neither carries an error.
             runs_registry[run_id] = {
                 "status": _run_status,
                 "summary": summary,
                 "error": (
                     None
-                    if _run_status in ("completed", "not_built")
+                    if _run_status in ("completed", "not_built", "awaiting_selection")
                     else "; ".join(f"{f['agent']}: {f['error']}" for f in _failures)
                     or "required step failed"
                 ),
@@ -2764,7 +2923,6 @@ async def launch_studio_run(
             }
 
     asyncio.create_task(_bg())
-    return {"runId": run_id, "campaignId": campaign_id, "status": "running"}
 
 
 @studio_agent.tool
@@ -2871,6 +3029,55 @@ async def stage_publish(
 
     dsn = ctx.deps.dsn or os.environ.get("ENGINE_DATABASE_URL")
     await asyncio.to_thread(ensure_schema, dsn)
+
+    # LINEAGE FIX (engine-core item 5): the old path staged with NO run_id and a
+    # random-uuid idempotency key, so these drafts sorted LAST in the review queue
+    # ("Unassigned", no lineage). Derive a REAL campaign/run id (same camp_/team-
+    # format launch_studio_run mints), record a minimal agent_runs + runs trail so
+    # the draft deep-links to a run like every other staged action, and key the row
+    # deterministically (run_id + target/draft hash) — exactly-once inside the run.
+    campaign_id = f"camp_{uuid.uuid4().hex[:12]}"
+    run_id = f"team-{campaign_id}-{uuid.uuid4().hex[:12]}"
+    target_hash = hashlib.sha1(f"{target or ''}|{draft}".encode("utf-8")).hexdigest()[:12]
+    idem_key = f"{run_id}:{target_hash}"
+
+    def _record_lineage() -> None:
+        """Best-effort minimal trail: one draft agent_run (the supervisor host is the
+        real author/model) + a materialized runs row. Never blocks the staging."""
+        try:
+            from team.store import TeamStore
+
+            from studio.campaign_runner import _materialize_runs_row
+
+            ts = TeamStore(dsn)
+            ts.setup()
+            out = {
+                "caption": draft,
+                "channel": channel,
+                "source": "stage_publish",
+                "note": "supervisor-authored draft staged HELD via the approval gate",
+            }
+            ts.record_agent_run(
+                id=f"ar_stage_{hashlib.sha1(idem_key.encode()).hexdigest()[:16]}",
+                campaign_id=campaign_id,
+                run_id=run_id,
+                role="draft",
+                model=HOST_AGUI_MODEL,
+                input={"channel": channel, "target": target, "source": "stage_publish"},
+                output=out,
+            )
+            _materialize_runs_row(
+                dsn=dsn,
+                run_id=run_id,
+                tenant_id=ctx.deps.tenant_id,
+                agent_runs=[{"role": "draft", "model": HOST_AGUI_MODEL,
+                             "input": {"channel": channel}, "output": out}],
+                terminal_status="completed",
+            )
+        except Exception:
+            pass
+
+    await asyncio.to_thread(_record_lineage)
     action_id = await asyncio.to_thread(
         lambda: record_pending_action(
             tenant_id=ctx.deps.tenant_id,
@@ -2884,13 +3091,14 @@ async def stage_publish(
             threshold=None,
             esc_kind="approval_required",
             esc_label="Studio publish — operator approval required",
-            idempotency_key=f"studio:{ctx.deps.session_id}:{uuid.uuid4().hex[:12]}",
+            idempotency_key=idem_key,
+            run_id=run_id,
             dsn=dsn,
         )
     )
     return (
-        f"STAGED (held): action {action_id} on {channel} is PENDING approval. "
-        "Nothing has been sent."
+        f"STAGED (held): action {action_id} on {channel} is PENDING approval "
+        f"(run {run_id}). Nothing has been sent."
     )
 
 
@@ -3160,6 +3368,146 @@ async def research_and_stage_leads(
 
 
 # --------------------------------------------------------------------------- #
+# LIVE-STATE tools (engine-core item 4, spec §17): the supervisor answers
+# "which leads were finalized / what is each agent doing / what files exist /
+# which artworks does X have / what changed for X" from FRESH DB reads on every
+# call — never a cached or invented answer. Shared with the voice path via
+# studio.live_state (the voice seams embed the same snapshot per request).
+# --------------------------------------------------------------------------- #
+
+
+@studio_agent.tool
+async def get_run_leads(ctx: RunContext[StudioDeps], run_id: str | None = None) -> str:
+    """Which leads were FINALIZED for a campaign run (default: the most recent run):
+    the staged drafts' lead names + emails/targets + statuses, and every skipped row
+    with its concrete reason. Reads the DB fresh — call this whenever the operator
+    asks who the campaign targets / targeted; never answer from memory."""
+    from studio.live_state import finalized_leads
+
+    data = await asyncio.to_thread(
+        lambda: finalized_leads(ctx.deps.tenant_id, run_id, dsn=ctx.deps.dsn)
+    )
+    if not data.get("runId"):
+        return "No campaign run exists for this studio yet — no leads were finalized."
+    lines = [f"Run {data['runId']}: {len(data['staged'])} staged draft(s)."]
+    for s in data["staged"][:25]:
+        who = s.get("name") or "(name not on file)"
+        lines.append(
+            f"- {who} -> {s.get('target') or 'no target'} [{s.get('channel')}] "
+            f"status={s.get('status')}"
+        )
+    if data.get("skipped"):
+        lines.append(f"Skipped ({len(data['skipped'])}):")
+        for s in data["skipped"][:15]:
+            lines.append(f"- {s.get('lead')}: {s.get('reason')}")
+    else:
+        lines.append("Skipped: none recorded.")
+    return "\n".join(lines)
+
+
+@studio_agent.tool
+async def get_agent_activity(ctx: RunContext[StudioDeps]) -> str:
+    """What each agent is doing RIGHT NOW on the active run — live status (running /
+    completed / failed / awaiting_selection) + the latest recorded step per role with
+    its real model. Fresh DB read on every call."""
+    from studio.live_state import agent_activity
+
+    data = await asyncio.to_thread(
+        lambda: agent_activity(ctx.deps.tenant_id, dsn=ctx.deps.dsn)
+    )
+    if not data.get("runId"):
+        return "No campaign run exists for this studio yet — no agents are working."
+    lines = [f"Run {data['runId']} status: {data['status']}."]
+    sel = data.get("selectionPending")
+    if sel:
+        lines.append(
+            f"WAITING ON THE OPERATOR: {sel.get('question')} "
+            f"({len(sel.get('options') or [])} artwork option(s) surfaced)."
+        )
+    agents = data.get("agents") or {}
+    if not agents:
+        lines.append("No agent steps recorded yet.")
+    for role, info in agents.items():
+        last = (info.get("lastOutput") or "").strip()
+        lines.append(
+            f"- {role} [{info.get('model')}] last step at {info.get('at')}"
+            + (f": {last[:160]}" if last else "")
+        )
+    return "\n".join(lines)
+
+
+@studio_agent.tool
+async def get_uploaded_files(ctx: RunContext[StudioDeps]) -> str:
+    """What files/images exist RIGHT NOW: live counts by type + the newest uploads
+    including their real VLM descriptions — so 'I added a new tattoo design, which
+    one is it?' answers with the newest upload's actual analysis. Fresh read."""
+    from studio.live_state import files_snapshot
+
+    data = await asyncio.to_thread(
+        lambda: files_snapshot(ctx.deps.tenant_id, dsn=ctx.deps.dsn)
+    )
+    if not data.get("readable"):
+        return (
+            "The file store could not be read this turn — say so honestly rather "
+            "than guessing a count."
+        )
+    if not data.get("total"):
+        return "No files are uploaded for this studio yet (0 images)."
+    by_type = ", ".join(f"{k}={v}" for k, v in (data.get("byType") or {}).items())
+    lines = [f"{data['total']} file(s) on record ({by_type}); images: {data['images']}."]
+    if data.get("newest"):
+        lines.append("Newest uploads (most recent first):")
+        for n in data["newest"]:
+            desc = n.get("vlmSummary") or "no visual analysis captured"
+            artist = f" artist={n['artist']}" if n.get("artist") else ""
+            lines.append(f"- {n['name']} [{n['kind']}]{artist} — {desc}")
+    return "\n".join(lines)
+
+
+@studio_agent.tool
+async def get_artist_artworks(ctx: RunContext[StudioDeps], artist: str) -> str:
+    """Which artworks one ARTIST has in the library (real pieces + their VLM tags).
+    Fresh read; an artist with nothing on file reads honestly empty."""
+    from studio.live_state import artist_artworks
+
+    data = await asyncio.to_thread(
+        lambda: artist_artworks(ctx.deps.tenant_id, artist, dsn=ctx.deps.dsn)
+    )
+    if not data.get("resolved"):
+        return data.get("note") or f"No artist matching {artist!r} in the roster."
+    works = data.get("artworks") or []
+    if not works:
+        return f"{data['artist']} has NO artwork in the library yet — upload one to attach."
+    lines = [f"{data['artist']}: {len(works)} piece(s) in the library."]
+    for w in works[:12]:
+        tags = ", ".join(w.get("styles") or []) or "untagged"
+        desc = w.get("vlmSummary") or "no VLM analysis"
+        lines.append(f"- asset {w['assetId']} [{tags}] — {desc}")
+    return "\n".join(lines)
+
+
+@studio_agent.tool
+async def get_artist_memory(ctx: RunContext[StudioDeps], artist: str) -> str:
+    """The most recent MEMORY updates for one artist (uploads, operator notes,
+    campaign events) — newest first, real rows only. Fresh read."""
+    from studio.live_state import artist_recent_memories
+
+    data = await asyncio.to_thread(
+        lambda: artist_recent_memories(ctx.deps.tenant_id, artist, dsn=ctx.deps.dsn)
+    )
+    mems = data.get("memories") or []
+    if not mems:
+        return (
+            f"No memories recorded for {data.get('artist') or artist} yet — "
+            "nothing invented."
+        )
+    lines = [f"Recent memory for {data['artist']} (newest first):"]
+    for m in mems:
+        lines.append(f"- [{m['at']}] {m['text']}")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
 # Customer CSV upload. This helper is the PURE PARSER only (no side effects). The
 # `POST /studio/upload` route below is what then INGESTS the rows into `customers`
 # AND attaches a real summary onto the session plan, which `_customers_context`
@@ -3229,6 +3577,58 @@ def parse_customers_csv(content: str, filename: str = "upload.csv") -> dict[str,
 # --------------------------------------------------------------------------- #
 # FastAPI mount
 # --------------------------------------------------------------------------- #
+
+
+def _evidence_links(action_id: str, dsn: str | None) -> dict[str, Any]:
+    """ADDITIVE evidence keys for one staged action (engine-core item 7): the
+    ARTWORK it carries (with a raw-bytes link), the ARTIST it fronts (with the
+    artist-API link), and the CUSTOMER dossier link. Everything is read off the
+    action's OWN context / dossier — a key appears ONLY when the underlying fact
+    exists (real-only; never a fabricated link). Empty dict on any read failure."""
+    from actions.store import get_action
+
+    row = get_action(action_id, dsn=dsn)
+    if row is None:
+        return {}
+    try:
+        ctx = json.loads(row.context) if row.context else {}
+    except Exception:
+        ctx = {}
+    if not isinstance(ctx, dict):
+        ctx = {}
+    out: dict[str, Any] = {}
+
+    artwork = ctx.get("artwork")
+    if isinstance(artwork, dict) and artwork.get("assetId"):
+        link = dict(artwork)
+        if artwork.get("artifactId"):
+            link["rawUrl"] = f"/studio/artifacts/{artwork['artifactId']}/raw"
+        out["artwork"] = link
+    if ctx.get("attachment_artifact_id"):
+        out["attachmentArtifactId"] = ctx["attachment_artifact_id"]
+
+    artist_name = ctx.get("artist")
+    dossier = ctx.get("dossier") if isinstance(ctx.get("dossier"), dict) else {}
+    if artist_name:
+        try:
+            from studio.artists_directory import resolve_artist
+
+            resolved = resolve_artist(row.tenant_id, str(artist_name), dsn=dsn)
+        except Exception:
+            resolved = None
+        out["artist"] = {
+            "name": resolved["name"] if resolved else str(artist_name),
+            "slug": resolved["slug"] if resolved else None,
+            "url": f"/studio/artists/{resolved['slug']}" if resolved else None,
+        }
+
+    customer_id = dossier.get("customer_id")
+    if customer_id:
+        out["customerDossier"] = {
+            "customerId": customer_id,
+            "url": f"/studio/customer/{customer_id}/dossier?tenant_id={row.tenant_id}",
+        }
+    return out
 
 
 def _load_plan(session_id: str, dsn: str | None) -> CampaignPlan:
@@ -3346,6 +3746,12 @@ def mount_studio_agui(app) -> None:
     if not hasattr(app.state, "_studio_runs"):
         app.state._studio_runs = {}
     runs_registry: dict[str, dict] = app.state._studio_runs
+    try:  # live-state tools (item 4) read in-flight statuses from this registry
+        from studio.live_state import set_runs_registry
+
+        set_runs_registry(runs_registry)
+    except Exception:
+        pass
 
     @app.post("/studio/run")
     async def studio_run_start(request: Request):  # noqa: ANN202
@@ -3475,6 +3881,20 @@ def mount_studio_agui(app) -> None:
                     archetype = reg["summary"].get("archetype_id")
                     if reg["summary"].get("n_pending") is not None:
                         n_pending = reg["summary"]["n_pending"]
+            # Mid-run artwork pause (item 3): the durable selection row is the source
+            # of truth — it survives an engine restart (the in-memory registry does
+            # not), so a poller always sees the pending question + options.
+            selection_request = None
+            try:
+                from studio.artwork_flow import get_selection, selection_request_payload
+
+                sel = get_selection(run_id, dsn=dsn)
+                if sel and sel.get("status") == "awaiting":
+                    selection_request = selection_request_payload(sel)
+                    if status in (None, "running", "awaiting_selection"):
+                        status = "awaiting_selection"
+            except Exception:
+                selection_request = None
             if status is None:
                 status = (
                     "completed"
@@ -3549,6 +3969,9 @@ def mount_studio_agui(app) -> None:
                 "blueprint": blueprint,
                 "board": board,
                 "error": reg.get("error") if reg else None,
+                # Mid-run artwork pause (item 3): non-null while the run awaits the
+                # operator's pick — {"kind":"artwork","question":...,"options":[...]}.
+                "selectionRequest": selection_request,
                 # Real campaign state for the voice supervisor (draft #1, counts, agents).
                 "state": voice_state,
                 "voiceBriefing": voice_briefing,
@@ -3556,6 +3979,85 @@ def mount_studio_agui(app) -> None:
 
         data = await asyncio.to_thread(_load)
         return JSONResponse({"ok": True, "runId": run_id, **data})
+
+    @app.post("/studio/campaign/{run_id}/select-artwork")
+    async def studio_select_artwork_route(run_id: str, request: Request):  # noqa: ANN202
+        """Answer a run's artwork selection pause (item 3). Body ``{"assetId": ...}``.
+
+        Records the pick DURABLY (artwork_selections → 'selected') and RESUMES the
+        run by re-invoking the executor with the same run id — the durable
+        replay-skip + deterministic one-shot agent-run ids make the resume
+        idempotent (nothing is re-drafted, nothing double-staged, nothing sent).
+        400 for a pick outside the surfaced options; 404 when the run has no
+        pending selection."""
+        from fastapi.responses import JSONResponse
+
+        from studio.artwork_flow import get_selection, record_choice
+
+        dsn = get_dsn()
+        try:
+            payload = json.loads(await request.body() or b"{}")
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        asset_id = (payload.get("assetId") or payload.get("asset_id") or "").strip()
+        if not asset_id:
+            return JSONResponse({"ok": False, "error": "missing assetId"}, status_code=400)
+
+        sel = await asyncio.to_thread(lambda: get_selection(run_id, dsn=dsn))
+        if sel is None or sel.get("status") != "awaiting":
+            return JSONResponse(
+                {"ok": False, "error": "no pending artwork selection for this run"},
+                status_code=404,
+            )
+        options = {str(o.get("assetId")) for o in (sel.get("options") or [])}
+        if asset_id not in options:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": f"assetId {asset_id!r} is not one of the surfaced options",
+                    "options": sorted(options),
+                },
+                status_code=400,
+            )
+        artifact_id = next(
+            (o.get("artifactId") for o in (sel.get("options") or [])
+             if str(o.get("assetId")) == asset_id),
+            None,
+        )
+        recorded = await asyncio.to_thread(
+            lambda: record_choice(run_id, asset_id, artifact_id=artifact_id, dsn=dsn)
+        )
+        if not recorded:
+            return JSONResponse(
+                {"ok": False, "error": "selection was already recorded"}, status_code=409
+            )
+
+        # RESUME: re-invoke the executor with the plan snapshot the pause captured
+        # (falls back to the session's current plan when no snapshot persisted).
+        session_id = sel.get("session_id") or "studio-default"
+        tenant_id = sel.get("tenant_id") or os.environ.get("STUDIO_TENANT_ID", "demo")
+        plan_snapshot = sel.get("plan")
+        if isinstance(plan_snapshot, dict) and plan_snapshot:
+            try:
+                plan = CampaignPlan.model_validate(plan_snapshot)
+            except Exception:
+                plan = _load_plan(session_id, dsn)
+        else:
+            plan = await asyncio.to_thread(_load_plan, session_id, dsn)
+        start_registered_run(app, dsn, session_id, tenant_id, plan, run_id)
+        return JSONResponse(
+            {
+                "ok": True,
+                "runId": run_id,
+                "assetId": asset_id,
+                "artifactId": artifact_id,
+                "status": "running",
+                "note": "Artwork recorded; the run resumed with your pick. Everything "
+                "stays HELD for approval — nothing is sent.",
+            }
+        )
 
     @app.post("/studio/interview")
     async def studio_interview_route(request: Request):  # noqa: ANN202
@@ -3890,14 +4392,19 @@ def mount_studio_agui(app) -> None:
 
     @app.post("/studio/upload/image")
     async def studio_upload_image_route(request: Request):  # noqa: ANN202
-        """Upload an IMAGE / artwork / screenshot as a universal context artifact (nmh.4).
+        """Upload an IMAGE / artwork / screenshot: disk bytes + REAL VLM understanding.
 
-        Accepts JSON ``{name, contentBase64, mediaType?, kind?, linkedArtistId?}``.
-        Stores a bounded data-uri preview + real byte size so the voice supervisor and
-        every agent can SEE and COUNT it ("how many images are uploaded?") from real
-        state. HONESTY: the image's VISUAL content is NOT described here (VLM captioning
-        is a separate capability) — the artifact carries an empty parsed_content and
-        says so, never an invented description. Nothing is sent."""
+        Accepts JSON ``{name, contentBase64, mediaType?, kind?, artist?, prompt?,
+        linkedArtistId?}`` (``artist`` = name or slug; ``prompt`` = the operator's
+        text about the design). The pipeline (studio/image_ingest.py) writes the
+        bytes to ``var/artifacts/{tenant}/{sha256}.{ext}``, runs REAL VLM analysis
+        (tattoo style / motif / color-vs-black-and-grey / mood / complexity /
+        campaign-fit — image-level facts), registers the artifact (metadata +
+        storage path + a bounded <=64k thumbnail), adds an artwork LIBRARY row so
+        campaign artwork selection can pick it, and records an artist memory.
+        HONEST DEGRADATION: with no model key / a VLM failure the image + artist +
+        prompt still persist and ``vlmStatus='unavailable'`` says why — tags are
+        never fabricated. Nothing is sent."""
         import base64
 
         from fastapi.responses import JSONResponse
@@ -3914,7 +4421,10 @@ def mount_studio_agui(app) -> None:
         b64 = payload.get("contentBase64") or payload.get("content") or ""
         media_type = (payload.get("mediaType") or payload.get("media_type") or "").strip() or None
         kind = (payload.get("kind") or "image").strip().lower()
-        artifact_type = kind if kind in ("image", "artwork", "screenshot") else "image"
+        artist = (
+            payload.get("artist") or payload.get("linkedArtistId") or ""
+        ).strip() or None
+        prompt = (payload.get("prompt") or "").strip() or None
         if not name or not b64:
             return JSONResponse(
                 {"ok": False, "error": "image upload needs a name and contentBase64"},
@@ -3936,23 +4446,28 @@ def mount_studio_agui(app) -> None:
             return JSONResponse(
                 {"ok": False, "error": "contentBase64 is not valid base64"}, status_code=400
             )
+        if not raw:
+            return JSONResponse(
+                {"ok": False, "error": "contentBase64 decoded to zero bytes"},
+                status_code=400,
+            )
         if media_type and not media_type.startswith("image/"):
             return JSONResponse(
                 {"ok": False, "error": f"mediaType {media_type!r} is not an image/*"},
                 status_code=400,
             )
-        preview = f"data:{media_type or 'image/png'};base64,{b64}"
-        linked_artist = (payload.get("linkedArtistId") or "").strip() or None
         try:
-            aid = await asyncio.to_thread(
-                lambda: _register_image_artifact(
+            from studio.image_ingest import process_image_upload
+
+            result = await asyncio.to_thread(
+                lambda: process_image_upload(
                     tenant_id,
                     name,
-                    artifact_type,
-                    media_type,
-                    preview,
-                    len(raw),
-                    linked_artist_id=linked_artist,
+                    raw,
+                    media_type=media_type,
+                    kind=kind,
+                    artist=artist,
+                    prompt=prompt,
                     dsn=dsn,
                 )
             )
@@ -3960,18 +4475,7 @@ def mount_studio_agui(app) -> None:
             return JSONResponse(
                 {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500
             )
-        return JSONResponse(
-            {
-                "ok": True,
-                "id": aid,
-                "name": name,
-                "type": artifact_type,
-                "bytes": len(raw),
-                "note": "Image registered — the supervisor and team can now SEE and "
-                "COUNT it. Visual understanding is not captured yet (no invented "
-                "description). Nothing was sent.",
-            }
-        )
+        return JSONResponse(result)
 
     @app.get("/studio/documents")
     async def studio_documents_list_route():  # noqa: ANN202
@@ -4064,7 +4568,15 @@ def mount_studio_agui(app) -> None:
             return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
         if ev is None:
             return JSONResponse({"error": "no such action"}, status_code=404)
-        return JSONResponse(ev.model_dump(by_alias=True))
+        payload = ev.model_dump(by_alias=True)
+        # Engine-core item 7 (additive): ARTWORK + ARTIST + CUSTOMER-DOSSIER links,
+        # read off the action's own context (the run wrote them) — real-only, each
+        # key present ONLY when the underlying fact exists (never a fabricated link).
+        try:
+            payload.update(await asyncio.to_thread(_evidence_links, action_id, dsn))
+        except Exception:
+            pass
+        return JSONResponse(payload)
 
     @app.get("/studio/campaign/{run_id}/classify")
     async def studio_campaign_classify_route(run_id: str):  # noqa: ANN202

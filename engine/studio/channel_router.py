@@ -63,9 +63,11 @@ _NOT_BUILT_REASON: dict[Pipeline, str] = {
         "run; upload the request as email or Instagram, or ask to have FB built."
     ),
     Pipeline.ARTIST_ARTWORK: (
-        "the artist/artwork-attachment campaign pipeline isn't built yet — artwork "
-        "selection exists but nothing ingests uploaded attachments into a supervisor "
-        "run. I won't fake a run; I can run the Instagram or email pipeline instead."
+        "the standalone artist/artwork campaign pipeline isn't built yet as its own "
+        "run. Artwork attach IS available inside the built pipelines: run it as an "
+        "Instagram post (the run pauses on the matching artwork picks for your "
+        "choice), or as email outreach on your own uploaded leads with attach-artwork "
+        "on. I won't fake a standalone artwork run."
     ),
 }
 
@@ -112,10 +114,12 @@ def route_pipeline(plan: Any) -> RouteDecision:
     email default so "create an Instagram post" never runs the email agents:
 
       1. Facebook  → NOT BUILT (honest)
-      2. artist/artwork/attachments → NOT BUILT (honest)
-      3. lead_source=='provided' → BUILT (email) — the per-lead outreach compliance
-         path is never bypassed by an incidental social word in the goal
-      4. Instagram/Reels/Story → BUILT (compose IG archetype)
+      2. lead_source=='provided' → BUILT (email) — the per-lead outreach compliance
+         path is never bypassed by an incidental social word in the goal; with
+         ``attach_artwork`` it now ALSO runs the artwork top-pick gate (item 3), so
+         it must precede the artwork rule
+      3. artist/artwork/attachments (with NO built channel chosen) → NOT BUILT (honest)
+      4. Instagram/Reels/Story → BUILT (compose IG archetype + artwork gate)
       5. email/outreach → BUILT (email)
       6. default → BUILT (email) — backward-compatible with today's behaviour
     """
@@ -127,31 +131,34 @@ def route_pipeline(plan: Any) -> RouteDecision:
     if _has(text, "facebook", "fb", "messenger"):
         return RouteDecision(Pipeline.FACEBOOK, False, _NOT_BUILT_REASON[Pipeline.FACEBOOK])
 
-    # 2. Artist/artwork ATTACHMENTS — data + selection exist, but no run pipeline that
-    #    ingests attachments. Keyed on the attachment/artwork signal specifically (the
-    #    interview ``attach_artwork`` flag, or 'artwork'/'attachment'/'portfolio') — NOT
-    #    on the bare word "artist" (an "Instagram post for the new artist" is an IG post,
-    #    not an artwork-attachment campaign), so it must precede the Instagram rule only
-    #    for a genuine artwork request.
+    # 2. Provided leads (uploaded-CSV cohort) → the per-lead OUTREACH compliance path,
+    #    BEFORE the social-channel AND artwork rules. lead_source='provided' means
+    #    "contact MY uploaded people per-lead" — an incidental social word in the goal
+    #    ("win back clients who follow us on instagram") never bypasses the
+    #    consent-gated path (nmh.9 review S1), and ``attach_artwork`` on this cohort is
+    #    BUILT now: the run pauses on the artwork top-picks for the operator's choice
+    #    and attaches the selected piece to each staged draft (engine-core item 3).
+    if lead_source == "provided":
+        reason = (
+            "uploaded-lead outreach — running the per-lead email pipeline against your "
+            "own leads; nothing is sent (HELD)."
+        )
+        if attach_artwork:
+            reason = (
+                "uploaded-lead outreach with artwork attach — running the per-lead "
+                "email pipeline; the run pauses on the matching artwork picks for "
+                "your choice. Nothing is sent (HELD)."
+            )
+        return RouteDecision(Pipeline.EMAIL, True, reason)
+
+    # 3. Artist/artwork ATTACHMENTS with no built channel chosen — the STANDALONE
+    #    artist/artwork pipeline still isn't a supervisor-invoked run. Artwork attach
+    #    IS built inside the two real pipelines (provided-lead email above; the IG
+    #    spine's artwork gate below reaches it when the plan names Instagram WITHOUT
+    #    artwork phrasing), so the honest not-built here points the operator at them.
     if attach_artwork or _has(text, "artwork", "attachment", "attachments", "portfolio"):
         return RouteDecision(
             Pipeline.ARTIST_ARTWORK, False, _NOT_BUILT_REASON[Pipeline.ARTIST_ARTWORK]
-        )
-
-    # 3. Provided leads (uploaded-CSV cohort) → the per-lead OUTREACH compliance path,
-    #    BEFORE the social-channel rules. lead_source='provided' means "contact MY
-    #    uploaded people per-lead" — an Instagram *post* doesn't use that cohort, and a
-    #    genuine IG-post campaign never sets lead_source=provided. Checking it here keeps
-    #    an incidental social word in the goal ("win back clients who follow us on
-    #    instagram") from silently bypassing the consent-gated per-lead outreach path
-    #    (nmh.9 review S1). Facebook/artwork above still win — neither has a built path,
-    #    so an honest not-built is the right answer even for an uploaded cohort.
-    if lead_source == "provided":
-        return RouteDecision(
-            Pipeline.EMAIL,
-            True,
-            "uploaded-lead outreach — running the per-lead email pipeline against your "
-            "own leads; nothing is sent (HELD).",
         )
 
     # 4. Instagram — a real IG drafting workflow via the compose spine. NOTE: pinned to
