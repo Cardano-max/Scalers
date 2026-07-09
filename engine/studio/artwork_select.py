@@ -199,13 +199,21 @@ def artist_styles(artworks: list[ArtworkRef]) -> list[str]:
 # Selection + the grounded "why".
 # --------------------------------------------------------------------------- #
 def _overlap(tags: list[str], compare: set[str]) -> list[str]:
-    """The ORIGINAL-cased ``tags`` whose canonical token is in ``compare``. Order and
-    casing preserved for display; every returned token is a real stored tag."""
+    """The ORIGINAL-cased ``tags`` whose canonical token — or any of whose WORD
+    tokens — is in ``compare``. VLM motifs are descriptive phrases ("Liberty Bell",
+    "American flag with stars"), so whole-phrase equality alone never matched a
+    single theme word like "liberty" or "flag" and every real piece scored zero.
+    Word tokens shorter than 3 chars are ignored ("of", "in") so stopwords can't
+    manufacture a match. Order and casing preserved for display; every returned
+    token is a real stored tag."""
     out: list[str] = []
     seen: set[str] = set()
     for t in tags:
         n = _norm(t)
-        if n and n in compare and n not in seen:
+        if not n or n in seen:
+            continue
+        words = {w for w in (_norm(w) for w in re.split(r"[^A-Za-z0-9]+", t or "")) if len(w) >= 3}
+        if n in compare or (words & compare):
             seen.add(n)
             out.append(t)
     return out
