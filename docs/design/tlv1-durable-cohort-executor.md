@@ -135,6 +135,50 @@ draft OR a `skipped` row with a concrete reason (`no email`, `not found`,
 `beyond cohort cap of 1000`). `reconciled = drafted + skipped >= expected`. Zero
 `"beyond output cap"` for any cohort ≤ `_COHORT_HARD_CAP`.
 
+## Adversarial design review — folded-in corrections (BLOCKERS)
+
+A pre-code adversarial review (fork over the full subsystem map) confirmed
+effect-level exactly-once is never at risk (the `UNIQUE` guards hold everywhere),
+the cap decoupling is safe (the executor never routes through compose's
+`_planned_channels`), and the terminal-status/eager-row fixes are correct. But it
+found three design holes that each break a stated AC — **implement these fixes**:
+
+- **B1 — rehydrate, never construct-empty (state-clobber).** `DurableRun(run_id, …)`
+  sets `self.state = {}` (durable_run.py:231), and `_persist` writes `state`
+  **wholesale** (`SET state = EXCLUDED.state`, durable_run.py:457). If the
+  re-driven executor eager-checkpoints with an empty state, it destroys the frozen
+  `cohort_ids`/`plan` and the run becomes unrecoverable. At durable-init the
+  executor MUST `snap = _durable.snapshot()` and, if `snap.state` has `cohort_ids`,
+  load `_durable.state = snap["state"]` / `_durable.cursor = snap["cursor"]`. The
+  S0 freeze is **conditional**: `if "cohort_ids" not in _durable.state:`.
+- **B2 — resolve the cohort from the frozen list FIRST.** Cohort resolution must
+  check `_durable.state.get("cohort_ids")` **before** the `plan.customers` /
+  `conversation_leads` / `churn_risk_leads` branch (agui.py:1353-1390) and resolve
+  via `lookup_leads(frozen_ids)` on every drive that already has a frozen cohort.
+  Only enumerate+freeze when there is no frozen list. Otherwise the non-CSV cohort
+  path re-enumerates (no unique tiebreaker) and membership drifts across a resume.
+- **B3 — cursor is pure observability; NEVER control flow.** The ledger records
+  only **staged** leads; a **skipped** lead (no email / not-found) has no ledger
+  row. Using `cursor` to fast-forward past consumed leads would drop
+  previously-skipped leads from this drive's `skipped[]` → `reconciled` undercounts
+  and the "0 rows unaccounted" AC fails. So on **every** drive, re-iterate the FULL
+  frozen cohort from index 0: staged leads replay-skip via the ledger (no re-draft,
+  no 2nd row), skipped leads re-evaluate (deterministic, pre-LLM → free), and
+  `skipped[]` rebuilds correctly. `cursor`/waves are for checkpoint granularity +
+  UI progress only. **(C4 in the table above is superseded by this.)**
+
+SHOULD-FIX (fold in during impl): **S1** hold the `pg_try_advisory_lock` on a
+dedicated connection **inside** the `to_thread` worker for the whole drive (it is
+session-scoped — a lock taken on a connection that closes is a no-op); use a
+64-bit hash split `pg_try_advisory_lock(hi32, lo32)` to avoid `hashtext` int4
+collisions. **S2** give the campaign-level planner + strategist deterministic
+agent_run ids (like `replan_event_id`, agui.py:1845) or ledger them so a re-drive
+doesn't stack duplicate lanes / re-pay 2 LLM calls. **S3** set
+`expected = len(cohort_ids)` unconditionally (delete the NameError guard at
+agui.py:1876-1879). **S4** embed only the first ~50 `skipped[]` entries + a
+`{reason: count}` rollup in the jury/board/summary to avoid payload bloat at 500
+scale.
+
 ## Files
 
 - `studio/durable_run.py` — add `finish(status, result=None)` + module helper
