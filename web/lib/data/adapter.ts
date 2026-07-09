@@ -8,10 +8,15 @@
  */
 import type {
   Action,
+  ActionEvidence,
+  ActionLineage,
+  ActivityItem,
   AutonomyConfig,
   AutonomyMode,
   Channel,
   ActionFilter,
+  CampaignExamplesPage,
+  CampaignSpec,
   EngineState,
   FeedEvent,
   FeedFilter,
@@ -20,6 +25,7 @@ import type {
   RunFilter,
   SystemHealth,
   Tenant,
+  TenantMeta,
   ChatMessage,
 } from './models';
 import type { SSEClient, SSEHandlers, SSEStatus } from './sse';
@@ -33,8 +39,49 @@ export interface DataAdapter {
   getOverview(tenantId: string): Promise<Overview>;
   getReviewQueue(tenantId: string, filter?: ActionFilter): Promise<Action[]>;
   getAction(id: string): Promise<Action | null>;
+  /**
+   * The EVIDENCE / PROVENANCE for one staged draft — what it ACTUALLY used: the
+   * brand-voice doc, customer/CSV facts, lead memories, internal notes, cited
+   * research, tool calls, critic/jury verdicts, and the producing agent. REAL-ONLY:
+   * categories the draft did not genuinely use arrive null / []. Resolves null
+   * (honest) when no evidence was captured for the id.
+   */
+  getActionEvidence(actionId: string): Promise<ActionEvidence | null>;
+  /**
+   * Server-driven tenant safety flags (ju1.5): the TEST-MODE banner + send-disable
+   * state come from here, never from a hardcoded tenant list. Honest-null on
+   * transport failure (the UI then shows no banner rather than a guessed one —
+   * the SERVER gate still refuses the send regardless).
+   */
+  getTenantMeta(tenantId: string): Promise<TenantMeta | null>;
+  /**
+   * The tenant's campaign-example MEMORY (ju1.2 library): real transcribed
+   * examples + extracted patterns, honest-empty when none.
+   */
+  getCampaignExamples(tenantId: string): Promise<CampaignExamplesPage>;
+  /**
+   * Draft lineage for the review queue (ju1.5): source CSV / customer / artist /
+   * studio / offer / CTA / examples referenced. Null fields = honest "missing".
+   */
+  getActionLineage(actionId: string): Promise<ActionLineage | null>;
+  /**
+   * Executed (completed) actions for the Activity screen — the reasoning trace,
+   * engagement, outcome, and thread/comments deep-links resolved alongside the
+   * Action core. Same `ActionFilter` (by type) as the review queue.
+   */
+  getActivity(
+    tenantId: string,
+    filter?: ActionFilter,
+  ): Promise<ActivityItem[]>;
+  getActivityItem(id: string): Promise<ActivityItem | null>;
   getRuns(tenantId: string, filter?: RunFilter): Promise<Run[]>;
   getRun(id: string): Promise<Run | null>;
+  /**
+   * The per-campaign SPEC DOC for a run, assembled from already-persisted REAL
+   * rows (plan + agent_runs + archetype). Resolves null (honest-null) when the
+   * run has no spec and nothing to reconstruct. `runId` IS the spec key.
+   */
+  getCampaignSpec(runId: string): Promise<CampaignSpec | null>;
   getFeed(
     tenantId: string,
     filter?: FeedFilter,
@@ -51,7 +98,9 @@ export interface DataAdapter {
   ): SSEClient;
 
   // --- mutations (surface ready for the action/command/dial beads) ---
-  approveAction(id: string, idempotencyKey: string): Promise<Action>;
+  // `live` (default false = safe redirect) is the operator's explicit live-send
+  // authorization; the resolved `mode` rides back on the returned Action.
+  approveAction(id: string, idempotencyKey: string, live?: boolean): Promise<Action>;
   rejectAction(id: string, reason?: string): Promise<Action>;
   editActionDraft(id: string, draft: string): Promise<Action>;
   regenerateAction(id: string): Promise<Action>;
@@ -69,4 +118,12 @@ export interface DataAdapter {
     threshold: number,
   ): Promise<AutonomyConfig>;
   sendCommand(tenantId: string, text: string): Promise<ChatMessage>;
+  /**
+   * Start a campaign with the given brief. Returns the campaign run ID, action IDs
+   * generated, and the initial status.
+   */
+  startCampaign(
+    tenantId: string,
+    brief: { goal: string; audience: string; channels: string[]; constraints?: string; hooks?: string[] },
+  ): Promise<{ runId: string; actionIds: string[]; status: string }>;
 }

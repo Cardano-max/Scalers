@@ -68,9 +68,33 @@ export function ErrorState({
       }}
     >
       <div style={{ fontWeight: 600 }}>Couldn’t load this view</div>
-      <div className="mono" style={{ fontSize: 12, marginTop: 6, opacity: 0.85 }}>
-        {error.message}
+      <div style={{ fontSize: 12.5, marginTop: 6, color: 'var(--danger-text)', opacity: 0.9 }}>
+        The engine didn’t answer this request. It may still be starting, or the
+        connection dropped — retry, or check the engine if it persists.
       </div>
+      {/* The raw error stays available, but collapsed — operators shouldn't be
+          greeted by SQL/GraphQL internals (QA 5a). */}
+      {error.message ? (
+        <details style={{ marginTop: 8 }}>
+          <summary style={{ fontSize: 11.5, cursor: 'pointer', opacity: 0.8 }}>
+            Technical detail
+          </summary>
+          <div
+            className="mono"
+            style={{
+              fontSize: 11.5,
+              marginTop: 6,
+              opacity: 0.85,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              maxHeight: 180,
+              overflow: 'auto',
+            }}
+          >
+            {error.message}
+          </div>
+        </details>
+      ) : null}
       {onRetry ? (
         <button
           type="button"

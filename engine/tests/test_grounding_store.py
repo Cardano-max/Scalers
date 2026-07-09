@@ -13,10 +13,10 @@ import json
 import os
 from pathlib import Path
 
-import psycopg
 import pytest
 
 from kb import GroundingStore
+from tests.conftest import private_schema
 
 pytestmark = [
     pytest.mark.integration,
@@ -26,20 +26,18 @@ pytestmark = [
     ),
 ]
 
-_INITDB = Path(__file__).resolve().parents[2] / "infra" / "initdb"
-_EVAL_SCHEMA = _INITDB / "03-eval-kb.sql"          # rvy.2 — provides the role + extension
-_GROUNDING_SCHEMA = _INITDB / "04-grounding-kb.sql"
 _JSONL = Path(__file__).resolve().parents[1] / "kb" / "corpus" / "practitioner_wisdom.jsonl"
 
 
 @pytest.fixture
-def grounding(dsn) -> GroundingStore:
-    """Apply the grounding schema (idempotent) + reset the table."""
-    with psycopg.connect(dsn, autocommit=True) as conn:
-        conn.execute(_EVAL_SCHEMA.read_text(encoding="utf-8"))
-        conn.execute(_GROUNDING_SCHEMA.read_text(encoding="utf-8"))
-        conn.execute("TRUNCATE practitioner_wisdom")
-    return GroundingStore(dsn)
+def grounding() -> GroundingStore:
+    """A GroundingStore over a PRIVATE per-process schema (03 provides the role,
+    04 the table). ``include_public=True`` keeps pgvector's ``vector`` type
+    resolvable; the table is created privately and starts empty, so the fixture
+    never reads, writes, or wipes the LIVE ``public.practitioner_wisdom``
+    grounding KB (CustomerAcq-wwy.9)."""
+    with private_schema("03-eval-kb.sql", "04-grounding-kb.sql", include_public=True) as s:
+        yield GroundingStore(s.dsn)
 
 
 def _entries() -> list[dict]:

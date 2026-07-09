@@ -21,6 +21,7 @@ import pytest
 
 from config.schema import TenantPack, VoiceRef
 from kb import KbStore, build_voice_grounding
+from tests.conftest import private_schema
 
 pytestmark = [
     pytest.mark.integration,
@@ -30,19 +31,20 @@ pytestmark = [
     ),
 ]
 
-_INITDB = Path(__file__).resolve().parents[2] / "infra" / "initdb"
-_SCHEMA = _INITDB / "06-kb-content.sql"
+@pytest.fixture
+def kb_schema():
+    """A PRIVATE per-process schema with the kb_chunks DDL applied (only 06,
+    which creates the scalers_app role itself). ``include_public=True`` keeps
+    pgvector's ``vector`` type resolvable; the table itself is created in the
+    private schema, so this fixture never reads, writes, or wipes the LIVE
+    ``public.kb_chunks`` KB (CustomerAcq-wwy.9)."""
+    with private_schema("06-kb-content.sql", include_public=True) as s:
+        yield s
 
 
 @pytest.fixture
-def kb_store(dsn) -> KbStore:
-    """Apply the kb_chunks schema (idempotent) + reset the table. Applies ONLY 06
-    (which creates the scalers_app role itself) so the fixture never touches other
-    partitions' tables/RLS — keeps it from contaminating sibling PG tests."""
-    with psycopg.connect(dsn, autocommit=True) as conn:
-        conn.execute(_SCHEMA.read_text(encoding="utf-8"))
-        conn.execute("TRUNCATE kb_chunks")
-    return KbStore(dsn)
+def kb_store(kb_schema) -> KbStore:
+    return KbStore(kb_schema.dsn)
 
 
 # A temp skills bundle so build_voice_grounding can resolve dimensions without
@@ -141,14 +143,16 @@ def _app_dsn(dsn: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
-def test_rls_blocks_cross_tenant_for_app_role(kb_store, dsn):
+def test_rls_blocks_cross_tenant_for_app_role(kb_store, kb_schema):
     """As scalers_app (non-superuser), an unfiltered SELECT returns only the session
-    tenant's rows — RLS enforces isolation even if a query forgets the predicate."""
+    tenant's rows — RLS enforces isolation even if a query forgets the predicate.
+    Connects with the PRIVATE-schema DSN (the search_path options survive
+    ``_app_dsn``) so the read hits the fixture's table, never the live one."""
     kb_store.upsert_kb_chunk(tenant_id="tenant-a", content="a-only", kind="post")
     kb_store.upsert_kb_chunk(tenant_id="tenant-b", content="b-only", kind="post")
 
     try:
-        conn = psycopg.connect(_app_dsn(dsn))
+        conn = psycopg.connect(_app_dsn(kb_schema.dsn))
     except psycopg.OperationalError as exc:
         pytest.skip(f"scalers_app role not available ({exc}); RLS backstop not testable here")
 

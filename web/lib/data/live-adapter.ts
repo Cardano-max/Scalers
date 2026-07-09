@@ -11,10 +11,15 @@ import * as Q from './queries';
 import type { DataAdapter } from './adapter';
 import type {
   Action,
+  ActionEvidence,
+  ActionLineage,
+  ActivityItem,
   AutonomyConfig,
   AutonomyMode,
   Channel,
   ActionFilter,
+  CampaignExamplesPage,
+  CampaignSpec,
   ChatMessage,
   EngineState,
   FeedEvent,
@@ -24,6 +29,7 @@ import type {
   RunFilter,
   SystemHealth,
   Tenant,
+  TenantMeta,
 } from './models';
 
 export interface LiveConfig {
@@ -74,6 +80,76 @@ export class LiveAdapter implements DataAdapter {
       (d) => d.action,
     );
   }
+  /**
+   * Evidence/provenance reads NOT through GraphQL: the engine serves it directly at
+   * GET /studio/action/{id}/evidence, proxied same-origin by the Next rewrite of
+   * /studio/* (the same path family the run-trace client uses). Honest on failure:
+   * any non-2xx or transport error resolves null rather than throwing into the UI.
+   */
+  async getActionEvidence(actionId: string): Promise<ActionEvidence | null> {
+    try {
+      const res = await fetch(`/studio/action/${encodeURIComponent(actionId)}/evidence`, {
+        method: 'GET',
+        headers: { accept: 'application/json' },
+      });
+      if (!res.ok) return null;
+      return (await res.json()) as ActionEvidence;
+    } catch {
+      return null;
+    }
+  }
+  /** ju1.5: server-driven tenant safety flags (GET /tenants/{id}, same-origin
+   *  Next rewrite). Honest-null on failure — the server send-gate still holds. */
+  async getTenantMeta(tenantId: string): Promise<TenantMeta | null> {
+    try {
+      const res = await fetch(`/tenants/${encodeURIComponent(tenantId)}`, {
+        method: 'GET',
+        headers: { accept: 'application/json' },
+      });
+      if (!res.ok) return null;
+      return (await res.json()) as TenantMeta;
+    } catch {
+      return null;
+    }
+  }
+  /** ju1.5: the campaign-example memory (real examples + patterns; honest-empty). */
+  async getCampaignExamples(tenantId: string): Promise<CampaignExamplesPage> {
+    try {
+      const res = await fetch(
+        `/studio/campaign-examples?tenant_id=${encodeURIComponent(tenantId)}`,
+        { method: 'GET', headers: { accept: 'application/json' } },
+      );
+      if (!res.ok) return { tenantId, examples: [], patterns: [] };
+      return (await res.json()) as CampaignExamplesPage;
+    } catch {
+      return { tenantId, examples: [], patterns: [] };
+    }
+  }
+  /** ju1.5: draft lineage (source CSV / customer / artist / studio / offer / CTA). */
+  async getActionLineage(actionId: string): Promise<ActionLineage | null> {
+    try {
+      const res = await fetch(`/studio/action/${encodeURIComponent(actionId)}/lineage`, {
+        method: 'GET',
+        headers: { accept: 'application/json' },
+      });
+      if (!res.ok) return null;
+      return (await res.json()) as ActionLineage;
+    } catch {
+      return null;
+    }
+  }
+  getActivity(tenantId: string, filter?: ActionFilter) {
+    return this.query<{ activity: ActivityItem[] }>(Q.ACTIVITY_QUERY, {
+      tenantId,
+      filter: filter ?? null,
+    }).then((d) => d.activity);
+  }
+  getActivityItem(id: string) {
+    return this.query<{ activityItem: ActivityItem | null }>(
+      Q.ACTIVITY_ITEM_QUERY,
+      { id },
+    ).then((d) => d.activityItem);
+  }
   getRuns(tenantId: string, filter?: RunFilter) {
     return this.query<{ runs: Run[] }>(Q.RUNS_QUERY, {
       tenantId,
@@ -82,6 +158,11 @@ export class LiveAdapter implements DataAdapter {
   }
   getRun(id: string) {
     return this.query<{ run: Run | null }>(Q.RUN_QUERY, { id }).then((d) => d.run);
+  }
+  getCampaignSpec(runId: string) {
+    return this.query<{ campaignSpec: CampaignSpec | null }>(Q.CAMPAIGN_SPEC_QUERY, {
+      runId,
+    }).then((d) => d.campaignSpec ?? null);
   }
   getFeed(tenantId: string, filter?: FeedFilter, after?: string, limit?: number) {
     return this.query<{ feed: FeedEvent[] }>(Q.FEED_QUERY, {
@@ -105,10 +186,11 @@ export class LiveAdapter implements DataAdapter {
     return createSSEClient({ url: this.sseUrl, tenantId, handlers, onStatus });
   }
 
-  approveAction(id: string, idempotencyKey: string) {
+  approveAction(id: string, idempotencyKey: string, live = false) {
     return this.mutate<{ approveAction: Action }>(Q.APPROVE_ACTION, {
       id,
       idempotencyKey,
+      live,
     }).then((d) => d.approveAction);
   }
   rejectAction(id: string, reason?: string) {
@@ -152,5 +234,14 @@ export class LiveAdapter implements DataAdapter {
       tenantId,
       text,
     }).then((d) => d.sendCommand);
+  }
+  startCampaign(
+    tenantId: string,
+    brief: { goal: string; audience: string; channels: string[]; constraints?: string; hooks?: string[] },
+  ) {
+    return this.mutate<{ startCampaign: { runId: string; actionIds: string[]; status: string } }>(
+      Q.START_CAMPAIGN,
+      { tenantId, brief },
+    ).then((d) => d.startCampaign);
   }
 }

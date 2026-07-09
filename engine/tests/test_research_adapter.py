@@ -13,6 +13,7 @@ import pytest
 
 from research import (
     Channel,
+    ExaProvider,
     FirecrawlProvider,
     FixtureProvider,
     MetaAdLibraryProvider,
@@ -20,6 +21,8 @@ from research import (
     ResearchRouter,
     default_registry,
 )
+from research.providers.exa import ExaDisabledError
+from research.providers.firecrawl import FirecrawlDisabledError
 
 
 def _router() -> ResearchRouter:
@@ -122,10 +125,22 @@ def test_live_provider_not_wired_degrades_to_note_not_crash():
     assert any("not yet wired" in n for n in r.notes)
 
 
-def test_live_providers_raise_until_wired():
-    for prov in (FirecrawlProvider(), MetaAdLibraryProvider()):
-        with pytest.raises(NotImplementedError):
-            prov.gather(ResearchQuery(intent="map_market", niche="tattoo"))
+def test_live_search_providers_gated_when_disabled():
+    # p3.0-B: Firecrawl + Exa are WIRED but GATED (mock-default). gather() on a
+    # disabled provider raises its Disabled error (the router catches it and
+    # degrades honestly), never a fabricated result.
+    q = ResearchQuery(intent="map_market", niche="tattoo", channels=(Channel.WEB,))
+    with pytest.raises(FirecrawlDisabledError):
+        FirecrawlProvider().gather(q)
+    with pytest.raises(ExaDisabledError):
+        ExaProvider().gather(q)
+
+
+def test_unwired_competitor_provider_still_raises_not_implemented():
+    # Meta Ad Library / Foreplay live client is still a stub -> NotImplementedError,
+    # which the router maps to a 'not yet wired' note.
+    with pytest.raises(NotImplementedError):
+        MetaAdLibraryProvider().gather(ResearchQuery(intent="competitor_creatives", niche="t"))
 
 
 def test_default_registry_maps_pack_sources_to_fixture_by_default():

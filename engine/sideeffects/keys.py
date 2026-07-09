@@ -17,6 +17,7 @@ class Channel(str, Enum):
     POSTING = "posting"
     OUTREACH = "outreach"
     ENGAGEMENT = "engagement"
+    SMS = "sms"
 
 
 def idempotency_key(

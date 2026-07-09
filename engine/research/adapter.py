@@ -124,6 +124,11 @@ class ProviderResult:
     communities: tuple[Community, ...] = ()
     creatives: tuple[Creative, ...] = ()
     notes: tuple[str, ...] = ()
+    # Raw, verbatim citable hits ({query,url,title,snippet}) straight off a real
+    # provider API response — the router dedupes these by url and persists them as
+    # research_sources citations. Empty for offline/fixture providers (honesty
+    # gate: only a live provider with a real API hit fills this).
+    sources: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -136,6 +141,10 @@ class ResearchResult:
     creatives: tuple[Creative, ...] = ()
     sources_used: tuple[str, ...] = ()
     notes: tuple[str, ...] = field(default_factory=tuple)
+    # The merged, url-deduped raw citable hits across all providers
+    # ({query,url,title,snippet}) — what gets persisted to research_sources. Every
+    # entry came from a real provider API response (honesty gate).
+    sources_cited: tuple[dict, ...] = field(default_factory=tuple)
 
     @property
     def is_empty(self) -> bool:

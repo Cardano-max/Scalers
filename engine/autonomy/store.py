@@ -94,6 +94,8 @@ class PostgresDecisionStore:
                     esc_label         TEXT        NOT NULL,
                     gates             JSONB       NOT NULL DEFAULT '[]'::jsonb,
                     self_consistency  DOUBLE PRECISION,
+                    confidence_components JSONB,
+                    confidence_provenance TEXT,
                     created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
                 );
                 CREATE INDEX IF NOT EXISTS autonomy_decisions_run_idx
@@ -152,6 +154,16 @@ class PostgresDecisionStore:
                     ADD COLUMN IF NOT EXISTS safety_hard_fail BOOLEAN NOT NULL DEFAULT false;
                 ALTER TABLE autonomy_jury
                     ADD COLUMN IF NOT EXISTS appr_hard_fail BOOLEAN NOT NULL DEFAULT false;
+                -- Real per-judge rationale capture (kill fabricated score-string).
+                ALTER TABLE autonomy_jury
+                    ADD COLUMN IF NOT EXISTS judge_rationale TEXT;
+                -- 4jx.17 (D6): the audit payload (raw/p_est/jury_quality/
+                -- self_consistency/cap_bind_delta) + the confidence-producer tag
+                -- the LiftController queries per channel (lift precondition (e)).
+                ALTER TABLE autonomy_decisions
+                    ADD COLUMN IF NOT EXISTS confidence_components JSONB;
+                ALTER TABLE autonomy_decisions
+                    ADD COLUMN IF NOT EXISTS confidence_provenance TEXT;
                 """
             )
 
@@ -163,9 +175,10 @@ class PostgresDecisionStore:
                 """
                 INSERT INTO autonomy_decisions (
                     decision_id, run_id, tenant_id, channel, action_kind,
-                    pooled_confidence, threshold, agreement, self_consistency, decision,
+                    pooled_confidence, threshold, agreement, self_consistency,
+                    confidence_components, confidence_provenance, decision,
                     safety_verdict, esc_kind, esc_label, gates, created_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
                 (
                     record.decision_id,
@@ -177,6 +190,10 @@ class PostgresDecisionStore:
                     record.threshold,
                     record.agreement,
                     record.self_consistency,
+                    Json(record.confidence_components)
+                    if record.confidence_components is not None
+                    else None,
+                    record.confidence_provenance,
                     record.decision.value,
                     record.safety_verdict.value,
                     record.esc.kind.value,
@@ -189,12 +206,13 @@ class PostgresDecisionStore:
                 conn.execute(
                     "INSERT INTO autonomy_jury "
                     "(decision_id, judge, family, voice, safety, appr,"
-                    " reliability_weight, voice_hard_fail, safety_hard_fail, appr_hard_fail) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    " reliability_weight, voice_hard_fail, safety_hard_fail, appr_hard_fail, judge_rationale) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                     (
                         record.decision_id, v.judge, v.family, v.voice, v.safety, v.appr,
                         v.reliability_weight,
                         v.hard_fail_for("voice"), v.hard_fail_for("safety"), v.hard_fail_for("appr"),
+                        v.judge_rationale,
                     ),
                 )
 
@@ -207,7 +225,7 @@ class PostgresDecisionStore:
                 return None
             jury = conn.execute(
                 "SELECT judge, family, voice, safety, appr,"
-                " reliability_weight FROM autonomy_jury "
+                " reliability_weight, judge_rationale FROM autonomy_jury "
                 "WHERE decision_id=%s ORDER BY judge",
                 (decision_id,),
             ).fetchall()
@@ -222,7 +240,7 @@ class PostgresDecisionStore:
             out: list[DecisionRecord] = []
             for row in rows:
                 jury = conn.execute(
-                    "SELECT judge, family, voice, safety, appr FROM autonomy_jury "
+                    "SELECT judge, family, voice, safety, appr, judge_rationale FROM autonomy_jury "
                     "WHERE decision_id=%s ORDER BY judge",
                     (row["decision_id"],),
                 ).fetchall()
@@ -231,9 +249,10 @@ class PostgresDecisionStore:
 
     @staticmethod
     def _to_record(row: dict[str, Any], jury: list[dict[str, Any]]) -> DecisionRecord:
+        run_id = row["run_id"]
         return DecisionRecord(
             decision_id=row["decision_id"],
-            run_id=row["run_id"],
+            run_id=run_id,
             tenant_id=row["tenant_id"],
             channel=row["channel"],
             action_kind=row["action_kind"],
@@ -248,6 +267,7 @@ class PostgresDecisionStore:
                     reliability_weight=(
                         v["reliability_weight"] if v.get("reliability_weight") is not None else 1.0
                     ),
+                    judge_rationale=v.get("judge_rationale", ""),
                 )
                 for v in jury
             ],
@@ -255,6 +275,8 @@ class PostgresDecisionStore:
             threshold=row["threshold"],
             agreement=row["agreement"],
             self_consistency=row.get("self_consistency"),
+            confidence_components=row.get("confidence_components"),
+            confidence_provenance=row.get("confidence_provenance"),
             gates=[GateResult(**g) for g in row["gates"]],
             safety_verdict=SafetyVerdict(row["safety_verdict"]),
             decision=RouteDecision(row["decision"]),
@@ -262,4 +284,5 @@ class PostgresDecisionStore:
             created_at=row["created_at"].isoformat()
             if hasattr(row["created_at"], "isoformat")
             else str(row["created_at"]),
+            is_seeded=run_id.startswith("demo-") if run_id else False,
         )

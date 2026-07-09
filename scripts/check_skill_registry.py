@@ -45,7 +45,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REGISTRY = REPO_ROOT / "docs" / "skills" / "registry.md"
 # Where vendored skill bundles live (a bundle = a dir containing SKILL.md).
-SKILL_ROOTS = ("skills", "engine/skills")
+SKILL_ROOTS = ("skills", "engine/skills", "engine/studio/skillpacks")
 
 _SHA_FULL = re.compile(r"\b[0-9a-f]{40}\b")
 _SHA_ANY = re.compile(r"\b[0-9a-f]{7,40}\b")

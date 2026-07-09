@@ -46,16 +46,6 @@ def typed_cell(schema: type[_T], payload: object) -> _T:
             raise CellError(f"{schema.__name__} validation failed: {exc}") from exc
 
 
-def _confidence_for(findings: list[str]) -> float:
-    """Deterministic confidence from the number of grounded findings.
-
-    A placeholder for the Phase-5 self-consistency confidence computer; kept
-    pure and monotonic so the router has a concrete signal to act on.
-    """
-
-    return min(1.0, 0.6 + 0.1 * len(findings))
-
-
 class ResearchNode:
     """Research cell: gather grounded findings for the topic."""
 
@@ -71,23 +61,44 @@ class ResearchNode:
 
 
 class AssembleNode:
-    """Assemble cell: turn findings into a draft and a confidence score."""
+    """Assemble cell: turn findings into a draft and a confidence score.
+
+    Confidence is COMPUTED via self-consistency (AUTON-02 / 4jx.3), replacing the
+    old findings-count heuristic: the draft is built K times from the same inputs
+    and confidence = modal agreement over the builds. This node is deterministic
+    pure code, so the measured value is honestly 1.0 — computed, not asserted; a
+    future stochastic assembler would immediately read lower here. The LLM-backed
+    slice (``phase1_slice.AssembleCellNode``) runs the same computation over a real
+    temp>0 probe, where variance is real.
+    """
 
     name = "assemble"
 
+    _PROBE_K = 3
+
+    @staticmethod
+    def _build_draft(research: ResearchOutput) -> str:
+        return f"# {research.topic}\n" + "\n".join(
+            f"- {finding}" for finding in research.findings
+        )
+
     async def __call__(self, state: GraphState) -> GraphState:
+        # Local import: harness is a lower layer than autonomy everywhere else;
+        # importing at call time keeps module import order acyclic-by-construction.
+        from autonomy.confidence import self_consistency
+
         research = state.research
         if research is None:
             raise CellError("assemble ran before research produced findings")
-        draft = f"# {research.topic}\n" + "\n".join(
-            f"- {finding}" for finding in research.findings
-        )
+        draft = self._build_draft(research)
         assembled = typed_cell(
             AssembleOutput, {"topic": research.topic, "draft": draft}
         )
+        # K independent builds from the same typed inputs; agreement = confidence.
+        signatures = [self._build_draft(research) for _ in range(self._PROBE_K)]
         return {  # type: ignore[return-value]
             "assembled": assembled,
-            "confidence": _confidence_for(research.findings),
+            "confidence": self_consistency(signatures),
             "step_log": ["assemble"],
         }
 

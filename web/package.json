@@ -13,8 +13,6 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@copilotkit/react-core": "1.8.14",
-    "@copilotkit/react-ui": "1.8.14",
     "graphql": "16.9.0",
     "next": "14.2.15",
     "react": "18.3.1",

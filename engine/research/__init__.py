@@ -23,7 +23,13 @@ from research.adapter import (
     SourceProvider,
     UnsupportedIntent,
 )
-from research.providers import FirecrawlProvider, FixtureProvider, MetaAdLibraryProvider
+from research.providers import (
+    ExaProvider,
+    FirecrawlProvider,
+    FixtureProvider,
+    MetaAdLibraryProvider,
+)
+from research.pipeline import gather_and_persist, live_registry
 from research.router import ResearchRouter
 from research.safety import (
     OFFICIAL_API_HOSTS,
@@ -69,8 +75,11 @@ __all__ = [
     "ResearchRouter",
     "FixtureProvider",
     "FirecrawlProvider",
+    "ExaProvider",
     "MetaAdLibraryProvider",
     "default_registry",
+    "live_registry",
+    "gather_and_persist",
     "assert_safe_url",
     "assert_official_endpoint",
     "assert_resolved_ips_safe",

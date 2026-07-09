@@ -11,6 +11,7 @@ Two layers:
 from __future__ import annotations
 
 import os
+import uuid
 
 import pytest
 
@@ -94,6 +95,38 @@ def test_recorded_confidence_present_on_some_rows():
     assert all(0.0 <= e.input["recorded_confidence"] <= 1.0 for e in withconf)
 
 
+def test_load_prunes_to_current_hashes_db_free():
+    """CustomerAcq-wwy.5 (DB-free wiring guard, runs in the done-gate): the loader
+    is authoritative — it prunes SMOKE rows to EXACTLY the current set's content
+    hashes, so a relabel can't leave stale rows behind on a persistent KB."""
+    from kb.store import content_hash
+
+    class _RecordingStore:
+        """Captures the prune call without a database."""
+
+        def __init__(self) -> None:
+            self.pruned: tuple | None = None
+
+        def upsert_gold_example(self, **_kw) -> str:
+            return "example-id"
+
+        def add_gold_label(self, **_kw) -> str:
+            return "label-id"
+
+        def prune_gold_examples(self, *, tenant_id, split, keep_content_hashes, **_kw) -> int:
+            self.pruned = (tenant_id, split, set(keep_content_hashes))
+            return 0
+
+    store = _RecordingStore()
+    load_smoke_gold_set(store)
+    assert store.pruned is not None, "loader must prune stale rows (authoritative load)"
+    tenant, split, keep = store.pruned
+    assert tenant == SMOKE_TENANT
+    assert split == SMOKE_SPLIT
+    # keep set is EXACTLY the current in-memory set — nothing more, nothing less.
+    assert keep == {content_hash(e.input) for e in iter_smoke_examples()}
+
+
 # ── Integration: real Postgres KB ─────────────────────────────────────────────
 
 _pg = pytest.mark.skipif(
@@ -102,8 +135,59 @@ _pg = pytest.mark.skipif(
 )
 
 
+# These integration tests wipe+reseed the eval-KB tables on the fixed SMOKE_TENANT.
+# The suite's Postgres is SHARED — other engine workers run the same smoke loader
+# concurrently — and ``TRUNCATE gold_example`` is table-wide (NOT tenant-scoped, and
+# the fixture role is a BYPASSRLS superuser so RLS can't gate it either), so a
+# neighbour's truncate can delete an example row between our own
+# ``upsert_gold_example`` and its dependent ``gold_label`` insert, surfacing as a
+# ForeignKeyViolation. We isolate this module's eval-KB into a PRIVATE per-process
+# schema (via ``search_path``): a concurrent ``TRUNCATE public.gold_example`` can no
+# longer touch our rows, so the gold-set tests are deterministic regardless of what
+# else is hitting the database (CustomerAcq-gel).
+_ISO_SCHEMA = f"smoke_gel_{os.getpid()}_{uuid.uuid4().hex[:8]}"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _isolated_schema():
+    """Create (and drop) a private schema so this module's eval-KB never collides
+    with a concurrent worker's ``public`` gold tables on the shared Postgres.
+
+    DB-FREE LANE: this fixture is autouse, so it also wraps the module's pure
+    dataset-shape tests. With no ENGINE_DATABASE_URL (the CI unit lane) it must
+    not touch Postgres at all — the DB-backed tests are separately guarded by
+    the ``_pg`` skipif and never run there."""
+    if not os.getenv("ENGINE_DATABASE_URL"):
+        yield
+        return
+
+    import psycopg
+
+    from tests.conftest import DB_DSN
+
+    with psycopg.connect(DB_DSN, autocommit=True) as conn:
+        conn.execute(f'DROP SCHEMA IF EXISTS "{_ISO_SCHEMA}" CASCADE')
+        conn.execute(f'CREATE SCHEMA "{_ISO_SCHEMA}"')
+    yield
+    with psycopg.connect(DB_DSN, autocommit=True) as conn:
+        conn.execute(f'DROP SCHEMA IF EXISTS "{_ISO_SCHEMA}" CASCADE')
+
+
+@pytest.fixture
+def dsn(_isolated_schema) -> str:
+    """Point every eval-KB connection this module opens (fixture setup + the
+    KbStore) at the private schema, so its tables are isolated from ``public``."""
+    from tests.conftest import DB_DSN, bounded_dsn
+
+    return bounded_dsn(DB_DSN, search_path=f"{_ISO_SCHEMA},public")
+
+
 @pytest.fixture
 def kb_store(dsn):
+    """A clean eval-KB store, materialized inside the module's private schema so a
+    concurrent worker's ``TRUNCATE public.gold_example`` cannot wipe our rows
+    mid-test (CustomerAcq-gel). The reseed still runs through the normal
+    tenant-scoped DAL, so tenant isolation stays exercised."""
     import psycopg
 
     from kb.store import KbStore
@@ -111,6 +195,8 @@ def kb_store(dsn):
 
     schema = Path(__file__).resolve().parents[2] / "infra" / "initdb" / "03-eval-kb.sql"
     with psycopg.connect(dsn, autocommit=True) as conn:
+        # search_path[0] is the private schema, so the eval-KB tables are created
+        # and wiped THERE — isolated from any concurrent truncate on public.
         conn.execute(schema.read_text(encoding="utf-8"))
         conn.execute("TRUNCATE gold_example, gold_label, eval_metric")
     return KbStore(dsn)
@@ -154,6 +240,57 @@ def test_real_holdout_query_returns_zero_smoke_rows(kb_store):
     assert all(r.split is SMOKE_SPLIT for r in smoke)
     # the holdout row is not in the smoke set and vice-versa
     assert {r.id for r in holdout}.isdisjoint({r.id for r in smoke})
+
+
+@pytest.mark.integration
+@_pg
+def test_reload_prunes_a_stale_row(kb_store):
+    """CustomerAcq-wwy.5: a SMOKE row no longer in the current set is pruned on the
+    next load, so the persistent KB holds EXACTLY the current dataset (the honest
+    set the gate scores) — never a superset that could false-fail."""
+    load_smoke_gold_set(kb_store)
+    assert sum(len(get_smoke_set(kb_store, e)) for e in _ENGINES) == len(iter_smoke_examples())
+
+    # Seed a stale SMOKE row (an old-taxonomy example no longer in _ALL).
+    stale_id = kb_store.upsert_gold_example(
+        tenant_id=SMOKE_TENANT, engine=Engine.ENGAGEMENT, cell="triage",
+        input={"kind": "engagement", "channel": "comment", "text": "STALE old-taxonomy row"},
+        expected={"triage_class": "spam", "reply_safety": "safe-to-auto"},
+        split=SMOKE_SPLIT,
+    )
+    assert any(r.id == stale_id for r in get_smoke_set(kb_store, Engine.ENGAGEMENT))
+
+    # Re-load: authoritative -> stale row pruned, current set intact (no dup, no drift).
+    load_smoke_gold_set(kb_store)
+    eng_rows = get_smoke_set(kb_store, Engine.ENGAGEMENT)
+    assert all(r.id != stale_id for r in eng_rows), "stale row must be pruned"
+    assert sum(len(get_smoke_set(kb_store, e)) for e in _ENGINES) == len(iter_smoke_examples())
+
+
+@pytest.mark.integration
+@_pg
+def test_prune_never_touches_holdout_or_other_tenants(kb_store):
+    """The prune is SMOKE-split + tenant scoped: a real HOLDOUT row and another
+    tenant's row both survive a smoke re-load."""
+    load_smoke_gold_set(kb_store)
+    holdout_id = kb_store.upsert_gold_example(
+        tenant_id=SMOKE_TENANT, engine=Engine.POSTING, cell="copywriter",
+        input={"kind": "caption", "text": "a real holdout caption"},
+        expected={"on_voice": True}, split=Split.HOLDOUT,
+    )
+    other_id = kb_store.upsert_gold_example(
+        tenant_id="real-client-xyz", engine=Engine.ENGAGEMENT, cell="triage",
+        input={"kind": "engagement", "channel": "comment", "text": "another tenant's row"},
+        expected={"triage_class": "positive", "reply_safety": "safe-to-auto"},
+        split=SMOKE_SPLIT,
+    )
+
+    load_smoke_gold_set(kb_store)  # prune runs for SMOKE_TENANT / SMOKE split only
+
+    holdout = kb_store.get_gold_set(tenant_id=SMOKE_TENANT, engine=Engine.POSTING, split=Split.HOLDOUT)
+    assert any(r.id == holdout_id for r in holdout), "HOLDOUT row must survive the prune"
+    other = kb_store.get_gold_set(tenant_id="real-client-xyz", engine=Engine.ENGAGEMENT, split=SMOKE_SPLIT)
+    assert any(r.id == other_id for r in other), "another tenant's row must survive the prune"
 
 
 @pytest.mark.integration

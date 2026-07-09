@@ -103,4 +103,36 @@ trustworthy gold set at scale.
 - **Label versioning**: any rubric change bumps `label_version`; old metrics stay attached to their version so a re-label never silently invalidates history; new evals compare like-for-like.
 
 ---
-*Owner: pm. Created 2026-06-28 for CustomerAcq-rvy.3. Hard-negative floor (§3) is the citeable figure for rvy.4/rvy.5/rvy.6.*
+
+## 8. Route-independent gold labeling — the AUTO-routed audit (4jx.16)
+
+The two-gate confidence honesty check (holdout ECE on `p_est` + the per-channel
+directional bound `P(correct | routed ≥ threshold) ≥ threshold − 0.05`) is only
+meaningful if AUTO-routed items get ground-truth labels **independently of the
+route**. Review-routed items are human-inspected for free; AUTO-routed ones never
+are — so without an explicit audit, `P(correct | routed ≥ threshold)` is
+unmeasurable exactly where autonomy is riskiest, and the labeled population is
+selection-biased toward the engine's own uncertainty.
+
+**Protocol:**
+- A **fixed-rate random sample of AUTO-routed decisions** (default **10%, min 10
+  per channel per week while a lift is active or sought**) is pulled for human
+  labeling. Selection is random over AUTO-routed decisions — never triggered by
+  outcome, complaint, or reviewer curiosity (that reintroduces the bias).
+- Audited items are labeled under the **same §4 rubrics and §5 multi-rater
+  process** as ordinary gold, by raters **blind to the routed confidence and to
+  the fact that the item auto-fired**.
+- Each audited decision is assigned a **split** (`CALIBRATION` or `HOLDOUT`,
+  ~50/50 randomized at audit time, sticky per decision) and fed to the
+  decisions-lane runner (`evals.calibration.run_decision_calibration_gate`),
+  which reads `p_est` from `autonomy_decisions.confidence_components` — never
+  from `pooled_confidence` (the capped routed value).
+- Review-routed decisions that receive labels through ordinary operator review
+  may ALSO enter the pool (they are route-covered by construction), but the
+  AUTO audit rate above is the floor that makes the directional gate honest.
+
+*This section is the AC-mandated documentation for bead CustomerAcq-4jx.16
+(ADR Phase-5 D2/D5-as-amended, PR #93).*
+
+---
+*Owner: pm. Created 2026-06-28 for CustomerAcq-rvy.3. Hard-negative floor (§3) is the citeable figure for rvy.4/rvy.5/rvy.6. §8 added 2026-07-02 by eng4 per 4jx.16 AC (pm to review).*

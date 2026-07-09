@@ -12,12 +12,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from contextlib import contextmanager
 from typing import Any, Iterator
 
 import psycopg
 
-from kb.embedding import DeterministicEmbedder, Embedder, to_pgvector
+from kb.embedding import Embedder, default_embedder, to_pgvector
 from kb.schema import (
     Direction,
     Engine,
@@ -42,7 +43,9 @@ class KbStore:
 
     def __init__(self, dsn: str, embedder: Embedder | None = None) -> None:
         self._dsn = dsn
-        self._embedder = embedder or DeterministicEmbedder()
+        # Default = the REAL semantic embedder (bge-small-en-v1.5); offline runs
+        # opt into the deterministic stub via $SCALERS_EMBEDDER (make_embedder).
+        self._embedder = embedder or default_embedder()
 
     @contextmanager
     def _conn(self, tenant_id: str | None) -> Iterator[psycopg.Connection]:
@@ -146,6 +149,43 @@ class KbStore:
             for r in rows
         ]
 
+    def prune_gold_examples(
+        self,
+        *,
+        tenant_id: str,
+        split: Split | str,
+        keep_content_hashes: Sequence[str],
+        label_version: int | None = None,
+    ) -> int:
+        """Delete gold examples for ``(tenant, split)`` whose ``content_hash`` is
+        NOT in ``keep_content_hashes``, so a loader is *authoritative* for its
+        dataset (CustomerAcq-wwy.5).
+
+        Without this, a loader is upsert-only: after a relabel or reworded example
+        (a new ``content_hash``) the old rows linger on a persistent KB, so the
+        gate scores a superset of the intended dataset and can false-fail. Pruning
+        the rows absent from the current set restores the honest-measurement
+        property on a long-lived KB (CI already truncates, so it was correct there).
+
+        Scoped to ``tenant_id`` (explicit filter + the RLS ``app.current_tenant``)
+        AND ``split``, so real HOLDOUT / TRAIN / CALIBRATION rows and every other
+        tenant are never touched. ``gold_label`` rows cascade with their example
+        (FK ``ON DELETE CASCADE``). Returns the number of examples deleted.
+        """
+        split_v = split.value if isinstance(split, Split) else str(split)
+        keep = list(keep_content_hashes)
+        clauses = ["tenant_id = %s", "split = %s", "content_hash <> ALL(%s::text[])"]
+        params: list[Any] = [tenant_id, split_v, keep]
+        if label_version is not None:
+            clauses.append("label_version = %s")
+            params.append(label_version)
+        with self._conn(tenant_id) as conn:
+            rows = conn.execute(
+                "DELETE FROM gold_example WHERE " + " AND ".join(clauses) + " RETURNING id",
+                params,
+            ).fetchall()
+        return len(rows)
+
     # ── gold labels (per rater x dimension) ──────────────────────────────────
 
     def add_gold_label(
@@ -202,8 +242,10 @@ class KbStore:
                 "INSERT INTO eval_metric"
                 " (scope, tenant_id, engine, cell, metric, value, threshold, direction,"
                 "  passed, run_kind, label_version, model_pins_hash, prompt_version,"
-                "  dataset_hash, git_sha, langfuse_trace_id)"
-                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                "  dataset_hash, git_sha, langfuse_trace_id, confidence_provenance,"
+                "  channel)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                " RETURNING id",
                 (
                     metric.scope.value, metric.tenant_id, metric.engine, metric.cell,
                     metric.metric, metric.value, metric.threshold,
@@ -211,6 +253,7 @@ class KbStore:
                     metric.run_kind.value if metric.run_kind else None,
                     metric.label_version, metric.model_pins_hash, metric.prompt_version,
                     metric.dataset_hash, metric.git_sha, metric.langfuse_trace_id,
+                    metric.confidence_provenance, metric.channel,
                 ),
             ).fetchone()
             return str(row[0])
@@ -224,6 +267,7 @@ class KbStore:
         cell: str | None = None,
         metric: str | None = None,
         label_version: int | None = None,
+        channel: str | None = None,
     ) -> list[EvalMetric]:
         """Read metric history, tenant-scoped. Requires ``tenant_id`` unless
         ``scope=GLOBAL`` is given explicitly — never returns cross-tenant rows."""
@@ -236,7 +280,8 @@ class KbStore:
         else:
             clauses.append("tenant_id = %s")
             params.append(tenant_id)
-        for col, val in (("engine", engine), ("cell", cell), ("metric", metric)):
+        for col, val in (("engine", engine), ("cell", cell), ("metric", metric),
+                         ("channel", channel)):
             if val is not None:
                 clauses.append(f"{col} = %s")
                 params.append(val)
@@ -248,7 +293,8 @@ class KbStore:
             rows = conn.execute(
                 "SELECT id, scope, tenant_id, engine, cell, metric, value, threshold,"
                 " direction, passed, run_kind, label_version, model_pins_hash,"
-                " prompt_version, dataset_hash, git_sha, langfuse_trace_id, created_at"
+                " prompt_version, dataset_hash, git_sha, langfuse_trace_id, created_at,"
+                " confidence_provenance, channel"
                 " FROM eval_metric WHERE " + " AND ".join(clauses) + " ORDER BY created_at",
                 params,
             ).fetchall()
@@ -260,6 +306,7 @@ class KbStore:
                 run_kind=RunKind(r[10]) if r[10] else None, label_version=r[11],
                 model_pins_hash=r[12], prompt_version=r[13], dataset_hash=r[14],
                 git_sha=r[15], langfuse_trace_id=r[16], created_at=r[17],
+                confidence_provenance=r[18], channel=r[19],
             )
             for r in rows
         ]

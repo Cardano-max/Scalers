@@ -10,23 +10,31 @@
 import type { ComponentType } from 'react';
 import type { ScreenId } from '@/state/console-store';
 import { SmokeScreen } from './SmokeScreen';
-import { EmptyState } from './states';
-
-function pending(name: string, bead: string): ComponentType {
-  const Pending = () => (
-    <div style={{ padding: 'var(--pad-section)' }}>
-      <EmptyState title={`${name} — coming up`} hint={`Built on this foundation in bead ${bead}.`} />
-    </div>
-  );
-  Pending.displayName = `Pending(${name})`;
-  return Pending;
-}
+import { ReviewScreen } from './ReviewScreen';
+import { ActivityScreen } from './ActivityScreen';
+import { RunsScreen } from './RunsScreen';
+import { FeedScreen } from './FeedScreen';
+import { VoiceScreen } from './studio/VoiceScreen';
+import { AgencyScreen } from './studio/AgencyScreen';
+import { ArtistsScreen } from './studio/ArtistsScreen';
+import { StepDetailScreen } from './StepDetailScreen';
+import { MemoryScreen } from './MemoryScreen';
 
 export const SCREENS: Record<ScreenId, ComponentType> = {
+  // Voice-first: the talk-to-your-agency hero (default landing). Agency: the
+  // full-screen live per-agent reasoning stream. Both bind to the SHARED studio run
+  // (StudioRunProvider in AppShell) so a voice-launched run plays in both, real-only.
+  voice: VoiceScreen,
+  agency: AgencyScreen,
+  // Artist roster + profile (spec section 4/20) — real /studio/artists data.
+  artists: ArtistsScreen,
   overview: SmokeScreen,
-  review: pending('Review queue', '45v.3'),
-  activity: pending('Activity', '45v.4'),
-  feed: pending('Live feed', '45v.7'),
-  runs: pending('Runs', '45v.5'),
-  command: pending('Command', '45v.9'),
+  review: ReviewScreen,
+  activity: ActivityScreen,
+  feed: FeedScreen,
+  runs: RunsScreen,
+  // ju1.5: the campaign-example memory (real transcribed past campaigns).
+  memory: MemoryScreen,
+  // drill-only — not in NAV_ITEMS; reached via navigate('step_detail', actionId)
+  step_detail: StepDetailScreen,
 };

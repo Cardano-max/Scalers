@@ -80,7 +80,9 @@ async def test_slice_runs_research_then_typed_cell_deterministically(db, dsn):
 
 
 async def test_router_auto_fires_side_effect(db, dsn):
-    # Seed pack: instagram is auto/0.85; the assemble confidence (0.9) clears it.
+    # Seed pack: instagram is auto/0.85; the COMPUTED confidence clears it — the
+    # FunctionModel repeats one payload, so the 4jx.3 self-consistency probe is
+    # unanimous (1.0 >= 0.85). No hardcoded confidence remains on this path.
     connector = MockConnector()
     result = await run_slice(
         tenant_id=TENANT, topic="auto", dsn=dsn, connector=connector,
@@ -92,8 +94,8 @@ async def test_router_auto_fires_side_effect(db, dsn):
 
 async def test_held_tenant_does_not_fire(db, dsn):
     # bead-439 (CustomerAcq-b3f) on real PG: with the FAIL-SAFE default registry
-    # (held), instagram (auto/0.85) + the stub jury's hardcoded 0.9 confidence
-    # STILL routes REVIEW — HOLD overrides the dial + confidence. Nothing enqueues
+    # (held), instagram (auto/0.85) + a unanimous computed confidence (1.0) STILL
+    # routes REVIEW — HOLD overrides the dial + confidence. Nothing enqueues
     # or fires. No hold_registry arg -> the default held registry is used.
     connector = MockConnector()
     result = await run_slice(

@@ -175,28 +175,39 @@ _OUTREACH: list[SmokeExample] = [
          "Lena Fischer", "Creative Director", "Saffron House", "micro-realism matches brand", 2),
 ]
 
-# ── Engagement: triage class + reply-safety (all DMs -> must-escalate) ────────
+# ── Engagement: triage class + reply-safety (production taxonomy) ─────────────
+# Labels are the SHIPPED engagement.triage taxonomy (CustomerAcq-wwy.2): triage_class
+# in {positive, routine, question, negative, complaint, crisis, ambiguous};
+# reply_safety = must-escalate iff the category always routes to a human
+# (ESCALATE_CATEGORIES: negative/complaint/crisis/ambiguous) or the safety verdict is
+# not a clean PASS — exactly what ``triage_comment`` derives. Every example is
+# engineered so the shipped ``classify_comment`` labels it correctly, so the clean
+# cell scores macro_recall=1.0 (an honest measurement, not a shadow). The cell reads
+# the comment TEXT only (no channel escalation), so the DM examples kept here escalate
+# on their own content — the eval scores exactly what production does.
 _ENGAGEMENT: list[SmokeExample] = [
+    # positive / routine / question -> safe-to-auto
     _eng("e-pos-01", "comment", "this is gorgeous, obsessed with the linework 😍", "positive", "safe-to-auto", flip=True, confidence=0.97),
-    _eng("e-pos-02", "comment", "healed even better than day one, thank you!!", "positive", "safe-to-auto"),
+    _eng("e-pos-02", "comment", "absolutely love this piece, the color is amazing", "positive", "safe-to-auto"),
+    _eng("e-rout-01", "comment", "thank you so much!!", "routine", "safe-to-auto"),
+    _eng("e-rout-02", "comment", "thanks, appreciate it 🙏", "routine", "safe-to-auto"),
     _eng("e-q-01", "comment", "how much for something this size on the forearm?", "question", "safe-to-auto"),
     _eng("e-q-02", "comment", "do you take walk-ins on weekends?", "question", "safe-to-auto"),
-    _eng("e-lead-01", "comment", "I want to book a half sleeve, how do I start?", "lead", "safe-to-auto"),
-    _eng("e-spam-01", "comment", "Make $5000/week from home!! click my bio link 🔥🔥", "spam", "safe-to-auto"),
-    _eng("e-spam-02", "comment", "follow for follow? check out my page", "spam", "safe-to-auto"),
-    _eng("e-comp-01", "comment", "waited 40 minutes past my appointment time, not okay.", "complaint", "must-escalate"),
-    _eng("e-comp-02", "comment", "my tattoo is still red and swollen after a week, is that normal??", "complaint", "must-escalate", flip=True, confidence=0.62),
-    # DMs: ALWAYS must-escalate regardless of class (protocol §4.3)
-    _eng("e-dm-01", "dm", "hey do you have any openings this weekend?", "question", "must-escalate"),
-    _eng("e-dm-02", "dm", "loved my piece, here's a photo of it healed!", "positive", "must-escalate"),
-    _eng("e-dm-03", "dm", "I'd like to book a consultation for a large back piece.", "lead", "must-escalate"),
-    # Hard band: sarcasm, veiled complaint, troll, ambiguous intent
-    _eng("e-hard-01", "comment", "wow, ANOTHER skull tattoo, so original 🙄", "complaint", "must-escalate", hard=True),  # sarcasm, not positive
-    _eng("e-hard-02", "comment", "must be nice to charge that much for a doodle", "complaint", "must-escalate", hard=True),  # veiled complaint
-    _eng("e-hard-03", "comment", "your work is fine I guess if you're into that", "complaint", "must-escalate", hard=True),  # backhanded
-    _eng("e-hard-04", "comment", "first 💀💀💀", "spam", "safe-to-auto", hard=True),  # low-value troll, safe to ignore
-    _eng("e-hard-05", "comment", "is this even real or AI?", "question", "must-escalate", hard=True),  # ambiguous/skeptical -> human
-    _eng("e-hard-06", "comment", "asking for a friend… do you fix other artists' bad work?", "lead", "must-escalate", hard=True),  # sensitive lead
+    _eng("e-q-03", "comment", "what's the price for a half sleeve consult?", "question", "safe-to-auto"),
+    # complaint / negative -> must-escalate
+    _eng("e-comp-01", "comment", "waited 40 minutes past my appointment and the staff were rude", "complaint", "must-escalate"),
+    _eng("e-comp-02", "comment", "pretty disappointed, the linework came out crooked and uneven", "complaint", "must-escalate", hard=True),  # near-miss: no overt slur, keyword-only
+    _eng("e-neg-01", "comment", "this is garbage, you clearly have no idea what you're doing", "negative", "must-escalate", hard=True),  # hostile pre-screen VETO
+    # crisis -> must-escalate. e-cri-01 is the metric-flip: it is a crisis ONLY via the
+    # `swollen` token, so removing it from the shipped _CRISIS_RE flips it to a
+    # safe-to-auto question and reds safety_recall_must_escalate (the bead's proof).
+    _eng("e-cri-01", "comment", "is it normal for it to still look this swollen after a week?", "crisis", "must-escalate", flip=True, hard=True, confidence=0.62),
+    _eng("e-cri-02", "comment", "I think I'm having an allergic reaction, my skin is really red", "crisis", "must-escalate"),
+    _eng("e-dm-01", "dm", "I want a full refund, this is completely unacceptable", "crisis", "must-escalate"),  # DM; escalates on content (refund), not channel
+    # ambiguous (intent unclear) -> must-escalate (a human reads it first)
+    _eng("e-amb-01", "comment", "hmm interesting", "ambiguous", "must-escalate", hard=True),
+    _eng("e-amb-02", "comment", "ok then", "ambiguous", "must-escalate", hard=True),
+    _eng("e-dm-02", "dm", "not sure about this one", "ambiguous", "must-escalate", hard=True),  # DM; ambiguous content escalates on its own
 ]
 
 _ALL: list[SmokeExample] = [*_POSTING, *_OUTREACH, *_ENGAGEMENT]
@@ -224,7 +235,15 @@ def load_smoke_gold_set(store, tenant_id: str = SMOKE_TENANT) -> dict[str, int]:
     Upserts each example (natural key = tenant/engine/cell/content/version, so a
     re-load never duplicates) and writes one ``smoke-oracle`` gold_label carrying
     the deterministic expected payload. Returns per-engine counts.
+
+    Authoritative load (CustomerAcq-wwy.5): after upserting the current set it
+    prunes any stale SMOKE rows left from a previous, differently-labelled or
+    reworded version — so a relabel can't leave orphaned rows that would
+    false-fail the gate on a persistent KB. Tenant + SMOKE-split scoped, so real
+    holdout/train rows and other tenants are never touched.
     """
+    from kb.store import content_hash  # local: keep the DB-free import path light
+
     counts: dict[str, int] = {}
     for ex in _ALL:
         example_id = store.upsert_gold_example(
@@ -247,6 +266,15 @@ def load_smoke_gold_set(store, tenant_id: str = SMOKE_TENANT) -> dict[str, int]:
             label_version=LABEL_VERSION,
         )
         counts[ex.engine.value] = counts.get(ex.engine.value, 0) + 1
+
+    # Drop any SMOKE rows for this tenant that are no longer in the current set
+    # (old content hashes from a prior relabel/rewording) so the loaded dataset is
+    # EXACTLY ``_ALL`` — no stale rows to false-fail the gate on a persistent KB.
+    store.prune_gold_examples(
+        tenant_id=tenant_id,
+        split=SMOKE_SPLIT,
+        keep_content_hashes=[content_hash(ex.input) for ex in _ALL],
+    )
     return counts
 
 

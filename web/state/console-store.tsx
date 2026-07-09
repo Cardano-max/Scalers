@@ -16,30 +16,47 @@ import {
 } from 'react';
 
 export type ScreenId =
+  | 'voice'
+  | 'agency'
+  | 'artists'
   | 'overview'
   | 'review'
   | 'activity'
   | 'feed'
   | 'runs'
-  | 'command';
+  | 'memory'
+  | 'step_detail';
 
 export interface NavItemDef {
   id: ScreenId;
   label: string;
 }
 
-/** The locked nav order (Activity included — handoff "NEW" screen / bead 45v.4). */
+/**
+ * Nav order. Voice is the ONE unified conversation (talk OR type — same session,
+ * same transcript); Agency is the live war-room that watches the run it spins up.
+ * Both bind to the SHARED studio run; the real-data tabs follow, unchanged. The
+ * old separate Command chat tab (its own session + its own voice console) was
+ * removed so there is a single conversation surface, not two.
+ */
 export const NAV_ITEMS: NavItemDef[] = [
+  { id: 'voice', label: 'Voice' },
+  { id: 'agency', label: 'Agency' },
+  // Artist roster + per-artist profiles (spec section 4/20).
+  { id: 'artists', label: 'Artists' },
   { id: 'overview', label: 'Overview' },
   { id: 'review', label: 'Review queue' },
   { id: 'activity', label: 'Activity' },
   { id: 'feed', label: 'Live feed' },
   { id: 'runs', label: 'Runs' },
-  { id: 'command', label: 'Command' },
+  // ju1.5: the campaign-example memory (real transcribed past campaigns).
+  { id: 'memory', label: 'Campaign memory' },
 ];
 
 interface ConsoleState {
   screen: ScreenId;
+  /** Optional context ID (action/run/feed-event) to auto-select when navigating. */
+  contextId: string | null;
   /** Whether an inline edit (e.g. Review-queue draft) is open. Reset on nav. */
   editing: boolean;
   /** The in-progress edit buffer. Reset on nav. */
@@ -47,7 +64,8 @@ interface ConsoleState {
 }
 
 type Action =
-  | { type: 'navigate'; screen: ScreenId }
+  | { type: 'navigate'; screen: ScreenId; contextId?: string | null }
+  | { type: 'setContext'; contextId: string | null }
   | { type: 'startEditing'; draftText: string }
   | { type: 'setDraft'; draftText: string }
   | { type: 'cancelEditing' };
@@ -55,9 +73,20 @@ type Action =
 function reducer(state: ConsoleState, action: Action): ConsoleState {
   switch (action.type) {
     case 'navigate':
-      if (action.screen === state.screen) return state;
+      if (action.screen === state.screen) {
+        // Same screen: a bare nav (no target) stays a no-op so an in-progress
+        // edit buffer survives (handoff rule). But an intra-screen DEEP-LINK
+        // (a chip/back-link that targets a specific row on the screen you are
+        // already on) MUST update contextId — otherwise clicking "Open run" for
+        // run B while already on Runs would do nothing. The editing buffer is
+        // left intact: selecting a different row is not a screen switch.
+        if (action.contextId == null) return state;
+        return { ...state, contextId: action.contextId };
+      }
       // Reset editing state on every screen switch (handoff behavior).
-      return { screen: action.screen, editing: false, draftText: '' };
+      return { screen: action.screen, contextId: action.contextId ?? null, editing: false, draftText: '' };
+    case 'setContext':
+      return { ...state, contextId: action.contextId };
     case 'startEditing':
       return { ...state, editing: true, draftText: action.draftText };
     case 'setDraft':
@@ -70,7 +99,8 @@ function reducer(state: ConsoleState, action: Action): ConsoleState {
 }
 
 interface ConsoleStore extends ConsoleState {
-  navigate: (screen: ScreenId) => void;
+  navigate: (screen: ScreenId, contextId?: string | null) => void;
+  setContext: (contextId: string | null) => void;
   startEditing: (draftText: string) => void;
   setDraft: (draftText: string) => void;
   cancelEditing: () => void;
@@ -87,6 +117,7 @@ export function ConsoleProvider({
 }) {
   const [state, dispatch] = useReducer(reducer, {
     screen: initialScreen,
+    contextId: null,
     editing: false,
     draftText: '',
   });
@@ -94,7 +125,8 @@ export function ConsoleProvider({
   const store = useMemo<ConsoleStore>(
     () => ({
       ...state,
-      navigate: (screen) => dispatch({ type: 'navigate', screen }),
+      navigate: (screen, contextId) => dispatch({ type: 'navigate', screen, contextId }),
+      setContext: (contextId) => dispatch({ type: 'setContext', contextId }),
       startEditing: (draftText) => dispatch({ type: 'startEditing', draftText }),
       setDraft: (draftText) => dispatch({ type: 'setDraft', draftText }),
       cancelEditing: () => dispatch({ type: 'cancelEditing' }),
@@ -111,6 +143,13 @@ export function useConsole(): ConsoleStore {
   const ctx = useContext(ConsoleContext);
   if (!ctx) throw new Error('useConsole must be used within a <ConsoleProvider>');
   return ctx;
+}
+
+/** Non-throwing read of the console store — returns null when used outside a
+ *  <ConsoleProvider>. For optional reads (e.g. a deep-link contextId) on screens
+ *  that must also render in isolation (unit tests render them bare). */
+export function useConsoleOptional(): ConsoleStore | null {
+  return useContext(ConsoleContext);
 }
 
 // Exported for unit testing the reset-on-nav invariant directly.

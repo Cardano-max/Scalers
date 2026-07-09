@@ -41,6 +41,16 @@ This document is **governance + the adopt-list**. The operator approves adoption
 | anthropics/skills `xlsx` *(1mk.8 scout)* | `anthropics/skills` — `skills/xlsx` @ `35414756ca55738e050562e272a6bbc6273aa926` (**license: Proprietary**) | **REJECTED-for-vendoring** (sec) | License Proprietary → not vendorable. Ships `office/` exec helpers (soffice/pack/validate) — file-exec surface. | — | — | none | **REJECTED** — mine the idea only; reporting built ORIGINAL (1mk.8). |
 | **outreach-sequence-builder** *(1mk.7)* | "outreach-sequence-builder" (r/ClaudeAI 20-skills) @ `ORIGINAL` (no upstream code vendored — mine-patterns-only; coldoutbound family is REJECTED, not a pin source) | **APPROVED — ELIGIBLE** (sec S1 2026-06-28, see §Sign-off) | Nothing vendored; the REJECTED family's money/send capability (`coldoutboundskills` real-money; marketingskills email-SEND CLIs) **not taken**. Sending = harness side-effect boundary, **439-gated**. Enforcement is deterministic `engine/outreach/`. See `skills/outreach-sequence-builder/VETTING.md`. | `skills/outreach-sequence-builder/` + `engine/outreach/` | **PENDING-on-gold-set** (`evals/gold/outreach-smoke.jsonl`; calibration = rvy.7/.8) | *(intended: outreach engine — sequence)* | **ELIGIBLE (conditional)** — strip verified by sec (deterministic; suppression-first, capped, NEVER auto-sends — `plan.will_send` always False); eval-gate PENDING-on-gold-set; operator adoption pending; **all sends remain 439-gated at the harness side-effect boundary (approve-first)** |
 | **cold-email-verifier** *(1mk.7, verifier-only)* | "cold-email-verifier" (r/ClaudeAI 20-skills) @ `ORIGINAL` (no upstream code vendored — verify-half only; broker enrich/guess/send NOT adopted) | **APPROVED — ELIGIBLE** (sec S1 2026-06-28, see §Sign-off) | **guess/enrich/auto-CSV (broker enrichment) NOT adopted** (apollo/hunter class — REJECTED); no send; deterministic verify-only (syntax/disposable/role/shape). Live MX probe = separate eng seam (own resolver + TLS). See `skills/cold-email-verifier/VETTING.md`. | `skills/cold-email-verifier/` + `engine/outreach/verifier.py` | **PENDING-on-gold-set** | *(intended: outreach engine — deliverability gate)* | **ELIGIBLE (conditional)** — strip verified by sec (deterministic verify-only; no broker/guess/enrich/send); eval-gate PENDING-on-gold-set; operator adoption pending; **live MX-probe seam to be re-vetted by sec before live (own resolver + TLS)** |
+| **customer-psychology** *(P1.5 scaffold)* | ORIGINAL — first-party wrapper of `engine/studio/psych_profile.py` (no upstream code vendored) @ `ORIGINAL` (no upstream repo to pin; matches the pack `SKILL.md` `pinned: ORIGINAL`) | **APPROVED — REGISTERED** (sec S1 2026-06-29, kmu): vetted real code — no bundled untrusted script; capability matches claim; NO-FABRICATION gate verified (`_validate_field` downgrades to insufficient-signal when the evidence quote is not literally in the lead's text; `test_psych_profile.py` 6/6 incl. every-stated-read-traces-to-a-real-span + absent-quote-rejected). **Operator-adoption:** first-party, operator-approved 2026-06-29. | **Nothing vendored** — thin progressive-disclosure loader around our OWN already-live, already-tested analyst (13 passing tests); no net/file/exec introduced (`loader.py` imports only `json`/`os` + `studio.psych_profile`) | `engine/studio/skillpacks/customer_psychology/` (SKILL.md + manifest.json + loader.py) | **PENDING** — no gold-set; the analyst's 13 unit tests are its floor | *(intended: analyst — lead classification, progressive-disclosure)* | **REGISTERED — IN USE** (first-party; operator-approved 2026-06-29). Runtime loader stays DORMANT (`loader.REGISTERED=False`) until eng routes the live path through the pack — the registry authorizes use; the dormant loader is a belt-and-suspenders second layer. |
+| **marketing-playbook** *(marketing-skill vet, 2026-07-01)* | `alirezarezvani/claude-skills` — `marketing-skill/` @ `711ae3108832a98a0539101b46280de23bc0a1d4` (derivative; prompt-only re-author; SHA verified via GitHub API 2026-07-01; matches pack `SKILL.md` `pinned:`) | **APPROVED** (marketing-skills-vet 2026-07-01, see §Sign-off — marketing-skills) · **ADOPTED** (operator 2026-07-01) | **All executables stripped** — ~59 bundled per-skill Python scripts (brand_voice_analyzer.py / seo_optimizer.py / calculate_cac.py / schema_generator.py …) + upstream CLAUDE.md run-scripts directive, never vendored/run. Upstream psychology framing (amoral persuasion, decoy pricing) OVERRIDDEN by OUR hard anti-fabrication + anti-dark-pattern guardrail; no AggregateRating/Review schema emitted from unsourced data. | `engine/studio/skillpacks/marketing_playbook/` (SKILL.md + manifest.json + loader.py) | **PENDING-on-eval-pipeline** (operator-authorized 2026-07-01; no gold-set yet) | *(intended: strategist / content — GTM methodology)* | **REGISTERED — IN USE** (operator-approved 2026-07-01; loader DORMANT `REGISTERED=False`) |
+| **research-ops** *(research-ops vet, 2026-07-01)* | `alirezarezvani/claude-skills` — `research-ops/` @ `a088c8ba778319fea026c8a25e9e98b15754f379` (derivative; prompt-only re-author; SHA verified via GitHub API 2026-07-01; matches pack `SKILL.md` `pinned:`) | **APPROVED** (marketing-skills-vet 2026-07-01, see §Sign-off — marketing-skills) · **ADOPTED** (operator 2026-07-01) | **All executables stripped** — market_sizer.py / sample_size_planner.py / segmentation_scorer.py / onboard.py / config_loader.py / ar_evaluator.py + the opt-in autoresearch bridge, never vendored/run. Upstream anti-fabrication governance is strong (never-fabricate-insight, triangulate-TAM, no-spurious-precision, per-segment sample floors) and is RESTATED in our prompt. | `engine/studio/skillpacks/research_ops/` (SKILL.md + manifest.json + loader.py) | **PENDING-on-eval-pipeline** (operator-authorized 2026-07-01; no gold-set yet) | *(intended: research — market/product sizing + segmentation)* | **REGISTERED — IN USE** (operator-approved 2026-07-01; loader DORMANT `REGISTERED=False`) |
+| **growth-marketing-patterns** *(coreyhaines31 prompt-only vet, 2026-07-01)* | `coreyhaines31/marketingskills` — `skills/` prompt content only @ `8bfcdffb655f16e713940cd04fb08891899c47db` (v2.5.1, MIT; derivative; prompt-only; matches pack `SKILL.md` `pinned:`) | **APPROVED — prompt-only** (marketing-skills-vet 2026-07-01, see §Sign-off — marketing-skills) · **ADOPTED** (operator 2026-07-01). Does NOT overturn the standing REJECTED verdicts on this repo's executables (rows below). | **ALL executables REJECTED + stripped** — the 67 `tools/` Node CLIs (env tokens / data brokers / real email send), `ads`/`ad-creative` google-ads.js (ad-account WRITE), `validate-skills*.sh`, `.claude-plugin` install tooling — never vendored/run. Only safe prose frameworks adopted, under OUR anti-fabrication guardrail. | `engine/studio/skillpacks/growth_marketing_patterns/` (SKILL.md + manifest.json + loader.py) | **PENDING-on-eval-pipeline** (operator-authorized 2026-07-01; no gold-set yet) | *(intended: growth — CRO / pricing / positioning / copy patterns)* | **REGISTERED — IN USE** (prompt-only; operator-approved 2026-07-01; loader DORMANT `REGISTERED=False`) |
+
+> **P1.5 note (eng, not sec):** the `customer-psychology` row above is a **DRAFT scaffold**
+> filed by eng for sec to vet. It is deliberately **not** `REGISTERED` and has **no** sec
+> sign-off / eval-gate / operator adoption — sec owns those. The live system does not depend
+> on the pack (the analyst is imported directly), so `scripts/check_skill_registry.py`
+> continues to pass with it present.
 
 ---
 
@@ -242,6 +252,67 @@ SEC VERDICT:    APPROVED-AS-STRIPPED — prompt-only residue is safe to proceed 
                 Becomes IN USE only on operator adopt-approval + agent assignment.
 Residual risk (for arch/operator): LOW after strip — no network/file/exec/credential surface
                 remains. Pre-strip max severity: HIGH (TLS-disabled outbound).
+```
+
+---
+
+## §Sign-off — marketing-skills (2026-07-01: marketing-playbook, research-ops, growth-marketing-patterns)
+
+Three external marketing-skill repos the operator explicitly authorized adopting (2026-07-01).
+Adopted as **prompt-only** packs under `engine/studio/skillpacks/` (mirroring the
+`customer-psychology` scaffold); every bundled upstream script was **stripped, never run**.
+All fetched repo content was treated as untrusted data (read, not obeyed).
+
+```
+Skills:       marketing-playbook, research-ops, growth-marketing-patterns
+Provenance:   marketing-playbook ← alirezarezvani/claude-skills marketing-skill/ @ 711ae31…
+              research-ops       ← alirezarezvani/claude-skills research-ops/    @ a088c8b…
+              (both per-path last-touch commits, verified via GitHub API 2026-07-01)
+              growth-marketing-patterns ← coreyhaines31/marketingskills skills/   @ 8bfcdff…
+              (v2.5.1, MIT; same repo already carrying REJECTED tool rows)
+Reviewed by:  marketing-skills-vet pass (operator-authorized)   Date: 2026-07-01
+```
+
+**Read + strip (verified via read of SKILL.md / README / CLAUDE.md as untrusted data).**
+
+- **Scripts NOT ported / NOT run.** `marketing-skill` bundles ~59 per-skill Python scripts and
+  a CLAUDE.md `python3 <skill>/scripts/<tool>.py` directive; `research-ops` bundles
+  `market_sizer.py` / `sample_size_planner.py` / `segmentation_scorer.py` / `onboard.py` /
+  `config_loader.py` / `ar_evaluator.py` + an opt-in autoresearch bridge;
+  `coreyhaines31/marketingskills` bundles 67 Node CLIs (`tools/`), `google-ads.js`, and two
+  `validate-skills*.sh`. **None vendored or executed.** Upstream "stdlib-only / demo-mode"
+  claims were NOT relied on — the gate forbids running third-party scripts. Any numeric
+  capability (CAC, market sizing, schema emission) is re-introduced later only via our own
+  vetted adapter.
+- **Fabrication surfaces flagged + fenced.** `marketing-skill`'s `marketing-psychology` frames
+  persuasion (scarcity, social proof, decoy pricing, friction-hiding) as amoral technique with
+  inconsistent ethical caveats — a real risk of dark-pattern / fabrication drift. We did NOT
+  adopt it verbatim: our authored SKILL.md prepends a HARD anti-fabrication + anti-dark-pattern
+  guardrail (no invented reviews/ratings/scarcity/urgency; no deceptive choice architecture;
+  no `AggregateRating`/`Review` schema from unsourced data). Note: `marketing-skill`'s pinned
+  commit is specifically the one that *removed* fabricated aggregate-rating generation in
+  `local-seo-manager` — we keep that guarantee. `research-ops` is the opposite — its own
+  governance already forbids fabricating insight and mandates method+confidence on every
+  number; we restated it.
+- **coreyhaines31 executables stay REJECTED.** This sign-off adopts ONLY that repo's prose
+  frameworks. Its 67 broker/email-send CLIs and the ad-account writer remain REJECTED
+  (standing rows above); nothing money/send/broker/exec was taken.
+- **No injection / exfiltration / off-policy** found in the adopted prose. No instruction to
+  exfiltrate, call the network, read credentials, or override prior instructions was carried
+  into our packs.
+
+```
+VERDICT:      APPROVED — adopted PROMPT-ONLY. All three packs are prompt-only, loaders DORMANT
+              (loader.REGISTERED=False, no net/file/exec), scripts stripped. marketing-playbook
+              + growth-marketing-patterns carry our added anti-fabrication guardrail.
+ADOPTION:     Operator-approved 2026-07-01 → Status REGISTERED — IN USE. Eval-gate is
+              PENDING-on-eval-pipeline (operator-authorized; no gold-set yet) — MUST clear a
+              gold-set before any production writing use, same posture as brand-voice/human-tone.
+GOVERNANCE:   This is the operator-authorized marketing-skills-vet pass, not a standing-sec
+              re-review. Recommend standing sec re-confirm the sign-off at leisure; the packs
+              stay prompt-only + dormant meanwhile. Re-vet triggers: any upstream commit bump
+              (freeze until re-pinned); OR any attempt to re-introduce a stripped script /
+              live-network capability (must go through our own vetted adapter first).
 ```
 
 ---

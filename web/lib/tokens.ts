@@ -9,10 +9,16 @@
  */
 import type { Channel, Worker, Severity, AutonomyMode } from './data/models';
 
-/** Per-channel dot color (handoff "Channel dots"). */
+/** Per-channel dot color (handoff "Channel dots"). Includes the live campaign
+ *  channels the engine emits verbatim (EMAIL/SMS/IG/REELS/TIKTOK). */
 export const CHANNEL_COLOR: Record<Channel, string> = {
   GMAIL: '#0F8A82',
+  EMAIL: '#0F8A82',
+  SMS: '#0B6F68',
   INSTAGRAM: '#7A5AF8',
+  IG: '#7A5AF8',
+  REELS: '#9333EA',
+  TIKTOK: '#111111',
   FACEBOOK: '#2563C9',
 };
 
@@ -29,8 +35,12 @@ export const WORKER_COLOR: Record<Worker, string> = {
   WEBHOOK: '#8C877D',
   TEMPORAL: '#8C877D',
   RESEARCH: '#8C877D',
-  STRATEGIST: '#8C877D',
-  COPYWRITER: '#8C877D',
+  STRATEGIST: '#7A5AF8',
+  COPYWRITER: '#9A6B00',
+  // Multi-agent campaign run workers.
+  TEAM: '#0B6F68',
+  DRAFT: '#9A6B00',
+  CRITIC: '#B42318',
 };
 
 /** Feed/toast severity → semantic token group. */

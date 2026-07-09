@@ -2,16 +2,22 @@ import { describe, it, expect } from 'vitest';
 import { __reducer, NAV_ITEMS } from '../console-store';
 
 describe('console store — nav + edit reset', () => {
-  const start = { screen: 'overview' as const, editing: false, draftText: '' };
+  const start = { screen: 'overview' as const, contextId: null, editing: false, draftText: '' };
 
-  it('includes Activity in the locked nav order', () => {
+  it('leads with the voice-first headline modes then the real-data tabs', () => {
+    // The separate Command chat tab was removed — Voice is the one conversation.
+    // ju1.5 appends the Campaign memory tab (real past-campaign example library);
+    // the Artists roster (spec section 4/20) sits with the studio-family tabs.
     expect(NAV_ITEMS.map((n) => n.id)).toEqual([
+      'voice',
+      'agency',
+      'artists',
       'overview',
       'review',
       'activity',
       'feed',
       'runs',
-      'command',
+      'memory',
     ]);
   });
 
@@ -31,6 +37,27 @@ describe('console store — nav + edit reset', () => {
     const same = __reducer(editing, { type: 'navigate', screen: 'overview' });
     expect(same).toBe(editing); // identity preserved
     expect(same.draftText).toBe('keep me');
+  });
+
+  it('SAME-screen nav WITH a deep-link target updates contextId (intra-screen chip jump)', () => {
+    // The traceability fix: clicking a chip that targets a specific row on the
+    // screen you are already on must re-select that row. A bare same-screen nav
+    // stays a no-op (above); one carrying a contextId updates it.
+    const onActivity = { ...start, screen: 'activity' as const, contextId: null };
+    const jumped = __reducer(onActivity, {
+      type: 'navigate',
+      screen: 'activity',
+      contextId: 'act_77a0b',
+    });
+    expect(jumped.screen).toBe('activity');
+    expect(jumped.contextId).toBe('act_77a0b');
+    // editing buffer is preserved (selecting a different row is not a screen switch)
+    const editingThenJump = __reducer(
+      { ...onActivity, editing: true, draftText: 'half' },
+      { type: 'navigate', screen: 'activity', contextId: 'act_x' },
+    );
+    expect(editingThenJump.draftText).toBe('half');
+    expect(editingThenJump.contextId).toBe('act_x');
   });
 
   it('setDraft updates the buffer; cancelEditing clears it', () => {

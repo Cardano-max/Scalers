@@ -24,7 +24,19 @@ import pytest
 from sideeffects import Channel, idempotency_key
 from sideeffects.boundary import EnqueueStatus, SideEffectBoundary
 from sideeffects.dispatcher import Dispatcher
+from tests.conftest import bounded_dsn
 from tests.mock_connector import MockConnector
+
+
+@pytest.fixture
+def dsn() -> str:
+    """Override the shared DSN so EVERY connection this module opens — the racing
+    dispatchers (``Dispatcher(dsn, ...)``) and the raw ``AsyncConnection.connect``
+    racers — caps its lock (5s) and statement (30s) wait at the server. A stuck
+    lock or lock-wait starvation under full-suite pressure then fails FAST and
+    LOUD instead of hanging the run; the exactly-once assertions are unchanged, so
+    a genuine double-effect would still fail the test (CustomerAcq-b4q)."""
+    return bounded_dsn(lock_ms=5_000, stmt_ms=30_000)
 
 # These exercise the exactly-once guarantee against a REAL Postgres (UNIQUE
 # constraints, row locking, crash recovery), so they carry the `integration`

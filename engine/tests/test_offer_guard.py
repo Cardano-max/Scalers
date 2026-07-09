@@ -127,3 +127,33 @@ def test_draft_validators_bank_includes_offer_guard():
     bank = draft_validators(grounding=grounding, platform=Platform.INSTAGRAM)
     names = [v.name for v in bank.validators]
     assert names.count("offer_antifab") == 2  # caption + call_to_action
+
+# ── qa1 adversarial re-QA regressions (65w.14 FAIL -> fix) ───────────────────
+
+
+def test_qa1_evasion_strings_now_detected():
+    """qa1's four bypass strings — each passed BOTH validator layers before the
+    regex fix (save/get-family percents, hyphenated off, promo-without-'code')."""
+    for s in (
+        "save 15% on your first session",
+        "save 15 percent this month",
+        "15%-off flash sale",
+        "use promo FLOWER15",
+    ):
+        assert offer_violations(s) != [], s  # no real offers -> must block
+
+
+def test_adjacent_evasion_variants_detected():
+    for s in ("get 20% today", "take 20 percent off", "use PROMO flower15 now"):
+        assert find_offer_tokens(s) != [], s
+
+
+def test_percent_false_positive_guards():
+    """Bare percents with no offer shape stay clean — legit copy never blocks."""
+    for s in (
+        "100% custom designs drawn for you",
+        "15% of clients return for a second piece",
+        "we are 100% booked this month",
+        "promo runs friday",
+    ):
+        assert find_offer_tokens(s) == [], s

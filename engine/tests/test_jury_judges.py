@@ -197,3 +197,54 @@ def test_catalog_version_drift_fail_safe():
     scores = {n: _score_codes([], version=2) for n in ("haiku-strict", "haiku-charitable", "ollama-cross")}
     run = asyncio.run(run_jury("x", judge_runner=_runner(scores)))
     assert run.catalog_drift and "version" in run.drift_reason.lower()
+
+
+# ── fail CLOSED on a non-canonical hard-fail dimension (dm5 regression) ───────
+
+
+def _catalog_with_dim(code: str, dimension: str):
+    """A minimal known-code catalog whose single hard-fail code resolves onto
+    ``dimension`` — used to exercise a NON-canonical (e.g. future ``compliance``) dim."""
+    from autonomy.rubric import EXPECTED_CATALOG_VERSION, HardFailCatalog
+
+    return HardFailCatalog(
+        catalog_version=EXPECTED_CATALOG_VERSION,
+        codes=frozenset({code}),
+        code_dimension={code: dimension},
+        soft_cap_codes=frozenset(),
+        soft_cap_max={},
+    )
+
+
+def test_noncanonical_hard_fail_dim_fails_closed_to_review():
+    # A future rubric adds a hard-fail on a dimension the JudgeVote cannot carry
+    # ("compliance"). It is KNOWN (no unknown-code fail-safe) yet non-canonical, so it
+    # must force-escalate rather than be silently dropped (the fail-OPEN bug).
+    cat = _catalog_with_dim("COMPLIANCE_HF_GDPR", "compliance")
+    scores = {n: _score_codes(["COMPLIANCE_HF_GDPR"]) for n in
+              ("opus-strict", "opus-charitable", "ollama-cross")}
+    run = asyncio.run(run_jury("x", judge_runner=_runner(scores), catalog=cat))
+    # The vote carries none of the three canonical hard-fail flags (nothing to land on)…
+    assert all(not v.voice_hard_fail and not v.safety_hard_fail and not v.appr_hard_fail
+               for v in run.votes)
+    # …but the run fails CLOSED via the catalog-drift/fail-safe path -> REVIEW.
+    assert run.catalog_drift and "compliance" in run.drift_reason.lower()
+    decision, esc, _, _ = derive_decision(
+        votes=run.votes, aggregate=aggregate_jury(run.votes), threshold=0.85,
+        catalog_drift=run.catalog_drift, catalog_drift_reason=run.drift_reason,
+    )
+    assert decision is RouteDecision.REVIEW and esc.kind is EscKind.GATE
+
+
+def test_canonical_hard_fail_dim_still_lands_on_vote_no_drift():
+    # No regression: a KNOWN hard-fail on a CANONICAL dim ("appr") still lands on the
+    # vote as a floor and does NOT trip the non-canonical fail-safe.
+    cat = _catalog_with_dim("APPR_HF_CANON", "appr")
+    scores = {n: _score_codes(["APPR_HF_CANON"]) for n in
+              ("opus-strict", "opus-charitable", "ollama-cross")}
+    run = asyncio.run(run_jury("x", judge_runner=_runner(scores), catalog=cat))
+    assert not run.catalog_drift
+    assert all(v.appr_hard_fail for v in run.votes)
+    decision, esc, _, _ = derive_decision(
+        votes=run.votes, aggregate=aggregate_jury(run.votes), threshold=0.85)
+    assert decision is RouteDecision.REVIEW and esc.kind is EscKind.GATE  # floor fired

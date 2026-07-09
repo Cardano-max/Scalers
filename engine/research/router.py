@@ -76,6 +76,7 @@ class ResearchRouter:
         creatives: list[Creative] = []
         notes: list[str] = []
         used: list[str] = []
+        raw_sources: list[dict] = []
 
         for name, provider in self._providers.items():
             # Only call a provider that serves at least one wanted channel.
@@ -88,19 +89,23 @@ class ResearchRouter:
                 notes.append(f"provider '{name}' not yet wired (live client pending)")
                 continue
             except Exception as exc:  # a flaky source must not sink the whole query
-                notes.append(f"provider '{name}' failed: {type(exc).__name__}")
+                # Honest degrade: name the provider AND the real reason (e.g. no key,
+                # disabled, HTTP error) so it's clear why a citation is absent.
+                notes.append(f"provider '{name}' failed: {type(exc).__name__}: {exc}")
                 continue
             if isinstance(result, ProviderResult):
                 signals.extend(result.signals)
                 communities.extend(result.communities)
                 creatives.extend(result.creatives)
                 notes.extend(result.notes)
+                raw_sources.extend(result.sources)
                 used.append(name)
 
         signals = self._dedupe_signals(signals)
         communities = self._dedupe_communities(communities)
         creatives, fp_notes = self._flag_false_positives(self._dedupe_creatives(creatives))
         notes.extend(fp_notes)
+        sources_cited = self._dedupe_sources(raw_sources)
 
         if not (signals or communities or creatives):
             # Thin niche data is normal, not an error — say so, return empty.
@@ -113,6 +118,7 @@ class ResearchRouter:
             creatives=tuple(creatives[: query.limit]),
             sources_used=tuple(used),
             notes=tuple(notes),
+            sources_cited=tuple(sources_cited),
         )
 
     # ── merge helpers (dedupe preserves the highest-confidence variant) ──────
@@ -142,6 +148,20 @@ class ResearchRouter:
             if key not in best or c.confidence > best[key].confidence:
                 best[key] = c
         return sorted(best.values(), key=lambda c: c.confidence, reverse=True)
+
+    @staticmethod
+    def _dedupe_sources(items: list[dict]) -> list[dict]:
+        """Dedupe raw citable hits by url (first occurrence wins), dropping any with
+        no real url. Order is preserved so the top-ranked hits persist first."""
+        seen: set[str] = set()
+        out: list[dict] = []
+        for s in items:
+            url = (s.get("url") or "").strip()
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            out.append(s)
+        return out
 
     @staticmethod
     def _flag_false_positives(items: list[Creative]) -> tuple[list[Creative], list[str]]:

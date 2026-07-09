@@ -88,7 +88,23 @@ jobs:
       - name: Sync deps (incl. postgres extra)
         run: uv sync --dev --extra postgres
 
+      # The integration suite runs against the SAME schema a fresh machine gets:
+      # the committed initdb chain plus the one-shot store bootstrap (every
+      # lazily-created table). Without this, any test touching an
+      # infra-provisioned table (customers, campaign_examples, assets, ...)
+      # dies with "relation does not exist" on the bare service container.
+      - name: Apply schema (initdb chain + store bootstrap)
+        env:
+          SCALERS_EMBEDDER: deterministic
+        run: |
+          for f in ../infra/initdb/*.sql; do
+            psql "$ENGINE_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+          done
+          uv run python bootstrap_db.py
+
       - name: Integration tests (real Postgres + pgvector)
+        env:
+          SCALERS_EMBEDDER: deterministic
         run: uv run pytest -m integration -v
 
   # ---------------------------------------------------------------------------

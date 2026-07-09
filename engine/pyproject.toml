@@ -15,6 +15,10 @@ dependencies = [
     # framework itself is provider-agnostic and tests use the built-in
     # Test/Function models, so no other provider extras are pulled in.
     "pydantic-ai-slim[anthropic]==2.0.0",
+    # AG-UI surface for the Campaign Studio (P3.1): wraps the Studio Host + role
+    # cells in an AGUIAdapter with editable campaign-plan shared state (StateDeps)
+    # and an approval gate (DeferredToolRequests). Mounted at POST /studio/agui.
+    "pydantic-ai-slim[ag-ui]==2.0.0",
     # Control spine (HARN-01/03/05): LangGraph StateGraph + Postgres checkpointer.
     "langgraph>=0.2",
     # Thin portal (HARN-01): FastAPI /healthz + webhook ingress + SSE out.
@@ -28,6 +32,21 @@ dependencies = [
     # durable checkpointer/run-store (the [postgres] extra), so the extra does
     # not re-declare psycopg.
     "psycopg[binary,pool]>=3.2",
+    "strawberry-graphql[fastapi]>=0.320.0",
+    # Real LOCAL semantic embeddings for the KB (KNOW-01/02). fastembed runs
+    # BAAI/bge-small-en-v1.5 as a quantized ONNX graph (onnxruntime, no torch),
+    # 384-dim — a DROP-IN for the deterministic stub (column stays vector(384)).
+    # Imported lazily by kb/embedding.py; hermetic/offline runs select the
+    # SHA-256 stub via $SCALERS_EMBEDDER=deterministic, so the eval gate stays
+    # network-free without uninstalling this.
+    "fastembed>=0.4",
+    # Public-holiday calendar for the proactive scanner's holiday detector
+    # (CustomerAcq-fr1.1 detector #3). sec dep-gate APPROVED 2026-07-03
+    # (sec/reviews/dependency-vetting.md): MIT, pure-Python py3-none-any, inert
+    # import (no net/exec/subprocess), 0 CVEs. Pinned EXACT + hash-pinned in
+    # uv.lock per sec; re-vet on any version bump. Single transitive dep
+    # python-dateutil(>=2.9.0.post0,<3), already hash-pinned in the lock.
+    "holidays==0.99",
 ]
 
 [project.optional-dependencies]
