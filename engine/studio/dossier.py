@@ -69,15 +69,22 @@ class Dossier(BaseModel):
     phone: DossierField = Field(default_factory=DossierField)
     social_handle: DossierField = Field(default_factory=DossierField)
 
+    # Source + lifecycle (spec §8)
+    source: DossierField = Field(default_factory=DossierField)
+    lead_stage: DossierField = Field(default_factory=DossierField)
+
     # Segmentation + interest
     customer_type: DossierField = Field(default_factory=DossierField)
     tattoo_interest: DossierField = Field(default_factory=DossierField)
+    known_interests: list[str] = Field(default_factory=list)
+    tattoo_style_preference: DossierField = Field(default_factory=DossierField)
     artist_style_match: DossierField = Field(default_factory=DossierField)
 
     # Behavioral / psych read (grounded)
     conversation_summary: DossierField = Field(default_factory=DossierField)
     likely_objection: DossierField = Field(default_factory=DossierField)
     objection_evidence: str = ""
+    public_research_summary: DossierField = Field(default_factory=DossierField)
 
     # Strategy the draft leads with
     best_angle: DossierField = Field(default_factory=DossierField)
@@ -86,9 +93,14 @@ class Dossier(BaseModel):
     # The full audit list of what the copy was allowed to use (the draft grounding).
     evidence_used: list[str] = Field(default_factory=list)
 
-    # Honest personalization posture (A8): low confidence -> say so, do not invent.
+    # Honest personalization posture (A8 / spec §8): low confidence -> say so, do not
+    # invent. ``personalization_level`` is the spec's headline grade; ``missing_data``
+    # NAMES every §8 field that is genuinely absent for this lead (the "say missing"
+    # contract — never a fabricated depth).
     limited_personalization: bool = False
     personalization_note: str = ""
+    personalization_level: str = "low"  # low | medium | high
+    missing_data: list[str] = Field(default_factory=list)
 
     def linked_fields(self) -> dict[str, DossierField]:
         """The provenance-carrying fields, keyed by name — for the evidence panel."""
@@ -262,15 +274,95 @@ def build_dossier(
     else:
         note = ""
 
+    # --- spec §8 extras: source / lead_stage / interests / style pref / research ----- #
+    source_f = _field(facts.get("source"), "high", "db:customers.source")
+    lead_stage_f = _field(facts.get("lead_stage"), "high", "db:customers.lead_stage")
+    known_interests = [str(i) for i in interests if i]
+    if last_style:
+        tattoo_style_pref = _field(last_style, "high", "db:tattoo_history.style")
+    elif traits.get("aesthetic_lean"):
+        tattoo_style_pref = _field(traits.get("aesthetic_lean"), "medium",
+                                   "persona:aesthetic_lean")
+    else:
+        tattoo_style_pref = _field(None, "none", "none")
+    n_research = sum(1 for r in (research or []) if (r.get("url") or "").strip())
+    research_summary = (
+        _field(f"{n_research} verified public source(s) on file", "high",
+               "research:web")
+        if n_research else _field(None, "none", "none")
+    )
+
+    # --- MISSING-DATA contract (spec §8: "if data is missing, say missing") ---------- #
+    # Name every §8 field that is genuinely absent for this lead, so the dossier states
+    # its gaps plainly instead of implying a depth it does not have.
+    _checks: list[tuple[str, bool]] = [
+        ("name", name.present), ("email", email.present), ("phone", phone.present),
+        ("social_handle", social.present), ("source", source_f.present),
+        ("lead_stage", lead_stage_f.present), ("customer_type", customer_type.present),
+        ("known_interests", bool(known_interests)),
+        ("tattoo_style_preference", tattoo_style_pref.present),
+        ("conversation_summary", conversation_summary.present),
+        ("known_objections", likely_objection.present),
+        ("artist_affinity", artist_style.present),
+        ("public_research_summary", research_summary.present),
+    ]
+    missing_data = [name_ for name_, present in _checks if not present]
+
+    # Personalization LEVEL (spec headline): high = a real conversation or research read
+    # to ground a personal message; medium = hard interest/style/artist signal; low =
+    # name/segment only (safe generic campaign, never a fake-personal message).
+    if conversation_summary.present or research_summary.present:
+        personalization_level = "high"
+    elif any(f.confidence == "high" for f in
+             (tattoo_interest, artist_style, tattoo_style_pref, social)):
+        personalization_level = "medium"
+    else:
+        personalization_level = "low"
+
     return Dossier(
         customer_id=facts.get("customer_id"),
         run_id=run_id,
         name=name, email=email, phone=phone, social_handle=social,
+        source=source_f, lead_stage=lead_stage_f,
         customer_type=customer_type, tattoo_interest=tattoo_interest,
+        known_interests=known_interests, tattoo_style_preference=tattoo_style_pref,
         artist_style_match=artist_style,
         conversation_summary=conversation_summary,
         likely_objection=likely_objection, objection_evidence=objection_evidence,
+        public_research_summary=research_summary,
         best_angle=best_angle, recommended_cta=recommended_cta,
         evidence_used=list(evidence_used or []),
         limited_personalization=limited, personalization_note=note,
+        personalization_level=personalization_level, missing_data=missing_data,
     )
+
+
+def build_customer_dossier(
+    tenant_id: str, customer_id: str, *, dsn: str | None = None,
+    use_llm: bool = False, research: list[dict[str, Any]] | None = None,
+) -> "Dossier | None":
+    """Build a customer's dossier ON DEMAND from durable DB state (spec §8, nmh.6) — for
+    "open a customer -> see their dossier". Returns ``None`` when the customer does not
+    exist (honest, never a fabricated record).
+
+    Reads REAL persistent state only: the grounded lead facts + persona + tattoo history
+    (:func:`customer_research.lookup_lead`), the stored conversation
+    (:func:`conversations.get_conversation`), and the grounded psych read
+    (:func:`psych_profile.analyze_customer`). Because every source is durable, the
+    dossier is identical after an engine restart. ``use_llm`` defaults False (the
+    deterministic psych floor) so this is cheap + hermetic; no sends, no skill load."""
+    from studio.conversations import get_conversation
+    from studio.customer_research import lookup_lead
+    from studio.psych_profile import analyze_customer
+
+    facts = lookup_lead(tenant_id, customer_id=customer_id, dsn=dsn)
+    if facts is None:
+        return None
+    conv = get_conversation(tenant_id, customer_id, dsn=dsn)
+    known_artists = [facts["artist"]] if facts.get("artist") else None
+    try:
+        profile = analyze_customer(facts, conv, known_artists=known_artists,
+                                   use_llm=use_llm)
+    except Exception:
+        profile = None  # honest: no psych read rather than a crash
+    return build_dossier(facts, profile=profile, research=research)
