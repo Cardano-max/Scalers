@@ -284,6 +284,37 @@ def _customer_lineage(
         return None, None, None
 
 
+# ── nmh.6: customer dossier + supervisor memory-state (read-only) ────────────── #
+
+
+@router.get("/studio/customer/{customer_id}/dossier")
+def customer_dossier(customer_id: str, tenant_id: str) -> dict:
+    """The on-demand customer dossier (spec §8): real fields + explicit MISSING where
+    data is absent, graded personalization_level, never a fabricated depth. 404 when
+    the customer does not exist. Built from durable DB state, so it is stable across
+    an engine restart."""
+    from studio.dossier import build_customer_dossier
+
+    dossier = build_customer_dossier(tenant_id, customer_id)
+    if dossier is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no customer {customer_id!r} for tenant {tenant_id!r}",
+        )
+    return dossier.model_dump()
+
+
+@router.get("/studio/memory-state")
+def studio_memory_state(tenant_id: str, artist: str | None = None) -> dict:
+    """The supervisor's real-state answer bundle (spec §17): customer count, artists,
+    Review-Queue draft counts, failures, and — when ``artist`` is given — that artist's
+    stored campaigns + a "last time we ran ..." summary. Pure reads; honest zeroes when
+    nothing is stored, never a guess."""
+    from studio.supervisor_memory import memory_state
+
+    return memory_state(tenant_id, artist=artist)
+
+
 def mount_console_api(app: FastAPI) -> None:
-    """Attach the ju1.5 console read endpoints to the portal app."""
+    """Attach the console read endpoints (ju1.5 lineage + nmh.6 dossier/memory-state)."""
     app.include_router(router)
