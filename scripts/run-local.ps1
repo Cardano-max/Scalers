@@ -24,22 +24,42 @@ Write-Host "== 0/5 Latest code" -ForegroundColor Cyan
 git pull origin main
 
 Write-Host "== 1/5 Postgres (docker compose)" -ForegroundColor Cyan
-Write-Host "   checking Docker Desktop (20s timeout)..."
-$dockerJob = Start-Job -ScriptBlock { docker info *> $null; $LASTEXITCODE }
-if (-not (Wait-Job $dockerJob -Timeout 20)) {
-    Stop-Job $dockerJob | Out-Null
-    Write-Host "Docker is not responding. Start Docker Desktop, wait for the whale icon to say 'running', then re-run this script." -ForegroundColor Red
+Write-Host "   checking Docker engine (30s timeout)..."
+# Plain process with a hard timeout - no PowerShell jobs (slow to spawn on some
+# machines and the previous check false-timed-out because of it).
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName = "docker"
+$psi.Arguments = "info --format {{.ServerVersion}}"
+$psi.RedirectStandardOutput = $true
+$psi.RedirectStandardError = $true
+$psi.UseShellExecute = $false
+$proc = [System.Diagnostics.Process]::Start($psi)
+if (-not $proc.WaitForExit(30000)) {
+    try { $proc.Kill() } catch { }
+    Write-Host "Docker is not responding. Open Docker Desktop and wait for 'Engine running' (bottom-left), then re-run this script." -ForegroundColor Red
     exit 1
 }
-if ((Receive-Job $dockerJob) -ne 0) {
-    Write-Host "Docker Desktop is not running - start it first, then re-run this script." -ForegroundColor Red
+if ($proc.ExitCode -ne 0) {
+    Write-Host "Docker engine is not running. Open Docker Desktop, wait for 'Engine running', then re-run this script." -ForegroundColor Red
     exit 1
 }
-Set-Location "$Root\infra"
-Write-Host "   starting postgres + redis (first run downloads ~400MB of images - progress prints below)..."
-docker compose up -d postgres redis
-if ($LASTEXITCODE -ne 0) { Write-Host "docker compose failed - see the error above." -ForegroundColor Red; Set-Location $Root; exit 1 }
-Set-Location $Root
+Write-Host ("   docker engine " + $proc.StandardOutput.ReadToEnd().Trim() + " OK") -ForegroundColor Green
+
+# An older setup may already own containers named scalers-postgres/scalers-redis
+# (a previous checkout's compose project). Reusing them keeps that database's
+# data AND avoids the name collision that would break compose up.
+$existing = docker ps -a --format "{{.Names}}"
+if ($existing -contains "scalers-postgres") {
+    Write-Host "   found existing scalers-postgres container - starting it (keeps your existing data)"
+    docker start scalers-postgres | Out-Null
+    if ($existing -contains "scalers-redis") { docker start scalers-redis | Out-Null }
+} else {
+    Set-Location "$Root\infra"
+    Write-Host "   starting postgres + redis (first run downloads ~400MB of images - progress prints below)..."
+    docker compose up -d postgres redis
+    if ($LASTEXITCODE -ne 0) { Write-Host "docker compose failed - see the error above." -ForegroundColor Red; Set-Location $Root; exit 1 }
+    Set-Location $Root
+}
 $ok = $false
 for ($i = 0; $i -lt 30; $i++) {
     docker exec scalers-postgres pg_isready -U scalers -d scalers -q *> $null
