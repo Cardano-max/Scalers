@@ -165,19 +165,23 @@ def test_provided_leads_records_strategist_once_and_critic_per_draft(monkeypatch
 
 def test_huge_csv_is_capped_never_fans_out(monkeypatch):
     # BLOCKER 2: a 5000-row uploaded CSV must NOT fan out 5000×(analyst+draft+critic).
-    # The blueprint's hard cap bounds it: at most _OUTPUT_HARD_CAP staged actions.
-    from archetypes.compose import _OUTPUT_HARD_CAP
-
+    # nmh.11 DECOUPLED the sequential provided path's cap from compose's parallel
+    # ``_OUTPUT_HARD_CAP`` (=12) to the env-tunable ``ENGINE_COHORT_HARD_CAP``; the
+    # blueprint's hard cap still BOUNDS the fan-out. Pin the cohort cap to a value
+    # DISTINCT from compose's 12 to prove BOTH that the CSV is capped (never fans out to
+    # 5000) AND that the governing bound is the cohort knob, not compose's constant.
     _wire(monkeypatch)
+    monkeypatch.setenv("ENGINE_COHORT_HARD_CAP", "7")
+    cap = 7
     plan = CampaignPlan(
         lead_source="provided", goal="win back lapsed clients", channels=["gmail"],
         customers={"customer_ids": [f"c{i}" for i in range(5000)], "rows": 5000},
     )
     summary = _execute_provided_leads_sync(plan, "sess1", "ladies8391", None, None)
     roles = _roles(summary)
-    assert roles.count("draft") <= _OUTPUT_HARD_CAP
-    assert roles.count("analyst") <= _OUTPUT_HARD_CAP
-    assert summary["n_pending"] <= _OUTPUT_HARD_CAP
+    assert roles.count("draft") <= cap
+    assert roles.count("analyst") <= cap
+    assert summary["n_pending"] <= cap
     # The plan step is still the FIRST recorded agent_run.
     assert roles[0] == "planner"
 

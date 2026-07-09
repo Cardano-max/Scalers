@@ -60,3 +60,38 @@ CREATE INDEX IF NOT EXISTS actions_tenant_status_idx ON actions (tenant_id, stat
 CREATE INDEX IF NOT EXISTS actions_decision_idx      ON actions (decision_id);
 CREATE INDEX IF NOT EXISTS actions_created_idx       ON actions (created_at);
 CREATE INDEX IF NOT EXISTS actions_seeded_idx        ON actions (is_seeded);
+
+-- nmh.11 retry-stability guard: at most ONE pending REAL draft per recipient on the
+-- provided-leads path (worker='studio_provided_leads'), so a re-launch that mints a
+-- fresh run_id re-stages an already-pending recipient as a structural no-op instead of
+-- a phantom duplicate. Scoped to that worker ONLY: the per-lead research path
+-- (studio_agui_research) carries a batch-stable, goal-discriminated run_id (nmh.2) and
+-- MUST keep staging two distinct-goal drafts to one customer, so it is deliberately not
+-- guarded here. is_seeded=false keeps seeded/demo fixtures exempt.
+--
+-- SELF-HEALING: ensure_schema() runs this file on EVERY studio launch / send path, so a
+-- plain CREATE UNIQUE INDEX would THROW (23505) on a DB that predates the guard and still
+-- carries pre-fix phantom duplicates — breaking the engine. Instead, if the unique build
+-- hits duplicates, dedupe the bug's never-approved extras (keep the EARLIEST pending row
+-- per recipient) and retry, so ensure_schema can never fail. On a clean DB the index
+-- already exists -> the CREATE is an instant no-op and the EXCEPTION path never runs.
+-- (Keep this predicate byte-identical to infra/initdb/21-actions-pending-recipient-guard.sql.)
+DO $guard$
+BEGIN
+    CREATE UNIQUE INDEX IF NOT EXISTS actions_pending_recipient_uniq
+        ON actions (tenant_id, worker, target)
+        WHERE status = 'pending' AND target IS NOT NULL
+          AND worker = 'studio_provided_leads' AND is_seeded = false;
+EXCEPTION WHEN unique_violation THEN
+    DELETE FROM actions a USING (
+        SELECT id, row_number() OVER (
+            PARTITION BY tenant_id, worker, target ORDER BY created_at, id) AS rn
+        FROM actions
+        WHERE status = 'pending' AND target IS NOT NULL
+          AND worker = 'studio_provided_leads' AND is_seeded = false
+    ) d WHERE a.id = d.id AND d.rn > 1;
+    CREATE UNIQUE INDEX IF NOT EXISTS actions_pending_recipient_uniq
+        ON actions (tenant_id, worker, target)
+        WHERE status = 'pending' AND target IS NOT NULL
+          AND worker = 'studio_provided_leads' AND is_seeded = false;
+END $guard$;

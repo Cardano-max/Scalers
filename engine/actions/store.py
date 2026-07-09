@@ -144,7 +144,19 @@ def record_pending_action(
                 target, subject, context, draft, status, conf, threshold,
                 esc_kind, esc_label, idempotency_key, is_seeded)
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s,%s,%s,%s)
-            ON CONFLICT (idempotency_key) DO NOTHING
+            -- Bare ON CONFLICT so BOTH unique guards are absorbed silently (nmh.11):
+            --   (1) idempotency_key UNIQUE  — same run_id:cust_id exactly-once (nmh.2);
+            --   (2) the partial-unique recipient guard actions_pending_recipient_uniq
+            --       (tenant_id, worker, target) WHERE status='pending' AND is_seeded=false
+            --       AND worker='studio_provided_leads' — at most ONE pending real draft
+            --       per recipient on the provided-leads path, so a RE-LAUNCH (fresh
+            --       run_id) re-staging the same recipient is a structural no-op instead
+            --       of a phantom-duplicate pending row. The guard is scoped to that one
+            --       worker: the research path (studio_agui_research) uses a batch-stable,
+            --       goal-discriminated run_id (nmh.2) and MUST keep two distinct-goal
+            --       drafts to one customer, so it is not covered by this index and only
+            --       ever conflicts on idempotency_key.
+            ON CONFLICT DO NOTHING
             RETURNING id
             """,
             (
@@ -155,11 +167,21 @@ def record_pending_action(
         ).fetchone()
         if row is not None:
             return row["id"]
-        # UNIQUE conflict: the logical action already exists — return its id.
+        # A UNIQUE conflict: the logical action already exists — return its id so the
+        # caller's count stays honest and nothing is re-fired. Prefer the idempotency_key
+        # match (same run replay); fall back to the already-pending recipient row (a
+        # retry under a NEW run_id hits the recipient guard, not the idempotency key).
         existing = conn.execute(
             "SELECT id FROM actions WHERE idempotency_key = %s", (idempotency_key,)
         ).fetchone()
-        return existing["id"]
+        if existing is None and target is not None and worker is not None and not is_seeded:
+            existing = conn.execute(
+                "SELECT id FROM actions WHERE tenant_id = %s AND worker = %s "
+                "AND target = %s AND status = 'pending' AND is_seeded = false "
+                "ORDER BY created_at LIMIT 1",
+                (tenant_id, worker, target),
+            ).fetchone()
+        return existing["id"] if existing else action_id
 
 
 def list_actions(tenant_id: str, status: str | None = None, dsn: str | None = None) -> list[ActionRow]:

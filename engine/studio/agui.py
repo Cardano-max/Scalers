@@ -1662,11 +1662,21 @@ def _execute_provided_leads_sync(
     blueprint.run_id = run_id
     blueprint.campaign_id = campaign_id
     # HARD fan-out cap (P1.5 blueprint #2): never run analyst+draft+critic for more than
-    # the planned quota, ceilinged at the archetype hard cap — a 5000-row uploaded CSV
-    # stages AT MOST this many actions, never 5000×(analyst+draft+critic).
-    from archetypes.compose import _OUTPUT_HARD_CAP
+    # the planned quota, ceilinged at a hard cap — a 5000-row uploaded CSV stages AT MOST
+    # this many actions, never 5000×(analyst+draft+critic).
+    #
+    # CAP DECOUPLE (nmh.11): the compose spine's ``_OUTPUT_HARD_CAP`` (=12) bounds a
+    # PARALLEL LangGraph Send fan-out (all draft workers in one superstep), so raising it
+    # there would multiply concurrent LLM calls. This provided/cohort executor is a
+    # SEQUENTIAL per-lead loop, so it gets its OWN, larger ceiling — the operator's N
+    # (10/25/30/…) is a pure input and must reach N from the full customers table, never
+    # silently clipped to 12. Env-overridable; still bounded so an absurd plan can't run
+    # away. compose's constant is intentionally left untouched.
+    _COHORT_HARD_CAP = int(os.environ.get("ENGINE_COHORT_HARD_CAP", "1000"))
 
-    effective_cap = min(blueprint.stop_conditions.total_quota or _OUTPUT_HARD_CAP, _OUTPUT_HARD_CAP)
+    effective_cap = min(
+        blueprint.stop_conditions.total_quota or _COHORT_HARD_CAP, _COHORT_HARD_CAP
+    )
 
     # 1) Resolve ONLY the operator's leads — uploaded CSV ids first, else DB cohort. The
     # cust-id list is capped to ``effective_cap`` BEFORE the DB lookup so a huge CSV never
