@@ -233,6 +233,13 @@ _SYSTEM = (
     "5. NEVER send or publish anything yourself. If the operator wants something "
     "posted/emailed, call `stage_publish` — it stages a PENDING action that a "
     "human must approve; it is held, never sent.\n"
+    "5b. LIVE STATE: when the operator asks which leads a run finalized/targeted, "
+    "what the agents are doing right now, what files or images exist ('I added a "
+    "new tattoo design, can you check which one it is?'), which artworks an artist "
+    "has, or what changed recently for an artist — call the matching live-state "
+    "tool (`get_run_leads`, `get_agent_activity`, `get_uploaded_files`, "
+    "`get_artist_artworks`, `get_artist_memory`). These read the database fresh "
+    "on every call; NEVER answer such questions from memory or guess.\n"
     "6. After acting, reply in 2-4 sentences: reflect the current plan and ask 1 "
     "high-leverage clarifying question. Be honest — never claim a tool ran that "
     "did not, never claim anything was sent, and never claim a customer fact the "
@@ -2872,6 +2879,12 @@ def start_registered_run(
         app.state._studio_runs = {}
     runs_registry: dict[str, dict] = app.state._studio_runs
     runs_registry[run_id] = {"status": "running", "summary": None, "error": None}
+    try:  # let the live-state tools report this in-flight run's status (item 4)
+        from studio.live_state import set_runs_registry
+
+        set_runs_registry(runs_registry)
+    except Exception:
+        pass
 
     async def _bg() -> None:
         try:
@@ -3305,6 +3318,146 @@ async def research_and_stage_leads(
 
 
 # --------------------------------------------------------------------------- #
+# LIVE-STATE tools (engine-core item 4, spec §17): the supervisor answers
+# "which leads were finalized / what is each agent doing / what files exist /
+# which artworks does X have / what changed for X" from FRESH DB reads on every
+# call — never a cached or invented answer. Shared with the voice path via
+# studio.live_state (the voice seams embed the same snapshot per request).
+# --------------------------------------------------------------------------- #
+
+
+@studio_agent.tool
+async def get_run_leads(ctx: RunContext[StudioDeps], run_id: str | None = None) -> str:
+    """Which leads were FINALIZED for a campaign run (default: the most recent run):
+    the staged drafts' lead names + emails/targets + statuses, and every skipped row
+    with its concrete reason. Reads the DB fresh — call this whenever the operator
+    asks who the campaign targets / targeted; never answer from memory."""
+    from studio.live_state import finalized_leads
+
+    data = await asyncio.to_thread(
+        lambda: finalized_leads(ctx.deps.tenant_id, run_id, dsn=ctx.deps.dsn)
+    )
+    if not data.get("runId"):
+        return "No campaign run exists for this studio yet — no leads were finalized."
+    lines = [f"Run {data['runId']}: {len(data['staged'])} staged draft(s)."]
+    for s in data["staged"][:25]:
+        who = s.get("name") or "(name not on file)"
+        lines.append(
+            f"- {who} -> {s.get('target') or 'no target'} [{s.get('channel')}] "
+            f"status={s.get('status')}"
+        )
+    if data.get("skipped"):
+        lines.append(f"Skipped ({len(data['skipped'])}):")
+        for s in data["skipped"][:15]:
+            lines.append(f"- {s.get('lead')}: {s.get('reason')}")
+    else:
+        lines.append("Skipped: none recorded.")
+    return "\n".join(lines)
+
+
+@studio_agent.tool
+async def get_agent_activity(ctx: RunContext[StudioDeps]) -> str:
+    """What each agent is doing RIGHT NOW on the active run — live status (running /
+    completed / failed / awaiting_selection) + the latest recorded step per role with
+    its real model. Fresh DB read on every call."""
+    from studio.live_state import agent_activity
+
+    data = await asyncio.to_thread(
+        lambda: agent_activity(ctx.deps.tenant_id, dsn=ctx.deps.dsn)
+    )
+    if not data.get("runId"):
+        return "No campaign run exists for this studio yet — no agents are working."
+    lines = [f"Run {data['runId']} status: {data['status']}."]
+    sel = data.get("selectionPending")
+    if sel:
+        lines.append(
+            f"WAITING ON THE OPERATOR: {sel.get('question')} "
+            f"({len(sel.get('options') or [])} artwork option(s) surfaced)."
+        )
+    agents = data.get("agents") or {}
+    if not agents:
+        lines.append("No agent steps recorded yet.")
+    for role, info in agents.items():
+        last = (info.get("lastOutput") or "").strip()
+        lines.append(
+            f"- {role} [{info.get('model')}] last step at {info.get('at')}"
+            + (f": {last[:160]}" if last else "")
+        )
+    return "\n".join(lines)
+
+
+@studio_agent.tool
+async def get_uploaded_files(ctx: RunContext[StudioDeps]) -> str:
+    """What files/images exist RIGHT NOW: live counts by type + the newest uploads
+    including their real VLM descriptions — so 'I added a new tattoo design, which
+    one is it?' answers with the newest upload's actual analysis. Fresh read."""
+    from studio.live_state import files_snapshot
+
+    data = await asyncio.to_thread(
+        lambda: files_snapshot(ctx.deps.tenant_id, dsn=ctx.deps.dsn)
+    )
+    if not data.get("readable"):
+        return (
+            "The file store could not be read this turn — say so honestly rather "
+            "than guessing a count."
+        )
+    if not data.get("total"):
+        return "No files are uploaded for this studio yet (0 images)."
+    by_type = ", ".join(f"{k}={v}" for k, v in (data.get("byType") or {}).items())
+    lines = [f"{data['total']} file(s) on record ({by_type}); images: {data['images']}."]
+    if data.get("newest"):
+        lines.append("Newest uploads (most recent first):")
+        for n in data["newest"]:
+            desc = n.get("vlmSummary") or "no visual analysis captured"
+            artist = f" artist={n['artist']}" if n.get("artist") else ""
+            lines.append(f"- {n['name']} [{n['kind']}]{artist} — {desc}")
+    return "\n".join(lines)
+
+
+@studio_agent.tool
+async def get_artist_artworks(ctx: RunContext[StudioDeps], artist: str) -> str:
+    """Which artworks one ARTIST has in the library (real pieces + their VLM tags).
+    Fresh read; an artist with nothing on file reads honestly empty."""
+    from studio.live_state import artist_artworks
+
+    data = await asyncio.to_thread(
+        lambda: artist_artworks(ctx.deps.tenant_id, artist, dsn=ctx.deps.dsn)
+    )
+    if not data.get("resolved"):
+        return data.get("note") or f"No artist matching {artist!r} in the roster."
+    works = data.get("artworks") or []
+    if not works:
+        return f"{data['artist']} has NO artwork in the library yet — upload one to attach."
+    lines = [f"{data['artist']}: {len(works)} piece(s) in the library."]
+    for w in works[:12]:
+        tags = ", ".join(w.get("styles") or []) or "untagged"
+        desc = w.get("vlmSummary") or "no VLM analysis"
+        lines.append(f"- asset {w['assetId']} [{tags}] — {desc}")
+    return "\n".join(lines)
+
+
+@studio_agent.tool
+async def get_artist_memory(ctx: RunContext[StudioDeps], artist: str) -> str:
+    """The most recent MEMORY updates for one artist (uploads, operator notes,
+    campaign events) — newest first, real rows only. Fresh read."""
+    from studio.live_state import artist_recent_memories
+
+    data = await asyncio.to_thread(
+        lambda: artist_recent_memories(ctx.deps.tenant_id, artist, dsn=ctx.deps.dsn)
+    )
+    mems = data.get("memories") or []
+    if not mems:
+        return (
+            f"No memories recorded for {data.get('artist') or artist} yet — "
+            "nothing invented."
+        )
+    lines = [f"Recent memory for {data['artist']} (newest first):"]
+    for m in mems:
+        lines.append(f"- [{m['at']}] {m['text']}")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
 # Customer CSV upload. This helper is the PURE PARSER only (no side effects). The
 # `POST /studio/upload` route below is what then INGESTS the rows into `customers`
 # AND attaches a real summary onto the session plan, which `_customers_context`
@@ -3491,6 +3644,12 @@ def mount_studio_agui(app) -> None:
     if not hasattr(app.state, "_studio_runs"):
         app.state._studio_runs = {}
     runs_registry: dict[str, dict] = app.state._studio_runs
+    try:  # live-state tools (item 4) read in-flight statuses from this registry
+        from studio.live_state import set_runs_registry
+
+        set_runs_registry(runs_registry)
+    except Exception:
+        pass
 
     @app.post("/studio/run")
     async def studio_run_start(request: Request):  # noqa: ANN202

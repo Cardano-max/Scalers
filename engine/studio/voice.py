@@ -242,6 +242,25 @@ def _data_inventory_block(tenant_id: str, *, dsn: str | None = None) -> str:
     return "\n\n" + readback + "\n\n" + campaign_interview_prompt()
 
 
+def live_state_snapshot(tenant_id: str, *, dsn: str | None = None) -> dict[str, Any]:
+    """The LIVE studio state bundle (engine-core item 4): active run + per-agent
+    latest steps + pending artwork selection + staged leads + file registry — read
+    FRESH from the DB at call time (never the mint-time frozen context). This is the
+    ``liveState`` key on the session-mint, plan, and orchestrate responses: the
+    browser relay feeds it back to the model as tool output, so the voice
+    supervisor answers state questions from CURRENT rows every turn. Best-effort:
+    an unreadable store yields an honest error entry, never a fabricated state."""
+    try:
+        from studio.live_state import snapshot
+
+        return snapshot(tenant_id, dsn=dsn)
+    except Exception as exc:
+        return {
+            "error": f"live state unavailable: {type(exc).__name__}",
+            "note": "answer state questions honestly as unknown — do not guess",
+        }
+
+
 def voice_state_briefing(run_id: str, *, dsn: str | None = None) -> str:
     """A spoken, TRUTHFUL real-state briefing for the voice supervisor to narrate — the
     draft count, which agents ran (incl. an honest 'failed'), and draft #1 (the REAL
@@ -483,6 +502,10 @@ def mount_studio_voice(app) -> None:
             )
 
         # Return ONLY the ephemeral secret + non-sensitive session echo. Never the key.
+        # ``liveState`` (documented key, item 4) is the CURRENT studio state at mint —
+        # and the SAME snapshot is re-read fresh on every /studio/voice/plan and
+        # /studio/voice/orchestrate response, so the session's view never freezes.
+        live = await _to_thread(live_state_snapshot, tenant_id, dsn=dsn)
         return JSONResponse(
             {
                 "ok": True,
@@ -491,6 +514,7 @@ def mount_studio_voice(app) -> None:
                 "model": REALTIME_MODEL,
                 "tools": [t["name"] for t in VOICE_TOOLS],
                 "callUrl": "https://api.openai.com/v1/realtime/calls",
+                "liveState": live,
             }
         )
 
@@ -515,6 +539,12 @@ def mount_studio_voice(app) -> None:
 
         runnable = plan_is_runnable(plan)
         readback = _readback_text(plan)
+        # LIVE re-read (item 4): the response carries the CURRENT studio state, so
+        # the voice model answers from fresh rows instead of the mint-time context.
+        # Additive key — the existing contract (ok/plan/awaitingGo/runnable/readback)
+        # is unchanged.
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        live = await _to_thread(live_state_snapshot, tenant_id, dsn=dsn)
         return JSONResponse(
             {
                 "ok": True,
@@ -522,6 +552,7 @@ def mount_studio_voice(app) -> None:
                 "awaitingGo": runnable,
                 "runnable": runnable,
                 "readback": readback,
+                "liveState": live,
             }
         )
 
@@ -543,8 +574,13 @@ def mount_studio_voice(app) -> None:
         awaiting_go = plan_is_runnable(plan)
         gate = evaluate_go_gate(awaiting_go=awaiting_go, transcript=transcript)
 
+        # LIVE re-read (item 4, additive): fresh state rides on BOTH branches so the
+        # voice supervisor can narrate the real run/selection state each turn.
+        live = await _to_thread(live_state_snapshot, tenant_id, dsn=dsn)
         if not gate["launch"]:
-            return JSONResponse({"ok": True, "launched": False, "gate": gate})
+            return JSONResponse(
+                {"ok": True, "launched": False, "gate": gate, "liveState": live}
+            )
 
         info = await launch_studio_run(
             app, dsn, session_id, tenant_id, plan,
@@ -558,6 +594,7 @@ def mount_studio_voice(app) -> None:
                 "campaignId": info["campaignId"],
                 "status": info["status"],
                 "gate": gate,
+                "liveState": live,
             }
         )
 
