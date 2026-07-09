@@ -285,6 +285,38 @@ def voice_state_briefing(run_id: str, *, dsn: str | None = None) -> str:
     return " ".join(lines)
 
 
+def conversation_briefing(
+    session_id: str, *, dsn: str | None = None, max_turns: int = 24, max_chars: int = 320
+) -> str:
+    """The session's REAL prior conversation (typed AND spoken turns, from
+    ``studio_chat_turns``) rendered as an instruction block, so a freshly minted
+    voice session CONTINUES the same conversation instead of re-greeting. Honest
+    empty string when the session has no history or the store is unreachable."""
+    try:
+        from studio.agui import _chat_store
+
+        turns = _chat_store(dsn).history(session_id)
+    except Exception:
+        return ""
+    if not turns:
+        return ""
+    lines = []
+    for t in turns[-max_turns:]:
+        role = (t.role or "").upper()
+        text = (t.text or "").strip().replace("\n", " ")
+        if not text:
+            continue
+        lines.append(f"- {role}: {text[:max_chars]}")
+    if not lines:
+        return ""
+    return (
+        "\n\nCONVERSATION SO FAR — this session's REAL prior turns (typed and spoken), "
+        "oldest to newest. You already know all of this: CONTINUE the conversation, do "
+        "NOT re-greet, and do NOT re-ask for facts already given below.\n"
+        + "\n".join(lines)
+    )
+
+
 def voice_instructions_with_state(
     tenant_id: str, run_id: str | None, *, dsn: str | None = None
 ) -> str:
@@ -487,6 +519,8 @@ def mount_studio_voice(app) -> None:
         # tool surface stays exactly two (send-incapable).
         tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
         dsn = get_dsn()
+        payload = await _json_body(request)
+        session_id = _session_id(payload, request)
         try:
             from studio.agui import _ensure_docs_seeded
 
@@ -496,6 +530,9 @@ def mount_studio_voice(app) -> None:
         instructions = await _to_thread(
             voice_instructions_with_docs, tenant_id, dsn=dsn
         )
+        # ONE conversation across voice and text: the mint carries this session's
+        # real prior turns so the spoken host CONTINUES the thread, never re-greets.
+        instructions += await _to_thread(conversation_briefing, session_id, dsn=dsn)
         cfg = build_session_config(instructions=instructions)
         try:
             minted = await _to_thread(mint_realtime_secret, api_key, session_config=cfg)
@@ -526,6 +563,33 @@ def mount_studio_voice(app) -> None:
                 "liveState": live,
             }
         )
+
+    @app.post("/studio/voice/turn")
+    async def studio_voice_turn(request: Request):  # noqa: ANN202
+        """Persist ONE finalized spoken line into the session's shared transcript
+        (``studio_chat_turns``) — the same store the typed host reads — so voice and
+        text are ONE conversation: a later typed turn (or a re-minted voice session)
+        knows what was said aloud. Roles are restricted to operator/host; nothing
+        here can launch or send anything."""
+        payload = await _json_body(request)
+        session_id = _session_id(payload, request)
+        role = str(payload.get("role") or "").strip().lower()
+        text = str(payload.get("text") or "").strip()
+        if role not in ("operator", "host"):
+            return JSONResponse(
+                {"ok": False, "error": "role must be 'operator' or 'host'"}, status_code=400
+            )
+        if not text:
+            return JSONResponse({"ok": False, "error": "text is empty"}, status_code=400)
+        try:
+            from studio.agui import _log_turn
+
+            await _to_thread(_log_turn, get_dsn(), session_id, role, text[:4000], "voice-realtime")
+        except Exception as exc:  # honest failure; the display copy already exists client-side
+            return JSONResponse(
+                {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500
+            )
+        return JSONResponse({"ok": True})
 
     @app.post("/studio/voice/plan")
     async def studio_voice_plan(request: Request):  # noqa: ANN202
