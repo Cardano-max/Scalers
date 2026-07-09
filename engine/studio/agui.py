@@ -517,41 +517,6 @@ def _register_document_artifact(
     )
 
 
-def _register_image_artifact(
-    tenant_id: str,
-    name: str,
-    artifact_type: str,
-    media_type: str | None,
-    preview: str,
-    n_bytes: int,
-    *,
-    linked_artist_id: str | None,
-    dsn: str | None,
-) -> str:
-    """Register an uploaded image/artwork/screenshot as a universal context artifact.
-
-    HONESTY: ``parsed_content`` stays empty — the image's visual content is not
-    captured here (VLM captioning is a separate capability); the artifact is
-    countable/previewable/listable but never carries an invented description."""
-    from studio.artifacts import register_artifact
-
-    summary = f"{(media_type or 'image').split('/')[-1].upper()} image, {n_bytes:,} bytes"
-    return register_artifact(
-        tenant_id,
-        name,
-        artifact_type,
-        media_type=media_type,
-        summary=summary,
-        parsed_content="",
-        preview=preview,
-        source="upload",
-        linked_entity_type="artist" if linked_artist_id else None,
-        linked_entity_id=linked_artist_id,
-        meta={"bytes": n_bytes},
-        dsn=dsn,
-    )
-
-
 def build_documents_context(tenant_id: str, plan: CampaignPlan, dsn: str | None) -> str:
     """Assemble the host's per-turn view of the PERSISTENT tenant document store.
 
@@ -3890,14 +3855,19 @@ def mount_studio_agui(app) -> None:
 
     @app.post("/studio/upload/image")
     async def studio_upload_image_route(request: Request):  # noqa: ANN202
-        """Upload an IMAGE / artwork / screenshot as a universal context artifact (nmh.4).
+        """Upload an IMAGE / artwork / screenshot: disk bytes + REAL VLM understanding.
 
-        Accepts JSON ``{name, contentBase64, mediaType?, kind?, linkedArtistId?}``.
-        Stores a bounded data-uri preview + real byte size so the voice supervisor and
-        every agent can SEE and COUNT it ("how many images are uploaded?") from real
-        state. HONESTY: the image's VISUAL content is NOT described here (VLM captioning
-        is a separate capability) — the artifact carries an empty parsed_content and
-        says so, never an invented description. Nothing is sent."""
+        Accepts JSON ``{name, contentBase64, mediaType?, kind?, artist?, prompt?,
+        linkedArtistId?}`` (``artist`` = name or slug; ``prompt`` = the operator's
+        text about the design). The pipeline (studio/image_ingest.py) writes the
+        bytes to ``var/artifacts/{tenant}/{sha256}.{ext}``, runs REAL VLM analysis
+        (tattoo style / motif / color-vs-black-and-grey / mood / complexity /
+        campaign-fit — image-level facts), registers the artifact (metadata +
+        storage path + a bounded <=64k thumbnail), adds an artwork LIBRARY row so
+        campaign artwork selection can pick it, and records an artist memory.
+        HONEST DEGRADATION: with no model key / a VLM failure the image + artist +
+        prompt still persist and ``vlmStatus='unavailable'`` says why — tags are
+        never fabricated. Nothing is sent."""
         import base64
 
         from fastapi.responses import JSONResponse
@@ -3914,7 +3884,10 @@ def mount_studio_agui(app) -> None:
         b64 = payload.get("contentBase64") or payload.get("content") or ""
         media_type = (payload.get("mediaType") or payload.get("media_type") or "").strip() or None
         kind = (payload.get("kind") or "image").strip().lower()
-        artifact_type = kind if kind in ("image", "artwork", "screenshot") else "image"
+        artist = (
+            payload.get("artist") or payload.get("linkedArtistId") or ""
+        ).strip() or None
+        prompt = (payload.get("prompt") or "").strip() or None
         if not name or not b64:
             return JSONResponse(
                 {"ok": False, "error": "image upload needs a name and contentBase64"},
@@ -3936,23 +3909,28 @@ def mount_studio_agui(app) -> None:
             return JSONResponse(
                 {"ok": False, "error": "contentBase64 is not valid base64"}, status_code=400
             )
+        if not raw:
+            return JSONResponse(
+                {"ok": False, "error": "contentBase64 decoded to zero bytes"},
+                status_code=400,
+            )
         if media_type and not media_type.startswith("image/"):
             return JSONResponse(
                 {"ok": False, "error": f"mediaType {media_type!r} is not an image/*"},
                 status_code=400,
             )
-        preview = f"data:{media_type or 'image/png'};base64,{b64}"
-        linked_artist = (payload.get("linkedArtistId") or "").strip() or None
         try:
-            aid = await asyncio.to_thread(
-                lambda: _register_image_artifact(
+            from studio.image_ingest import process_image_upload
+
+            result = await asyncio.to_thread(
+                lambda: process_image_upload(
                     tenant_id,
                     name,
-                    artifact_type,
-                    media_type,
-                    preview,
-                    len(raw),
-                    linked_artist_id=linked_artist,
+                    raw,
+                    media_type=media_type,
+                    kind=kind,
+                    artist=artist,
+                    prompt=prompt,
                     dsn=dsn,
                 )
             )
@@ -3960,18 +3938,7 @@ def mount_studio_agui(app) -> None:
             return JSONResponse(
                 {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500
             )
-        return JSONResponse(
-            {
-                "ok": True,
-                "id": aid,
-                "name": name,
-                "type": artifact_type,
-                "bytes": len(raw),
-                "note": "Image registered — the supervisor and team can now SEE and "
-                "COUNT it. Visual understanding is not captured yet (no invented "
-                "description). Nothing was sent.",
-            }
-        )
+        return JSONResponse(result)
 
     @app.get("/studio/documents")
     async def studio_documents_list_route():  # noqa: ANN202

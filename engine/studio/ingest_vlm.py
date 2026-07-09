@@ -240,6 +240,25 @@ _IMAGE_INSTRUCTION = (
     "(style, motifs, palette, technique). Describe only what is actually shown."
 )
 
+# Tattoo-artwork extraction (the studio upload path). Same no-fabrication rules as the
+# generic image instruction, but the tags map onto the structured artwork fields the
+# library + selection layer ground on: style / motif / color-vs-black-and-grey / mood /
+# complexity / campaign-fit. A dimension the model cannot SEE is omitted, never guessed.
+TATTOO_IMAGE_INSTRUCTION = (
+    "The image above is a tattoo design / artwork photo from a tattoo studio. Extract "
+    "ONLY what is VISIBLY present, one fact per line, using these bracket tags:\n"
+    "[style] the tattoo style(s) shown (e.g. fine-line, traditional, neo-traditional, "
+    "realism, blackwork, geometric, script) — one line per style;\n"
+    "[motif] the subject/motif(s) shown (e.g. rose, skull, koi) — one line per motif;\n"
+    "[color] exactly 'color' or 'black-and-grey', judged from the actual ink;\n"
+    "[mood] the mood/vibe of the piece in a few words;\n"
+    "[complexity] exactly one of: simple, moderate, intricate;\n"
+    "[campaign_fit] short tag(s) for the kind of post/campaign this piece suits "
+    "(e.g. artist-spotlight, flash-sheet, seasonal, cover-up) — one line per tag.\n"
+    "Describe only what is actually shown; omit any dimension you cannot see. "
+    "If the image is not tattoo artwork, describe what it actually is with [fact] lines."
+)
+
 
 # --------------------------------------------------------------------------- #
 # Configuration / client (network boundary — the only impure part).
@@ -483,10 +502,17 @@ def _doc_id(tenant_id: str, name: str) -> str:
 
 
 def _build_content(
-    data: bytes | str, media_type: str, source_kind: str, *, title: str
+    data: bytes | str,
+    media_type: str,
+    source_kind: str,
+    *,
+    title: str,
+    instruction: str | None = None,
 ) -> list[dict[str, Any]]:
     """Assemble the user-message content: the document/image block first, then the
-    extraction instruction (per the API's document-before-text ordering)."""
+    extraction instruction (per the API's document-before-text ordering).
+    ``instruction`` overrides the default trailing instruction (e.g. the tattoo-artwork
+    image prompt) — the citation/no-fabrication gates are unchanged either way."""
     if source_kind == "text":
         text = data.decode("utf-8") if isinstance(data, (bytes, bytearray)) else str(data)
         return [
@@ -496,7 +522,7 @@ def _build_content(
                 "title": title,
                 "citations": {"enabled": True},
             },
-            {"type": "text", "text": _USER_INSTRUCTION},
+            {"type": "text", "text": instruction or _USER_INSTRUCTION},
         ]
     if source_kind == "pdf":
         b64 = base64.standard_b64encode(bytes(data)).decode("ascii")
@@ -511,13 +537,13 @@ def _build_content(
                 "title": title,
                 "citations": {"enabled": True},
             },
-            {"type": "text", "text": _USER_INSTRUCTION},
+            {"type": "text", "text": instruction or _USER_INSTRUCTION},
         ]
     # image
     b64 = base64.standard_b64encode(bytes(data)).decode("ascii")
     return [
         {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
-        {"type": "text", "text": _IMAGE_INSTRUCTION},
+        {"type": "text", "text": instruction or _IMAGE_INSTRUCTION},
     ]
 
 
@@ -530,8 +556,13 @@ def ingest_bytes(
     model: str | None = None,
     doc_id: str | None = None,
     max_tokens: int = 4096,
+    instruction: str | None = None,
 ) -> IngestResult:
     """Ingest one document/image into grounded, cited facts for ``tenant_id``.
+
+    ``instruction`` optionally overrides the default extraction instruction (e.g.
+    :data:`TATTOO_IMAGE_INSTRUCTION` for the studio artwork-upload path) — the
+    citation / no-fabrication gates apply identically.
 
     Raises :class:`NotConfiguredError` when the format is unparseable (DOCX/PPTX/
     XLSX/unknown) or the model is unconfigured — fail-closed, never fabricated.
@@ -563,7 +594,7 @@ def ingest_bytes(
     client = _client()  # raises NotConfiguredError when unconfigured
     model = model or _default_model()
     doc_id = doc_id or _doc_id(tenant_id, name)
-    content = _build_content(data, media_type, source_kind, title=name)
+    content = _build_content(data, media_type, source_kind, title=name, instruction=instruction)
 
     message = client.messages.create(
         model=model,
