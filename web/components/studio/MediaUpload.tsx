@@ -15,7 +15,7 @@ import { useRef, useState } from 'react';
 import { uploadArtworkImage, type UploadImageResult } from '@/lib/studio/artists';
 
 const ACCEPT =
-  'image/png,image/jpeg,image/webp,video/mp4,video/quicktime,video/webm';
+  'image/png,image/jpeg,image/webp,video/mp4,video/quicktime,video/webm,audio/mpeg,audio/mp4,audio/wav';
 const ACCEPTED_TYPES = ACCEPT.split(',');
 const TEAL = '#0F8A82';
 
@@ -57,7 +57,7 @@ export function MediaUpload({
     setError(null);
     if (!ACCEPTED_TYPES.includes(file.type)) {
       setError(
-        `Unsupported file type ${file.type || '(unknown)'} — use PNG/JPEG/WebP or MP4/MOV/WebM.`,
+        `Unsupported file type ${file.type || '(unknown)'} — use PNG/JPEG/WebP, MP4/MOV/WebM, or MP3/M4A/WAV.`,
       );
       return;
     }
@@ -123,7 +123,7 @@ export function MediaUpload({
       }}
     >
       <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink)' }}>
-        Add image / video to memory
+        Add image / video / voice note to memory
       </div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <input
@@ -145,7 +145,7 @@ export function MediaUpload({
             cursor: busy ? 'wait' : 'pointer',
           }}
         >
-          {fileName ? `Picked: ${fileName}${isVideo ? ' (video)' : ''}` : 'Pick image or video'}
+          {fileName ? `Picked: ${fileName}${isVideo ? ' (video)' : ''}` : 'Pick image, video, or voice note'}
         </button>
         <input
           type="text"
