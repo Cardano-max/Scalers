@@ -357,6 +357,7 @@ export function ReviewScreen() {
               </div>
             ) : null}
           </div>
+          <SendAllEligible liveMode={liveMode && !testMode} onDone={queue.reload} />
         </div>
 
         <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
@@ -1234,4 +1235,71 @@ function pct(n: number): number {
 }
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/** THE one-button send — every eligible PENDING draft of the tenant, through the
+ *  same per-draft approve path + server gates (TEST-MODE / allowlist / redirect).
+ *  Shows the honest per-bucket result; never claims more than the engine reported. */
+function SendAllEligible({ liveMode, onDone }: { liveMode: boolean; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async () => {
+    if (
+      liveMode &&
+      !window.confirm('LIVE send to real recipients (allowlist permitting). Continue?')
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const { sendAllEligible } = await import('@/lib/studio/campaign-send');
+      const r = await sendAllEligible(undefined, liveMode);
+      setResult(
+        `Sent ${r.n_sent} · failed ${r.n_failed} · skipped (not eligible) ${r.n_skipped}` +
+          (liveMode ? ' — LIVE' : ' — test redirect'),
+      );
+      onDone();
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <button
+        type="button"
+        onClick={run}
+        disabled={busy}
+        style={{
+          width: '100%',
+          border: '1px solid var(--accent)',
+          background: busy ? 'var(--surface)' : 'var(--nav-active-bg)',
+          color: 'var(--accent-dark)',
+          borderRadius: 'var(--radius-pill)',
+          padding: '7px 12px',
+          fontSize: 12.5,
+          fontWeight: 600,
+          cursor: busy ? 'wait' : 'pointer',
+        }}
+      >
+        {busy ? 'Sending eligible drafts…' : 'Send all eligible'}
+      </button>
+      {result ? (
+        <div role="status" style={{ marginTop: 6, fontSize: 11.5, color: 'var(--text-secondary)' }}>
+          {result}
+        </div>
+      ) : null}
+      {error ? (
+        <div role="alert" style={{ marginTop: 6, fontSize: 11.5, color: 'var(--danger, #a33)' }}>
+          {error}
+        </div>
+      ) : null}
+    </div>
+  );
 }

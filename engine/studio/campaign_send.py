@@ -139,7 +139,7 @@ def send_eligible(
     the [TEST] marker. Each result entry carries the per-send ``mode``
     ('live' | 'test_redirect') so the UI can badge it."""
     from actions.audit import record_send_audit
-    from actions.publish import approve_and_publish
+    from actions.publish import TestModeSendBlockedError, approve_and_publish
 
     actions = _pending_actions(run_id=run_id, tenant_id=tenant_id, dsn=dsn)
     sent: list[dict[str, Any]] = []
@@ -153,7 +153,21 @@ def send_eligible(
             continue
         # SAME approve path — exactly-once claim + allow-list redirect preserved. ``live``
         # only flips the redirect when the operator explicitly authorized a live send.
-        row = approve_and_publish(a.id, connectors=connectors, dsn=dsn, live=live)
+        try:
+            row = approve_and_publish(a.id, connectors=connectors, dsn=dsn, live=live)
+        except TestModeSendBlockedError as exc:
+            # Tenant TEST-MODE gate (ju1.1) refused this recipient. The draft stays
+            # blocked (publish already recorded last_error before raising) — but one
+            # gated draft must not abort the whole batch: report it, keep going.
+            skipped.append(_summary(a, eligible=False, reason=str(exc)))
+            continue
+        except Exception as exc:  # noqa: BLE001 — per-draft isolation, reported honestly
+            entry = _summary(a, eligible=True, reason=reason)
+            entry["result"] = "error"
+            entry["mode"] = None
+            entry["last_error"] = f"{type(exc).__name__}: {exc}"
+            failed.append(entry)
+            continue
         status = getattr(row, "status", None)
         mode = getattr(row, "mode", None)
         try:

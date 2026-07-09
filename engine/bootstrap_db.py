@@ -59,6 +59,10 @@ def main() -> int:
     step("studio.campaign_examples_store", lambda: campaign_examples_store.ensure_schema(dsn))
     step("tenants.store", lambda: tenants_store.ensure_schema(dsn))
 
+    from studio import supervisor_control
+
+    step("studio.supervisor_control (run_directives)", lambda: supervisor_control.ensure_schema(dsn))
+
     # --- class-based stores -------------------------------------------------- #
     from archetypes.registry import ArchetypeStore
     from autonomy.store import PostgresDecisionStore
