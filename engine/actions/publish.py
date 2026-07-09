@@ -327,7 +327,9 @@ def approve_and_publish(
     # approved straight from the queue can still arrive as "email" — both route to the
     # same real Gmail send. The .lower() above already folds Email/EMAIL/Gmail.
     if channel in ("gmail", "email"):
-        return _publish_gmail(action, connectors.get("gmail"), dsn)
+        return _publish_gmail(
+            action, connectors.get("gmail"), dsn, smtp_connector=connectors.get("smtp")
+        )
     if channel == "facebook":
         if atype == "comment":
             return update_status(
@@ -357,7 +359,94 @@ def reject(action_id: str, *, dsn: str | None = None) -> ActionRow:
 # ── per-channel publish ───────────────────────────────────────────────────────
 
 
-def _publish_gmail(action: ActionRow, connector: Any | None, dsn: str | None) -> ActionRow:
+def _gmail_auth_dead(exc: Exception) -> bool:
+    """True iff the Gmail REST path failed in a way the SMTP app-password fallback
+    (Option B) may legitimately cover: the OAuth refresh token is dead
+    (``invalid_grant`` — expired/revoked, needs operator re-consent) or the API
+    creds are absent altogether. A provider SEND error (4xx/5xx on
+    ``messages.send``) is NOT fallback-eligible — retrying a rejected message on a
+    second transport could double-deliver or mask a real policy refusal."""
+    from connectors.gmail import GmailAuthError
+
+    if not isinstance(exc, GmailAuthError):
+        return False
+    msg = str(exc).lower()
+    return "invalid_grant" in msg or "missing client_id" in msg
+
+
+def _publish_gmail_via_smtp(
+    action: ActionRow,
+    smtp_connector: Any | None,
+    dsn: str | None,
+    *,
+    to_addr: str,
+    subject: str,
+    body: str,
+    send_kwargs: dict[str, Any],
+    attachment_receipts: tuple[Any, ...],
+    mode: str,
+    primary_error: str,
+) -> ActionRow | None:
+    """The SMTP app-password fallback leg of the gmail send (Option B).
+
+    Called ONLY after every send gate has already run (TEST-MODE tenant gate,
+    exactly-once claim, redirect/live resolution, placeholder + attachment
+    guards) — ``to_addr``/``subject`` are the ALREADY-GATED values, so the
+    fallback can never widen delivery beyond what the Gmail API leg was about
+    to do. Returns the final row when the fallback RAN (sent or failed), or
+    ``None`` when no SMTP fallback is configured — the caller then surfaces the
+    primary Gmail error unchanged (the existing concrete failure, never silent)."""
+    from connectors.smtp_mail import SmtpMailConnector
+
+    conn = smtp_connector
+    if conn is None:
+        if not SmtpMailConnector.configured_in_env():
+            return None
+        conn = SmtpMailConnector.from_env(enabled=True)
+    _log.warning(
+        "gmail publish: action=%s gmail api unavailable (%s) — using SMTP "
+        "app-password fallback (transport=gmail-smtp-fallback, mode=%s)",
+        action.id, primary_error, mode,
+    )
+    try:
+        _ensure_real(conn)  # real-only: a mock never live-sends (same guard, both legs)
+        result = conn.send(to=to_addr, subject=subject, body=body, **send_kwargs)
+    except Exception as exc:  # noqa: BLE001 — surface BOTH real errors, never fake success
+        last_error = f"gmail api: {primary_error}; smtp fallback: {exc}"
+        _record_send_audit_row(
+            action, mode=mode, result="failed", transport="gmail-smtp-fallback",
+            attachments=attachment_receipts, detail=last_error, dsn=dsn,
+        )
+        return _with_mode(
+            update_status(action.id, "failed", dsn=dsn, last_error=last_error), mode
+        )
+    _record_send_audit_row(
+        action, mode=mode, result="sent", transport="gmail-smtp-fallback",
+        provider_id=getattr(result, "message_id", None),
+        attachments=getattr(result, "attachments", None) or attachment_receipts,
+        detail=f"gmail api unavailable: {primary_error}",
+        dsn=dsn,
+    )
+    row = update_status(
+        action.id, "sent", dsn=dsn,
+        deep_link=getattr(result, "deep_link", None),
+        sent_at=_now(),
+        outcome_label="Sent (SMTP fallback)",  # honest: not the Gmail API transport
+        outcome_kind="success",
+    )
+    if row is not None:
+        row.attachment_receipts = attachment_receipts
+        row.transport = "gmail-smtp-fallback"
+    return _with_mode(row, mode)
+
+
+def _publish_gmail(
+    action: ActionRow,
+    connector: Any | None,
+    dsn: str | None,
+    *,
+    smtp_connector: Any | None = None,
+) -> ActionRow:
     from connectors.gmail import GmailConnector
 
     conn = connector or GmailConnector.from_env(enabled=True)
@@ -479,6 +568,18 @@ def _publish_gmail(action: ActionRow, connector: Any | None, dsn: str | None) ->
             **send_kwargs,
         )
     except Exception as exc:  # noqa: BLE001 — surface the REAL error, never fake success
+        # SMTP FALLBACK (Option B): only when the Gmail API is auth-dead
+        # (invalid_grant / creds absent) AND an SMTP fallback is configured. All
+        # gates above already ran; the fallback reuses the gated to/subject/body.
+        if _gmail_auth_dead(exc):
+            fallback_row = _publish_gmail_via_smtp(
+                action, smtp_connector, dsn,
+                to_addr=to_addr, subject=subject, body=body,
+                send_kwargs=send_kwargs, attachment_receipts=attachment_receipts,
+                mode=mode, primary_error=str(exc),
+            )
+            if fallback_row is not None:
+                return fallback_row
         _record_send_audit_row(
             action, mode=mode, result="failed", transport="gmail-api",
             attachments=attachment_receipts, detail=str(exc), dsn=dsn,
