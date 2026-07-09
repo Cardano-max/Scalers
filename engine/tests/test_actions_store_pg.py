@@ -34,7 +34,11 @@ def _record(tenant: str, **kw) -> str:
     kw.setdefault("type", "outreach")
     kw.setdefault("channel", "gmail")
     kw.setdefault("worker", "Outreach")
-    kw.setdefault("target", "client@studio.example")
+    # Unique per row: the nmh.11 structural guard collapses a second PENDING row
+    # for the SAME (tenant, worker, target) onto the first (one pending draft per
+    # recipient). These store tests exercise row-level behavior, so each record
+    # gets its own recipient; the guard's own semantics live in its test file.
+    kw.setdefault("target", f"client-{uuid.uuid4().hex[:10]}@studio.example")
     kw.setdefault("draft", "Hi from Ladies First")
     kw.setdefault("subject", "Your custom piece")
     kw.setdefault("context", None)
