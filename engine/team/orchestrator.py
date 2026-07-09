@@ -49,7 +49,7 @@ from typing import Any, Callable, Optional
 
 from pydantic import BaseModel, Field
 
-from team.registry import PIPELINE_ORDER, Role
+from team.registry import PIPELINE_ORDER
 from team.store import ASSET_STATUS_QUEUED, TeamStore
 
 

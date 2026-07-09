@@ -18,7 +18,7 @@ from studio.seed_tattoo_leads import SEED_LEADS
 
 
 def _lead_by_email(email: str) -> dict:
-    return next(l for l in SEED_LEADS if l["email"] == email)
+    return next(row for row in SEED_LEADS if row["email"] == email)
 
 
 def _facts(lead: dict) -> dict:

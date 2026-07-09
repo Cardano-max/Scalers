@@ -9,7 +9,6 @@ round-trip lives in ``test_studio_documents_pg.py``.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 
 from studio import documents as docstore
 from studio.agui import CampaignPlan, build_documents_context

@@ -9,7 +9,6 @@ empty/erroring Firecrawl run degrades to status=failed with NO fabricated source
 
 from __future__ import annotations
 
-import pytest
 
 from research.agent import (
     ResearchFindings,

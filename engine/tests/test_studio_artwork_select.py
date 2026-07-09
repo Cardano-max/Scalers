@@ -14,7 +14,6 @@ from studio.artwork_select import (
     _norm,
     _seed_asset_id,
     artist_styles,
-    build_why,
     select_artwork,
 )
 

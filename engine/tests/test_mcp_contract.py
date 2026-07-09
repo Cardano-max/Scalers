@@ -20,7 +20,6 @@ from studio.mcp import (
     McpToolServer,
     Principal,
     ProtocolError,
-    ToolContext,
     ToolDef,
     UnknownToolError,
     args_hash,

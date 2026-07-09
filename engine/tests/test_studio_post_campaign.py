@@ -22,7 +22,6 @@ from studio.post_campaign import (
     check_caption,
     compose_caption,
     draft_studio_posts,
-    resolve_voice,
 )
 
 _LADIES_EMOJI = "0-2 per caption, only \U0001F338 \U0001F337 \U0001F90D; never \U0001F525\U0001F4AF or hype emoji"

@@ -15,7 +15,6 @@ and no DB, and research is exercised against a fake in-memory provider.
 
 from __future__ import annotations
 
-import pytest
 
 from studio.customer_research import (
     _choose_angle,

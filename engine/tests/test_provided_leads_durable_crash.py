@@ -131,7 +131,7 @@ def _wire(monkeypatch, drafted: list[str], *, crash_on: str | None = None):
     monkeypatch.setattr(offers_mod, "get_offers", lambda *a, **k: [])
     monkeypatch.setattr(psych, "analyze_customer", lambda facts, thread=None, **k: None)
 
-    monkeypatch.setattr(cr, "_research_enabled", lambda v: False)
+    monkeypatch.setattr(cr, "_research_enabled", lambda *a, **k: False)
 
     def _research(facts, *, enabled):
         if crash_on is not None and facts["customer_id"] == crash_on:

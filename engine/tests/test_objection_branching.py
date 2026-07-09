@@ -9,7 +9,6 @@ Deterministic copy path (SCALERS_OUTREACH_LLM=0) — no model, no DB.
 
 from __future__ import annotations
 
-import pytest
 
 from studio.customer_research import _choose_angle, build_outreach_draft
 from studio.offers import parse_offers_doc, select_offer, substantiate, _SEED_OFFERS

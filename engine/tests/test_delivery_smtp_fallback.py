@@ -26,7 +26,7 @@ import actions.publish as publish
 from actions.publish import approve_and_publish
 from actions.store import ActionRow
 from connectors.base import ConnectorDisabledError
-from connectors.gmail import GmailAuthError, GmailSendError, GmailSendResult
+from connectors.gmail import GmailAuthError, GmailSendError
 from connectors.mail_message import MailAttachmentError
 from connectors.smtp_mail import (
     SmtpConfigError,

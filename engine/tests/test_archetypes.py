@@ -93,7 +93,6 @@ def test_classifier_output_is_enum_bounded_to_registry():
 def test_campaign_state_assets_have_additive_reducer():
     # fan-in safety: parallel draft_one workers must accumulate, not clobber.
     import operator
-    from typing import get_args
 
     from archetypes.compose import CampaignState
 

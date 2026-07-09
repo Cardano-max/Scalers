@@ -69,13 +69,23 @@ async def test_ig_and_fb_cross_post_must_both_persist(db, dsn):
     """
     connector = MockConnector()
 
+    # This test exercises idempotency-key derivation on the AUTO/dispatch path,
+    # so the bead-439 hold (held-by-default; landed via 4jx13) is lifted
+    # EXPLICITLY for the fixture tenant's two posting channels. The process
+    # DEFAULT registry stays empty/held — this never weakens the live posture.
+    from harness.hold import HoldRegistry
+
+    lifted = HoldRegistry().lift(TENANT, "instagram").lift(TENANT, "facebook")
+
     ig = await run_slice(
         tenant_id=TENANT, topic=TOPIC, dsn=dsn, connector=connector,
         assemble_model=_model(), channel=PackChannel.INSTAGRAM, target="feed",
+        hold_registry=lifted,
     )
     fb = await run_slice(
         tenant_id=TENANT, topic=TOPIC, dsn=dsn, connector=connector,
         assemble_model=_model(), channel=PackChannel.FACEBOOK, target="feed",
+        hold_registry=lifted,
     )
 
     # Both channels are AUTO for this pack, so both reach the enqueue/dispatch path.

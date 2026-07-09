@@ -112,7 +112,6 @@ def test_evidence_match_is_normalized_but_still_rejects_absent_quotes():
     """A verbatim quote survives trivial case/whitespace/punctuation differences; a quote
     that is genuinely absent from the source is still downgraded (errs toward safe)."""
     from studio.psych_profile import (
-        INFERRED,
         PsychField,
         SRC_CONVERSATION,
         _validate_field,

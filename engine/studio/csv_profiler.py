@@ -291,7 +291,7 @@ def _summary_text(p: CsvProfile) -> str:
     email_note = ""
     if "email" in p.roles_present:
         if p.emails_present == p.total_leads:
-            email_note = f" Every one has an email address."
+            email_note = " Every one has an email address."
         else:
             email_note = f" {p.emails_present} of {p.total_leads} have an email address."
 

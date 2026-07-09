@@ -20,7 +20,6 @@ from studio.adapters.artist_source import (
 )
 from studio.adapters.lead_source import (
     CsvLeadSource,
-    Lead,
     LeadSourceProtocol,
     MiniAppCrmSource,
     StribeConversationSource,

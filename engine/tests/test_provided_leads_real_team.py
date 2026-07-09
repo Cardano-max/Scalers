@@ -91,7 +91,7 @@ def _wire(monkeypatch, *, strat_exc=None, crit_exc=None):
     monkeypatch.setattr(agui, "_log_turn", lambda *a, **k: None)
     monkeypatch.setattr(agui, "_persist_plan", lambda *a, **k: None)
 
-    monkeypatch.setattr(cr, "_research_enabled", lambda v: False)
+    monkeypatch.setattr(cr, "_research_enabled", lambda *a, **k: False)
     monkeypatch.setattr(cr, "research_studio", lambda facts, *, enabled: [])
     monkeypatch.setattr(
         cr, "lookup_leads",

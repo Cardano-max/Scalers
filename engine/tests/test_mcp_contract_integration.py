@@ -26,7 +26,6 @@ import pytest
 
 from studio.mcp import (
     McpToolServer,
-    Principal,
     PgToolAuditLog,
     build_default_server,
     default_tools,

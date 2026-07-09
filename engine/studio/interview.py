@@ -19,6 +19,7 @@ No model, no I/O — fully unit-testable. Field coercion is also here so the
 
 from __future__ import annotations
 
+import re as _re
 from typing import Any
 
 # --------------------------------------------------------------------------- #
@@ -276,9 +277,6 @@ def is_armed(plan: Any) -> bool:
     return not missing_gating(plan)
 
 
-import re as _re
-
-
 def _is_vague_goal(goal: Any) -> bool:
     """Whether a (present) goal answer is too thin to aim a campaign at — i.e. every
     content word is a generic marketing platitude. Deterministic closed-set match, no
@@ -423,7 +421,6 @@ def planned_steps(plan: Any) -> list[dict[str, Any]]:
     which steps to run, and the UI renders which ran and WHY. Honest: a skipped step
     says why it was skipped; it never silently disappears."""
     mode, _ = select_mode(plan)
-    has_customers = _has_customers(plan)
     deep = getattr(plan, "deep_research", None)
     drafts_only = getattr(plan, "drafts_only", None) is True
     n = getattr(plan, "output_count", 0) or 0

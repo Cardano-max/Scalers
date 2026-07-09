@@ -100,7 +100,7 @@ def _wire(monkeypatch, leads):
     monkeypatch.setattr(agui, "_persist_plan", lambda *a, **k: None)
     from studio import campaign_runner as runner_mod
     monkeypatch.setattr(runner_mod, "_materialize_runs_row", lambda **kw: False)
-    monkeypatch.setattr(cr, "_research_enabled", lambda v: False)
+    monkeypatch.setattr(cr, "_research_enabled", lambda *a, **k: False)
     monkeypatch.setattr(cr, "research_studio", lambda facts, *, enabled: [])
     by_id = {leadv["customer_id"]: leadv for leadv in leads}
     monkeypatch.setattr(
