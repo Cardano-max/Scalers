@@ -12,6 +12,7 @@ import { useEffect, useRef } from 'react';
 import { useData } from '@/lib/data/DataProvider';
 import { useConsole } from '@/state/console-store';
 import { useAsync } from '@/lib/useAsync';
+import { ArtifactLibrary } from './studio/ArtifactLibrary';
 import type { CampaignExample } from '@/lib/data/models';
 
 function fmt(v: number | string | null | undefined): string {
@@ -123,51 +124,51 @@ export function MemoryScreen() {
     [adapter, tenantId],
   );
 
-  if (loading) {
-    return <div style={{ padding: 24, color: 'var(--text-muted)' }}>Loading campaign memory…</div>;
-  }
-  if (error) {
-    return (
-      <div style={{ padding: 24, color: 'var(--danger-text)' }}>
-        Failed to load campaign memory: {error.message}
-      </div>
-    );
-  }
   const examples = data?.examples ?? [];
   const patterns = data?.patterns ?? [];
-  if (examples.length === 0) {
-    return (
-      <div style={{ padding: 24, color: 'var(--text-muted)' }}>
-        No campaign examples ingested for this tenant yet — the library fills from
-        real operator-provided screenshots (ju1.2), never fabricated examples.
-      </div>
-    );
-  }
   return (
     <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 14, overflow: 'auto', height: '100%' }}>
-      {examples.map((ex) => (
-        <ExampleCard key={ex.id} ex={ex} highlighted={ex.id === contextId} />
-      ))}
-      {patterns.length > 0 && (
-        <section aria-label="Extracted patterns" style={{ marginTop: 8 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
-            Patterns extracted from these examples
-          </div>
-          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, color: 'var(--text-secondary)' }}>
-            {patterns.map((p) => (
-              <li key={p.id} style={{ marginBottom: 4 }}>
-                <span className="mono" style={{ fontSize: 11 }}>{p.pattern_key}</span>
-                {p.description ? ` — ${p.description}` : ''}
-                <span style={{ color: 'var(--text-muted)' }}>
-                  {' '}
-                  (evidence: {p.evidence_example_ids.length} example
-                  {p.evidence_example_ids.length === 1 ? '' : 's'})
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
+      {loading ? (
+        <div style={{ color: 'var(--text-muted)' }}>Loading campaign memory…</div>
+      ) : error ? (
+        <div style={{ color: 'var(--danger-text)' }}>
+          Failed to load campaign memory: {error.message}
+        </div>
+      ) : examples.length === 0 ? (
+        <div style={{ color: 'var(--text-muted)' }}>
+          No campaign examples ingested for this tenant yet — the library fills from
+          real operator-provided screenshots (ju1.2), never fabricated examples.
+        </div>
+      ) : (
+        <>
+          {examples.map((ex) => (
+            <ExampleCard key={ex.id} ex={ex} highlighted={ex.id === contextId} />
+          ))}
+          {patterns.length > 0 && (
+            <section aria-label="Extracted patterns" style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
+                Patterns extracted from these examples
+              </div>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, color: 'var(--text-secondary)' }}>
+                {patterns.map((p) => (
+                  <li key={p.id} style={{ marginBottom: 4 }}>
+                    <span className="mono" style={{ fontSize: 11 }}>{p.pattern_key}</span>
+                    {p.description ? ` — ${p.description}` : ''}
+                    <span style={{ color: 'var(--text-muted)' }}>
+                      {' '}
+                      (evidence: {p.evidence_example_ids.length} example
+                      {p.evidence_example_ids.length === 1 ? '' : 's'})
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </>
       )}
+      {/* Upload-center / knowledge view: EVERY context artifact the agents can see
+          (GET /studio/artifacts) with kind filters + image previews. */}
+      <ArtifactLibrary />
     </div>
   );
 }
