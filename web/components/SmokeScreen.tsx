@@ -12,6 +12,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useData } from '@/lib/data/DataProvider';
+import { IntelligencePanel } from './studio/IntelligencePanel';
 import { useAsync, isEmpty } from '@/lib/useAsync';
 import { useConsole } from '@/state/console-store';
 import { AsyncBoundary } from './states';
@@ -54,6 +55,8 @@ export function SmokeScreen() {
 
   return (
     <div style={{ padding: 'var(--pad-section)', display: 'grid', gap: 20, maxWidth: 1180, marginInline: 'auto' }}>
+      {/* Executive brain: evidence-backed "run next" recommendations from real rows. */}
+      <IntelligencePanel />
       {/* KPI strip from the overview query */}
       <AsyncBoundary
         loading={overview.loading}
