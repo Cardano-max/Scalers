@@ -113,14 +113,20 @@ META_ENV_PAGE_ID = "META_PAGE_ID"
 #: Env keys each Meta channel requires before its publish gate opens.
 _META_REQUIRED_ENV: dict[str, tuple[str, ...]] = {
     "instagram": (META_ENV_PAGE_TOKEN, META_ENV_IG_USER_ID),
+    "instagram_reels": (META_ENV_PAGE_TOKEN, META_ENV_IG_USER_ID),
     "facebook": (META_ENV_PAGE_TOKEN, META_ENV_PAGE_ID),
 }
 
-#: Channel-name aliases seen on REAL rows (the campaign planner writes 'ig'):
-#: folded once here so the credential gate, the channel dispatch, and the social
-#: ready queue all read the same vocabulary — an 'ig' draft must hit the
-#: instagram gate, never fall through to "unknown channel".
-CHANNEL_ALIASES: dict[str, str] = {"ig": "instagram", "fb": "facebook"}
+#: Channel-name aliases seen on REAL rows (the campaign planner writes 'ig',
+#: the IG pipeline stages reel scripts as 'reels'): folded once here so the
+#: credential gate, the channel dispatch, and the social ready queue all read
+#: the same vocabulary — an 'ig'/'reels' draft must hit the instagram gate,
+#: never fall through to "unknown channel".
+CHANNEL_ALIASES: dict[str, str] = {
+    "ig": "instagram",
+    "fb": "facebook",
+    "reels": "instagram_reels",
+}
 
 
 def normalize_channel(channel: str | None) -> str:
@@ -426,6 +432,8 @@ def approve_and_publish(
         if atype == "comment":
             return _reply_instagram(action, connectors.get("instagram"), dsn)
         return _publish_instagram(action, connectors.get("instagram"), dsn)
+    if channel == "instagram_reels":
+        return _publish_instagram_reels(action, connectors.get("instagram"), dsn)
     if channel in SANDBOX_CHANNELS:
         return _publish_demo(action, connectors.get("demo"), dsn)
     return update_status(
@@ -730,22 +738,68 @@ def _publish_demo(action: ActionRow, connector: Any | None, dsn: str | None) -> 
     )
 
 
+def _operator_ig_connector() -> Any:
+    """An enabled :class:`InstagramConnector` built from the OPERATOR's canonical
+    Meta env keys (``META_IG_USER_ID`` / ``META_PAGE_TOKEN`` / ``META_APP_SECRET``)
+    — the keys the credential gate already validated. Separate from the legacy
+    engagement-reply connector (``InstagramConnector.from_env``), which reads the
+    LADIES8391_* keys."""
+    from connectors.ig import InstagramConnector
+
+    return InstagramConnector(
+        ig_business_account_id=(os.environ.get(META_ENV_IG_USER_ID) or "").strip() or None,
+        page_token=(os.environ.get(META_ENV_PAGE_TOKEN) or "").strip() or None,
+        app_secret=(os.environ.get("META_APP_SECRET") or "").strip() or None,
+        enabled=True,
+    )
+
+
 def publish_to_meta(
-    action: ActionRow, *, channel: str, image_url: str | None = None
+    action: ActionRow,
+    *,
+    channel: str,
+    image_url: str | None = None,
+    video_url: str | None = None,
 ) -> Any:
-    """THE Meta Graph publish seam — deliberately NOT implemented yet.
+    """The REAL Meta Graph publish for operator-credentialed channels.
 
     Reached only when :func:`meta_credentials_blocked_reason` cleared the channel
     (the operator set META_PAGE_TOKEN + META_IG_USER_ID / META_PAGE_ID) and no
-    test connector was injected. Until those operator credentials are VERIFIED
-    against the real Graph API, this raises instead of pretending — the action is
-    then marked ``failed`` with this exact reason, so nothing fake ever
-    'succeeds' and no Graph call is attempted with unverified credentials. The
-    real two-step IG publish / FB feed post lands here when go-live is signed off.
-    """
-    raise NotImplementedError(
-        "Meta Graph publish activates when operator credentials are verified"
-    )
+    test connector was injected. Every call goes through the gated connectors'
+    de6 secure boundary (official host only, token in body/header never the URL,
+    appsecret_proof on every call) and raises the REAL Graph error on failure —
+    never a fake success. ``META_APP_SECRET`` must also be set (appsecret_proof
+    is required by the connector); a missing secret surfaces as the connector's
+    honest config error and the action fails PENDING-visible, nothing sent."""
+    if channel == "instagram":
+        if not image_url:
+            raise ValueError("instagram publish requires an image_url")
+        return _operator_ig_connector().post(
+            image_url=image_url, caption=action.draft or ""
+        )
+    if channel == "instagram_reels":
+        if not video_url:
+            raise ValueError("instagram reels publish requires a video_url")
+        return _operator_ig_connector().post_reel(
+            video_url=video_url, caption=action.draft or ""
+        )
+    if channel == "facebook":
+        from connectors.fb import FacebookConnector
+
+        conn = FacebookConnector(
+            page_token=(os.environ.get(META_ENV_PAGE_TOKEN) or "").strip() or None,
+            app_secret=(os.environ.get("META_APP_SECRET") or "").strip() or None,
+            page_id=(os.environ.get(META_ENV_PAGE_ID) or "").strip() or None,
+            enabled=True,
+        )
+        return _resolve(
+            conn.send(
+                action.idempotency_key or action.id,
+                "facebook_feed",
+                {"message": action.draft or ""},
+            )
+        )
+    raise NotImplementedError(f"meta publish not implemented for channel {channel!r}")
 
 
 def _publish_facebook(action: ActionRow, connector: Any | None, dsn: str | None) -> ActionRow:
@@ -850,6 +904,82 @@ def _resolve_ig_image_url(action: ActionRow) -> tuple[str | None, str, str | Non
         "ig post needs a public image: stage per-action artwork (context.artwork with a "
         "public URL, or an artifact id + PUBLIC_ASSET_BASE_URL) or set the demo JPEG "
         "fallback DEMO_IG_IMAGE_URL — plus a valid re-minted token + Meta app review"
+    )
+
+
+def _resolve_ig_video_url(action: ActionRow) -> tuple[str | None, str, str | None]:
+    """Resolve the PER-ACTION video URL for an IG reel; mirrors
+    :func:`_resolve_ig_image_url` (context URL first, then a staged artifact id +
+    ``PUBLIC_ASSET_BASE_URL``) but for video — and with NO global demo fallback:
+    a reel with no staged video fails honestly, it never publishes someone
+    else's footage."""
+    ctx = _action_context(action)
+    candidates: list[Any] = []
+    art = ctx.get("artwork")
+    if isinstance(art, dict):
+        candidates += [art.get(k) for k in ("videoUrl", "video_url", "publicUrl", "public_url", "url")]
+    candidates += [ctx.get(k) for k in ("video_url", "videoUrl", "public_video_url")]
+    for v in candidates:
+        if isinstance(v, str) and v.strip().lower().startswith(("http://", "https://")):
+            return v.strip(), "context_url", None
+    artifact_id = _context_attachment_artifact_id(ctx)
+    if artifact_id:
+        base = (os.environ.get("PUBLIC_ASSET_BASE_URL") or "").strip()
+        if base:
+            return (
+                f"{base.rstrip('/')}/studio/artifacts/{artifact_id}/raw",
+                "public_asset_base",
+                None,
+            )
+        return None, "artifact_not_public", (
+            f"{_IG_NO_PUBLIC_URL_ERROR} (artifact {artifact_id})"
+        )
+    return None, "none", (
+        "ig reel needs a staged public video: stage per-action b-roll "
+        "(context.artwork with a video URL, or a video artifact id + "
+        "PUBLIC_ASSET_BASE_URL). This draft has no video attached — attach the "
+        "b-roll and re-approve; nothing was published."
+    )
+
+
+def _publish_instagram_reels(
+    action: ActionRow, connector: Any | None, dsn: str | None
+) -> ActionRow:
+    """Publish an approved IG REEL draft: resolve its staged video honestly, then
+    the async REELS container flow (create → poll FINISHED → publish). Same
+    honesty contract as the image path: a failure carries the REAL reason and the
+    action fails visible — never a silent drop, never someone else's video."""
+    video_url, source, err = _resolve_ig_video_url(action)
+    if video_url is None:
+        _record_send_audit_row(
+            action, mode="live", result="failed", transport="instagram-graph",
+            detail=err, dsn=dsn,
+        )
+        return update_status(action.id, "failed", dsn=dsn, last_error=err)
+    _log.info("ig reel publish: action=%s video source=%s url=%s", action.id, source, video_url)
+    try:
+        if connector is None:
+            result = publish_to_meta(
+                action, channel="instagram_reels", video_url=video_url
+            )
+        else:
+            _ensure_real(connector)  # real-only: a mock never live-sends
+            result = _resolve(connector.post_reel(video_url=video_url, caption=action.draft))
+    except Exception as exc:  # noqa: BLE001 — surface the REAL reason, never fake success
+        _record_send_audit_row(
+            action, mode="live", result="failed", transport="instagram-graph",
+            detail=f"{exc} (video source={source})", dsn=dsn,
+        )
+        return update_status(action.id, "failed", dsn=dsn, last_error=str(exc))
+    _record_send_audit_row(
+        action, mode="live", result="sent", transport="instagram-graph",
+        provider_id=getattr(result, "media_id", None),
+        detail=f"video source={source}", dsn=dsn,
+    )
+    return update_status(
+        action.id, "sent", dsn=dsn,
+        deep_link=getattr(result, "permalink", None),
+        sent_at=_now(), outcome_label="Published", outcome_kind="success",
     )
 
 

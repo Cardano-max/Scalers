@@ -81,6 +81,17 @@ async def _announce_studio_tenant() -> None:
         )
 
 
+@app.get("/studio/meta/verify")
+def meta_verify_endpoint() -> dict:
+    """LIVE Meta credential verification (the one-token activation probe): which
+    META_* keys are set (booleans only, never values) and whether the token
+    actually answers on the Graph API for the configured IG user + FB page.
+    Failures return the real Graph error detail — never a fake 'verified'."""
+    from studio.meta_status import meta_verify
+
+    return meta_verify()
+
+
 @app.get("/tenants/{tenant_id}")
 def tenant_flags(tenant_id: str) -> dict:
     """Tenant safety flags (ju1.1): the server-side TEST-MODE state the console

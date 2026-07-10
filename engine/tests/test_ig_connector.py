@@ -228,3 +228,71 @@ def test_from_env_falls_back_to_meta_access_token():
     }
     c = InstagramConnector.from_env(env=env)
     assert "FALLBACK-TOKEN" not in repr(c)  # still redacted
+
+
+# ── the async REELS publish flow (operator go-live) ──────────────────────────
+
+
+class _ReelsFetcher:
+    """Scripted responses for the reels container flow; ``statuses`` is the
+    sequence the status_code poll walks through."""
+
+    def __init__(self, statuses: list[str]):
+        self.calls: list[dict] = []
+        self._statuses = list(statuses)
+
+    def request(self, *, method, ip, host, path, headers, body, timeout):
+        self.calls.append({"method": method, "path": path, "headers": headers, "body": body})
+        if "status_code" in path:
+            status = self._statuses.pop(0) if self._statuses else "IN_PROGRESS"
+            return HttpResponse(status=200, body=json.dumps({"status_code": status}))
+        if "media_publish" in path:
+            return HttpResponse(status=200, body='{"id": "18000000000_reel"}')
+        if "permalink" in path:
+            return HttpResponse(
+                status=200,
+                body=json.dumps({"id": "18000000000_reel", "permalink": _PERMALINK}),
+            )
+        return HttpResponse(status=200, body='{"id": "17888000000_creation"}')
+
+
+def test_reels_publish_flow_shapes_and_result():
+    fake = _ReelsFetcher(["IN_PROGRESS", "FINISHED"])
+    res = _conn(fetcher=fake).post_reel(
+        "https://vid.example/broll.mp4", "B-roll reveal 🎬", poll_seconds=0
+    )
+    create = fake.calls[0]
+    sent = json.loads(create["body"])
+    assert create["path"] == f"/v25.0/{_IG_ID}/media"
+    assert sent["media_type"] == "REELS"
+    assert sent["video_url"] == "https://vid.example/broll.mp4"
+    assert sent["access_token"] == _PAGE_TOKEN and sent["appsecret_proof"] == _expected_proof()
+    # status polls carry the token in the Authorization header, never the URL.
+    polls = [c for c in fake.calls if "status_code" in c["path"]]
+    assert len(polls) == 2
+    assert all(c["method"] == "GET" for c in polls)
+    assert all(c["headers"]["Authorization"] == f"Bearer {_PAGE_TOKEN}" for c in polls)
+    assert all(_PAGE_TOKEN not in c["path"] for c in fake.calls)
+    publish = [c for c in fake.calls if "media_publish" in c["path"]]
+    assert len(publish) == 1
+    assert res.media_id == "18000000000_reel"
+    assert res.permalink == _PERMALINK
+
+
+def test_reels_container_error_raises_real_reason():
+    fake = _ReelsFetcher(["ERROR"])
+    with pytest.raises(InstagramPublishError) as exc:
+        _conn(fetcher=fake).post_reel("https://vid.example/broll.mp4", "cap", poll_seconds=0)
+    assert "ERROR" in str(exc.value)
+    # publish must never have been attempted after a container error.
+    assert not [c for c in fake.calls if "media_publish" in c["path"]]
+
+
+def test_reels_poll_timeout_is_honest_not_published():
+    fake = _ReelsFetcher([])  # every poll reads IN_PROGRESS
+    with pytest.raises(InstagramPublishError) as exc:
+        _conn(fetcher=fake).post_reel(
+            "https://vid.example/broll.mp4", "cap", poll_seconds=0, max_polls=3
+        )
+    assert "not ready" in str(exc.value)
+    assert not [c for c in fake.calls if "media_publish" in c["path"]]
