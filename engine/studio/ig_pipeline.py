@@ -332,11 +332,16 @@ def load_broll(
         from psycopg.rows import dict_row
 
         with psycopg.connect(_dsn(dsn), row_factory=dict_row, connect_timeout=5) as conn:
+            # Tenant-scoped like list_artwork (library assets live under
+            # campaign_id='portfolio:<tenant>'): without this, a no-artist run
+            # would pick the newest video from ANY tenant's library and stamp
+            # it onto every staged post as that run's b-roll.
             rows = conn.execute(
                 "SELECT id, content FROM assets WHERE content->>'media'='video' "
+                "AND campaign_id = %s "
                 "AND (%s::text IS NULL OR content->>'artist' ILIKE %s) "
                 "ORDER BY created_at DESC LIMIT 5",
-                (artist, f"%{artist}%" if artist else None),
+                (f"portfolio:{tenant_id}", artist, f"%{artist}%" if artist else None),
             ).fetchall()
         return [
             {"asset_id": r["id"],

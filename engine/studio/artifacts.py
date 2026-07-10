@@ -67,10 +67,23 @@ def _connect(dsn: str | None = None):
     return psycopg.connect(_dsn(dsn), autocommit=True, row_factory=dict_row)
 
 
+_SCHEMA_READY: set[str] = set()
+
+
 def ensure_schema(dsn: str | None = None) -> None:
-    """Apply ``20-context-artifacts.sql`` (idempotent ``CREATE TABLE IF NOT EXISTS``)."""
+    """Apply ``20-context-artifacts.sql`` (idempotent ``CREATE TABLE IF NOT EXISTS``).
+
+    Once per process per DSN: the DDL is idempotent but NOT concurrency-free —
+    parallel ``CREATE TABLE IF NOT EXISTS``/``ALTER`` from simultaneous reads
+    deadlock in Postgres (observed as intermittent 500s on artifact reads under
+    concurrent console traffic). After the first successful apply, later calls
+    are no-ops; a failure stays unrecorded so the next call retries."""
+    key = _dsn(dsn)
+    if key in _SCHEMA_READY:
+        return
     with _connect(dsn) as conn:
         conn.execute(_ARTIFACTS_SQL.read_text(encoding="utf-8"))
+    _SCHEMA_READY.add(key)
 
 
 # --------------------------------------------------------------------------- #

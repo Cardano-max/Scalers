@@ -154,8 +154,13 @@ def ready_posts(tenant_id: str, *, dsn: str | None = None) -> list[dict[str, Any
         lookup_error: str | None = None
         if wanted:
             try:
+                # Tenant-scoped: only this tenant's library assets resolve into a
+                # package — a stale/foreign asset id reports found:false instead
+                # of leaking another tenant's media into the approval surface.
                 arows = conn.execute(
-                    "SELECT id, content FROM assets WHERE id = ANY(%s)", (wanted,)
+                    "SELECT id, content FROM assets WHERE id = ANY(%s) "
+                    "AND campaign_id = %s",
+                    (wanted, f"portfolio:{tenant_id}"),
                 ).fetchall()
                 assets = {
                     a["id"]: (a["content"] if isinstance(a["content"], dict) else {})
@@ -167,7 +172,14 @@ def ready_posts(tenant_id: str, *, dsn: str | None = None) -> list[dict[str, Any
     posts: list[dict[str, Any]] = []
     for row, (artwork_id, broll_id) in zip(rows, refs):
         channel = normalize_channel(row.get("channel"))
-        blocked_reason = meta_credentials_blocked_reason(channel)
+        # Comment REPLIES are exempt from the META_* gate (they publish via the
+        # engagement reply connector's own credentials — see actions.publish);
+        # their approve surfaces that connector's own error, so the queue must
+        # not claim a META_* blocker it wouldn't actually hit.
+        if (row.get("type") or "").lower() == "comment":
+            blocked_reason = None
+        else:
+            blocked_reason = meta_credentials_blocked_reason(channel)
         posts.append(
             {
                 "action_id": row["id"],
