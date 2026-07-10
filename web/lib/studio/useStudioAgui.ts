@@ -468,10 +468,27 @@ export function useStudioAgui(
           stalls += 1;
         }
         if (stalls >= 90) {
-          // ~3 min with no landed step and no operator pause: stop polling but keep
-          // whatever steps we have (honest stall, not a fake completion).
+          // ~3 min with no landed step and no operator pause: stop polling — but
+          // NEVER silently. A zero-step stall used to quietly flip the panel back
+          // to its idle state ("loading… then everything vanished", a real
+          // operator report); now the failure stays on screen with the likely
+          // causes, and any steps that DID land are kept (honest stall, not a
+          // fake completion and not a silent reset).
           setRunningCampaign(false);
           setBusy(false);
+          setRunState((prev) => {
+            const landed = prev?.steps.length ?? 0;
+            const msg =
+              landed === 0
+                ? `The run never produced a step (run ${runId || 'unknown'}). ` +
+                  'Most common causes: the engine process stopped, or its model key ' +
+                  '(ANTHROPIC_API_KEY in engine/.env) is missing — check the engine ' +
+                  'window, fix, and launch again.'
+                : 'The run stopped making progress — the steps that landed are kept. ' +
+                  'Check the Runs tab or the engine window for the rest.';
+            setError(msg);
+            return prev ? { ...prev, status: 'error', error: msg } : prev;
+          });
           return;
         }
         pollRef.current = setTimeout(poll, 2000);
