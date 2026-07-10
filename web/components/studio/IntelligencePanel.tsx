@@ -10,6 +10,7 @@
  * render — nothing is ever padded.
  */
 import { useEffect, useState } from 'react';
+import { useConsoleOptional } from '@/state/console-store';
 
 type Intelligence = {
   bestCampaigns: {
@@ -25,6 +26,7 @@ type Intelligence = {
 const MONO = "'IBM Plex Mono', monospace";
 
 export function IntelligencePanel() {
+  const consoleCtx = useConsoleOptional();
   const [data, setData] = useState<Intelligence | null>(null);
   const [error, setError] = useState(false);
 
@@ -61,10 +63,33 @@ export function IntelligencePanel() {
       {data.recommendations.length > 0 && (
         <div style={{ display: 'grid', gap: 6 }}>
           {data.recommendations.map((r, i) => (
-            <div key={i} style={{ fontSize: 12.5, lineHeight: 1.45 }}>
+            // Recommendations are actionable, not just prose: clicking one opens
+            // the Review queue (where drafts wait) so the next step is one tap away.
+            <button
+              key={i}
+              type="button"
+              onClick={() => consoleCtx?.navigate('review')}
+              title="Open the Review queue"
+              style={{
+                font: 'inherit',
+                fontSize: 12.5,
+                lineHeight: 1.45,
+                textAlign: 'left',
+                background: 'transparent',
+                border: 'none',
+                padding: 0,
+                cursor: 'pointer',
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLElement).style.textDecoration = 'underline';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLElement).style.textDecoration = 'none';
+              }}
+            >
               <span style={{ fontWeight: 700, color: '#0F8A82' }}>→ {r.recommend}</span>
               <span style={{ color: 'var(--text-muted, #7A756C)' }}> — {r.why}</span>
-            </div>
+            </button>
           ))}
         </div>
       )}

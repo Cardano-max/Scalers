@@ -10,6 +10,7 @@
  */
 import { useEffect, useState } from 'react';
 import { useSharedStudio } from '@/lib/studio/StudioRunProvider';
+import { clockTime } from '../console-bits';
 
 type SessionRow = {
   sessionId: string;
@@ -20,6 +21,13 @@ type SessionRow = {
 
 function studioBase(aguiUrl: string): string {
   return aguiUrl.replace(/\/agui(\?.*)?$/, '');
+}
+
+/** Option label: title · turn count · when it was last active (date + time —
+ *  entries without a timestamp simply omit it, never a fake one). */
+function optionLabel(s: SessionRow): string {
+  const when = s.lastAt ? ` · ${clockTime(s.lastAt)}` : '';
+  return `${s.title.slice(0, 40)} · ${s.turns} turn${s.turns === 1 ? '' : 's'}${when}`;
 }
 
 export function SessionSwitcher() {
@@ -44,7 +52,16 @@ export function SessionSwitcher() {
 
   return (
     <div style={{ display: 'flex', gap: 6, alignItems: 'center', minWidth: 0 }}>
+      {/* Tiny caption so this dropdown is never mistaken for the Studio picker. */}
+      <label
+        htmlFor="conversation-session-select"
+        className="label"
+        style={{ fontSize: 9 }}
+      >
+        Conversation
+      </label>
       <select
+        id="conversation-session-select"
         aria-label="Conversation session"
         value={active}
         onChange={(e) => studio.switchSession(e.target.value)}
@@ -52,7 +69,7 @@ export function SessionSwitcher() {
           font: 'inherit',
           fontSize: 11.5,
           padding: '5px 8px',
-          maxWidth: 240,
+          maxWidth: 280,
           border: '1px solid var(--hairline)',
           borderRadius: 'var(--radius-button)',
           background: 'var(--surface)',
@@ -62,7 +79,7 @@ export function SessionSwitcher() {
         {!known && <option value={active}>current: {active.slice(0, 22)}</option>}
         {sessions.map((s) => (
           <option key={s.sessionId} value={s.sessionId}>
-            {s.title.slice(0, 46)} · {s.turns} turns
+            {optionLabel(s)}
           </option>
         ))}
       </select>

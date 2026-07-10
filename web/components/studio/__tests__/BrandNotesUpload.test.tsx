@@ -30,7 +30,7 @@ describe('BrandNotesUpload', () => {
     });
 
     await waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument());
-    expect(screen.getByRole('status').textContent).toMatch(/Brand notes attached/i);
+    expect(screen.getByRole('status').textContent).toMatch(/Saved to campaign context/i);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];

@@ -40,6 +40,14 @@ def _registry() -> dict[str, dict]:
     return _RUNS_REGISTRY if isinstance(_RUNS_REGISTRY, dict) else {}
 
 
+def get_runs_registry() -> dict[str, dict]:
+    """READ-ONLY view of the in-process async-run registry ({} when unset). The
+    supervisor fleet board uses it to attribute an in-flight run (agent_runs steps,
+    no runs row yet) to its launching tenant/status — real launch metadata, never a
+    guess. In-memory only; DB reads stay authoritative for everything durable."""
+    return dict(_registry())
+
+
 def _iso(value: Any) -> str | None:
     if value is None:
         return None

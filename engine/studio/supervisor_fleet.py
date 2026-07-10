@@ -71,6 +71,112 @@ def _classify(status: str, awaiting_selection: bool, last_age_s: float | None) -
     return "working"
 
 
+def _inflight_tenant(conn, run_id: str, registry: dict[str, dict]) -> str | None:
+    """Attribute an in-flight run (agent_runs steps, no runs row yet) to its REAL
+    tenant, from durable evidence first: the run's campaign_blueprints row (written at
+    plan time), else its staged actions rows, else the in-process launch registry's
+    recorded tenant. None = no real attribution (the run is then NOT shown — never a
+    cross-tenant guess)."""
+    try:
+        row = conn.execute(
+            "SELECT tenant_id FROM campaign_blueprints WHERE run_id=%s", (run_id,)
+        ).fetchone()
+        if row and row.get("tenant_id"):
+            return str(row["tenant_id"])
+    except Exception:
+        pass
+    try:
+        row = conn.execute(
+            "SELECT tenant_id FROM actions WHERE run_id=%s LIMIT 1", (run_id,)
+        ).fetchone()
+        if row and row.get("tenant_id"):
+            return str(row["tenant_id"])
+    except Exception:
+        pass
+    reg = registry.get(run_id) or {}
+    t = reg.get("tenant_id")
+    return str(t) if t else None
+
+
+def _inflight_rows(
+    conn, tenant_id: str, window_minutes: int, known_run_ids: set[str]
+) -> list[dict[str, Any]]:
+    """The IN-FLIGHT runs the materialized ``runs`` table cannot see: run_ids whose
+    agent_runs stepped inside the window but have NO runs row yet (the studio
+    executor writes the runs row ONCE, at completion). Real rows only — steps are
+    read from agent_runs; the launch registry / blueprint / actions attribute the
+    tenant. A run with no real tenant evidence is excluded, never guessed."""
+    try:
+        from studio.live_state import get_runs_registry
+
+        registry = get_runs_registry()
+    except Exception:
+        registry = {}
+    try:
+        candidates = conn.execute(
+            """
+            SELECT ar.run_id,
+                   min(ar.created_at)                                        AS first_step_at,
+                   max(ar.created_at)                                        AS last_step_at,
+                   count(*)                                                  AS n_steps,
+                   (array_agg(ar.role ORDER BY ar.created_at DESC))[1]       AS last_role,
+                   EXTRACT(EPOCH FROM (now() - max(ar.created_at)))          AS last_step_age_s
+              FROM agent_runs ar
+              LEFT JOIN runs r ON r.run_id = ar.run_id
+             WHERE r.run_id IS NULL
+               AND ar.created_at > now() - make_interval(mins => %s)
+             GROUP BY ar.run_id
+             ORDER BY min(ar.created_at) DESC
+            """,
+            (window_minutes,),
+        ).fetchall()
+    except Exception:
+        return []
+    rows: list[dict[str, Any]] = []
+    for c in candidates:
+        rid = str(c["run_id"])
+        if rid in known_run_ids:
+            continue
+        if _inflight_tenant(conn, rid, registry) != tenant_id:
+            continue
+        reg = registry.get(rid) or {}
+        status = str(reg.get("status") or "running")
+        try:
+            n_pending = int(conn.execute(
+                "SELECT count(*) FROM actions WHERE run_id=%s AND status='pending'", (rid,)
+            ).fetchone()["count"])
+        except Exception:
+            n_pending = 0
+        try:
+            awaiting = bool(conn.execute(
+                "SELECT EXISTS (SELECT 1 FROM artwork_selections s "
+                "WHERE s.run_id=%s AND s.status='awaiting')", (rid,)
+            ).fetchone()["exists"])
+        except Exception:
+            awaiting = False
+        age = float(c["last_step_age_s"]) if c["last_step_age_s"] is not None else None
+        rows.append(
+            {
+                "run_id": rid,
+                "status": status,
+                "type": "campaign",
+                "activity": _classify(status, awaiting, age),
+                "last_role": c["last_role"],
+                "last_step_age_s": round(age, 1) if age is not None else None,
+                "n_steps": int(c["n_steps"]),
+                "n_pending_drafts": n_pending,
+                "n_pending_directives": 0,
+                "n_applied_directives": 0,
+                "created_at": c["first_step_at"].isoformat(),
+                # Honest marker: this run is EXECUTING (or just finished) and has no
+                # materialized runs row yet — its fields come from agent_runs + the
+                # live launch registry, not from the runs table.
+                "in_flight": True,
+            }
+        )
+    return rows
+
+
 def fleet_status(
     tenant_id: str,
     *,
@@ -79,7 +185,14 @@ def fleet_status(
 ) -> list[dict[str, Any]]:
     """``initech status`` — one honest row per recent run of this tenant. Every
     field is read from the runs/agent_runs/actions/run_directives tables; nothing
-    is inferred beyond the activity classification (whose inputs are shown)."""
+    is inferred beyond the activity classification (whose inputs are shown).
+
+    IN-FLIGHT runs are included too (``in_flight: true``): the studio executor only
+    materializes a ``runs`` row at COMPLETION, so an executing run was previously
+    invisible to this board. Those rows are read from the run's own live
+    ``agent_runs`` steps (the incrementally-written source GET /studio/run/{id}
+    polls) and attributed to the tenant via blueprint/actions/launch-registry
+    evidence — never a fabricated status."""
     with _connect(dsn) as conn:
         rows = conn.execute(
             """
@@ -108,27 +221,34 @@ def fleet_status(
             """,
             (tenant_id, window_minutes),
         ).fetchall()
-    board: list[dict[str, Any]] = []
-    for r in rows:
-        age = float(r["last_step_age_s"]) if r["last_step_age_s"] is not None else None
-        # The artwork gate's mid-run pause is recorded in artwork_selections
-        # (status='awaiting'), not on the run row — read it from there.
-        awaiting = bool(r["awaiting_selection"])
-        board.append(
-            {
-                "run_id": r["run_id"],
-                "status": r["status"],
-                "type": r["type"],
-                "activity": _classify(str(r["status"]), awaiting, age),
-                "last_role": r["last_role"],
-                "last_step_age_s": round(age, 1) if age is not None else None,
-                "n_steps": int(r["n_steps"]),
-                "n_pending_drafts": int(r["n_pending_drafts"]),
-                "n_pending_directives": int(r["n_pending_directives"]),
-                "n_applied_directives": int(r["n_applied_directives"]),
-                "created_at": r["created_at"].isoformat(),
-            }
+        board: list[dict[str, Any]] = []
+        for r in rows:
+            age = float(r["last_step_age_s"]) if r["last_step_age_s"] is not None else None
+            # The artwork gate's mid-run pause is recorded in artwork_selections
+            # (status='awaiting'), not on the run row — read it from there.
+            awaiting = bool(r["awaiting_selection"])
+            board.append(
+                {
+                    "run_id": r["run_id"],
+                    "status": r["status"],
+                    "type": r["type"],
+                    "activity": _classify(str(r["status"]), awaiting, age),
+                    "last_role": r["last_role"],
+                    "last_step_age_s": round(age, 1) if age is not None else None,
+                    "n_steps": int(r["n_steps"]),
+                    "n_pending_drafts": int(r["n_pending_drafts"]),
+                    "n_pending_directives": int(r["n_pending_directives"]),
+                    "n_applied_directives": int(r["n_applied_directives"]),
+                    "created_at": r["created_at"].isoformat(),
+                    "in_flight": False,
+                }
+            )
+        # UNION the runs that are EXECUTING right now (steps landing in agent_runs,
+        # runs row not yet written) so the supervisor board is never blind mid-run.
+        board.extend(
+            _inflight_rows(conn, tenant_id, window_minutes, {b["run_id"] for b in board})
         )
+    board.sort(key=lambda b: str(b.get("created_at") or ""), reverse=True)
     return board
 
 

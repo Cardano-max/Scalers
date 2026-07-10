@@ -49,10 +49,15 @@ export function SendModeToggle({
   live,
   onChange,
   disabled = false,
+  disabledReason,
 }: {
   live: boolean;
   onChange: (live: boolean) => void;
   disabled?: boolean;
+  /** Plain-language tooltip explaining WHY the toggle is disabled (e.g. "Live
+   *  sending unlocks after test-mode sign-off") — a disabled control must never
+   *  be a mystery. */
+  disabledReason?: string;
 }) {
   const [confirming, setConfirming] = useState(false);
 
@@ -61,6 +66,7 @@ export function SendModeToggle({
       <div role="group" aria-label="Send mode" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>Mode</span>
         <div
+          title={disabled ? disabledReason : undefined}
           style={{
             display: 'inline-flex',
             border: '1px solid var(--hairline-strong)',
@@ -93,6 +99,7 @@ export function SendModeToggle({
             type="button"
             aria-pressed={live}
             disabled={disabled}
+            title={disabled ? disabledReason : undefined}
             onClick={() => {
               // Switching INTO live authorizes a real send — gate it behind a confirm.
               if (!live) setConfirming(true);

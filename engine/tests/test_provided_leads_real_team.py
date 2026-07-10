@@ -327,3 +327,49 @@ def test_failed_critic_leaves_conf_honest_none(monkeypatch):
 
     assert captured and len(captured) == 2
     assert all(c is None for c in captured)
+
+
+def test_deep_research_runs_public_enrichment_per_lead(monkeypatch):
+    """research_depth='deep' must ALSO run the cited public-web enrichment for
+    EACH lead (the operator's 'research them on socials/LinkedIn' ask) and land
+    the honest counts + source urls on that lead's researcher step."""
+    import studio.lead_enrichment as le
+
+    _wire(monkeypatch)
+    monkeypatch.setattr(cr, "_research_enabled", lambda *a, **k: True)
+    calls: list[str] = []
+
+    def _fake_enrich(tenant, cid, *, dsn=None):
+        calls.append(cid)
+        return {
+            "found": [{"text": "runs a bakery in Henderson", "url": "https://yelp.example/x"}],
+            "suppressed": 1, "misses": [], "memory_id": "mem_x",
+        }
+
+    monkeypatch.setattr(le, "enrich_lead", _fake_enrich)
+    summary = _execute_provided_leads_sync(_plan(), "sess", "t_test", None)
+    assert calls == ["c1", "c2"]
+    researchers = [ar for ar in summary["agent_runs"] if ar["role"] == "researcher"]
+    assert len(researchers) == 2
+    for ar in researchers:
+        pe = ar["output"]["public_enrichment"]
+        assert pe["found"] == 1 and pe["suppressed"] == 1 and pe["memory_id"] == "mem_x"
+        assert pe["urls"] == ["https://yelp.example/x"]
+
+
+def test_no_deep_research_means_no_public_enrichment(monkeypatch):
+    """With research off, no external lookup fires (operator opt-in stays real)
+    and the researcher step says so honestly (public_enrichment None)."""
+    import studio.lead_enrichment as le
+
+    _wire(monkeypatch)  # _research_enabled -> False
+
+    def _must_not_run(*a, **k):
+        raise AssertionError("enrich_lead must not be called without deep research")
+
+    monkeypatch.setattr(le, "enrich_lead", _must_not_run)
+    summary = _execute_provided_leads_sync(_plan(), "sess", "t_test", None)
+    researchers = [ar for ar in summary["agent_runs"] if ar["role"] == "researcher"]
+    assert researchers and all(
+        ar["output"].get("public_enrichment") is None for ar in researchers
+    )

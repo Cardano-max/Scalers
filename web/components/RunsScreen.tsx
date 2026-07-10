@@ -6,7 +6,7 @@ import { useAsync } from '@/lib/useAsync';
 import { useConsole } from '@/state/console-store';
 import { useSharedStudioOptional } from '@/lib/studio/StudioRunProvider';
 import { Dot } from './icons';
-import { Chip, clockTime } from './console-bits';
+import { Chip, clockTime, durationLabel, runWorkLabel } from './console-bits';
 import { Skeleton, EmptyState, ErrorState } from './states';
 import { WORKER_COLOR } from '@/lib/tokens';
 import type { Run, CampaignSpec } from '@/lib/data/models';
@@ -97,7 +97,12 @@ export function RunsScreen() {
       >
         <div style={{ padding: '0 4px 13px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: '#A8A299', letterSpacing: '0.7px' }}>WORKFLOW RUNS</span>
-          <span style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: '#A8A299' }}>durable · checkpointed · exactly-once</span>
+          <span
+            style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: '#A8A299' }}
+            title="durable · checkpointed · exactly-once"
+          >
+            every step recorded · nothing sends twice
+          </span>
         </div>
 
         {/* Live agent fleet (supervisor patrol data) — only shows in-flight runs. */}
@@ -159,7 +164,7 @@ export function RunsScreen() {
                     <span style={{ color: '#D8D3C9' }}>·</span>
                     <span>{clockTime(r.startedAt)}</span>
                     <span style={{ color: '#D8D3C9' }}>·</span>
-                    <span>{r.duration || 'pending'}</span>
+                    <span>{r.status === 'RUNNING' ? 'running…' : durationLabel(r.duration)}</span>
                     {r.channels.length > 0 && (
                       <>
                         <span style={{ color: '#D8D3C9' }}>·</span>
@@ -167,9 +172,7 @@ export function RunsScreen() {
                       </>
                     )}
                     <span style={{ color: '#D8D3C9' }}>·</span>
-                    <span>
-                      {r.reviewCount} staged · {r.autoCount} auto
-                    </span>
+                    <span>{runWorkLabel(r)}</span>
                   </div>
                 </div>
                 <Chip tone={r.status === 'SUCCESS' ? 'success' : r.status === 'FAILED' ? 'danger' : 'neutral'}>{r.status}</Chip>
@@ -226,12 +229,14 @@ export function RunsScreen() {
               <span style={{ fontSize: 13, fontWeight: 500 }}>{selected.channels.join(' · ')}</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-              <span style={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: '#A8A299', letterSpacing: '0.5px' }}>AUTONOMY</span>
-              <span style={{ fontSize: 13, fontWeight: 500 }}>{selected.autoCount} auto · {selected.reviewCount} review</span>
+              <span style={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: '#A8A299', letterSpacing: '0.5px' }}>WORK DONE</span>
+              <span style={{ fontSize: 13, fontWeight: 500 }}>{runWorkLabel(selected)}</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               <span style={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: '#A8A299', letterSpacing: '0.5px' }}>DURATION</span>
-              <span style={{ fontSize: 13, fontWeight: 500 }}>{selected.duration || 'running'}</span>
+              <span style={{ fontSize: 13, fontWeight: 500 }}>
+                {selected.status === 'RUNNING' ? 'running…' : durationLabel(selected.duration)}
+              </span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               <span style={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: '#A8A299', letterSpacing: '0.5px' }}>RETRIES</span>

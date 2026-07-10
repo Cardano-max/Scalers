@@ -1,19 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-
-/** One row of GET /studio/fleet — the supervisor's initech-style status board. */
-type FleetRow = {
-  run_id: string;
-  status: string;
-  activity: 'working' | 'starting' | 'stalled' | 'waiting-operator' | 'done' | 'failed';
-  last_role: string | null;
-  last_step_age_s: number | null;
-  n_steps: number;
-  n_pending_drafts: number;
-  n_pending_directives: number;
-  n_applied_directives: number;
-};
+/**
+ * Live fleet strip: every non-finished run with its activity state, straight
+ * from the supervisor's patrol data (the SHARED /studio/fleet poll — one loop
+ * for the whole console, see lib/studio/useFleet). Renders nothing when the
+ * fleet is idle — the runs list below already covers history. New rows animate
+ * in (spring-in) so arriving work is visible, not a silent mutation.
+ */
+import { useFleet, activeFleetRows, type FleetRow } from '@/lib/studio/useFleet';
 
 const ACTIVITY_COLOR: Record<FleetRow['activity'], string> = {
   working: '#157F4B',
@@ -24,46 +18,35 @@ const ACTIVITY_COLOR: Record<FleetRow['activity'], string> = {
   failed: '#B42318',
 };
 
-/** Live fleet strip: every non-finished run with its activity state, straight
- * from the supervisor's patrol data. Renders nothing when the fleet is idle —
- * the runs list below already covers history. */
+/** Plain-language activity labels — the raw state stays in the tooltip. */
+const ACTIVITY_LABEL: Record<FleetRow['activity'], string> = {
+  working: 'working',
+  starting: 'starting up',
+  stalled: 'stuck — may need a look',
+  'waiting-operator': 'waiting for you',
+  done: 'done',
+  failed: 'failed',
+};
+
 export function FleetBoard({ onOpenRun }: { onOpenRun?: (runId: string) => void }) {
-  const [rows, setRows] = useState<FleetRow[]>([]);
-  const [error, setError] = useState(false);
+  const fleet = useFleet();
+  const rows = activeFleetRows(fleet.rows);
 
-  useEffect(() => {
-    let alive = true;
-    const load = () =>
-      fetch('/studio/fleet')
-        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-        .then((d) => {
-          if (alive) {
-            setRows((d.fleet ?? []).filter((r: FleetRow) => r.activity !== 'done' && r.activity !== 'failed'));
-            setError(false);
-          }
-        })
-        .catch(() => alive && setError(true));
-    load();
-    const t = setInterval(load, 15000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-  }, []);
-
-  if (error || rows.length === 0) return null;
+  if (fleet.error || rows.length === 0) return null;
 
   return (
     <div style={{ margin: '0 4px 14px', border: '1px solid var(--border, #E5E1D8)', borderRadius: 9, padding: '10px 12px' }}>
       <div style={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: '#A8A299', letterSpacing: '0.7px', paddingBottom: 8 }}>
-        AGENT FLEET — LIVE
+        AGENTS AT WORK — LIVE
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {rows.map((r) => (
           <button
             key={r.run_id}
             type="button"
+            className="spring-in"
             onClick={() => onOpenRun?.(r.run_id)}
+            title={`activity: ${r.activity}`}
             style={{
               display: 'flex',
               gap: 10,
@@ -79,7 +62,7 @@ export function FleetBoard({ onOpenRun }: { onOpenRun?: (runId: string) => void 
             }}
           >
             <span style={{ color: ACTIVITY_COLOR[r.activity], fontWeight: 600, minWidth: 128 }}>
-              ● {r.activity}
+              ● {ACTIVITY_LABEL[r.activity]}
             </span>
             <span style={{ color: 'var(--text, #38342C)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {r.run_id}

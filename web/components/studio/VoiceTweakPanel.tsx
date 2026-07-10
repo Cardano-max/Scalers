@@ -86,6 +86,25 @@ export function VoiceTweakPanel({
   const replyStreaming = turns.some((t) => t.streaming);
   const showThinking = pendingReply && !replyStreaming;
 
+  // Rotating honest state text next to the dots — the screen never looks frozen
+  // while the host works. Generic-but-true phrasing only (we don't fabricate
+  // which step it is on).
+  const THINKING_LABELS = [
+    'Thinking…',
+    'Reading your studio data…',
+    'Putting a reply together…',
+  ];
+  const [thinkingIdx, setThinkingIdx] = useState(0);
+  useEffect(() => {
+    if (!showThinking) {
+      setThinkingIdx(0);
+      return;
+    }
+    const t = setInterval(() => setThinkingIdx((i) => (i + 1) % THINKING_LABELS.length), 2400);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showThinking]);
+
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [turns, liveHostLine, hostSpeaking, live, showThinking]);
@@ -163,6 +182,9 @@ export function VoiceTweakPanel({
                   }}
                 />
               ))}
+            </span>
+            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              {THINKING_LABELS[thinkingIdx]}
             </span>
           </div>
         )}

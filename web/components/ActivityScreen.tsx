@@ -17,7 +17,7 @@ import { useAsync } from '@/lib/useAsync';
 import { useConsole } from '@/state/console-store';
 import { AsyncBoundary } from './states';
 import { Dot } from './icons';
-import { Chip, ProviderErrorPanel, Tag, actionIntent, channelLabel, clockTime, matchesFilter, typeLabel, type ChipTone, type QueueFilter } from './console-bits';
+import { Chip, ProviderErrorPanel, ReplyContext, Tag, actionIntent, channelLabel, clockTime, matchesFilter, typeLabel, type ChipTone, type QueueFilter } from './console-bits';
 import { AUTONOMY_LABEL, CHANNEL_COLOR, WORKER_COLOR } from '@/lib/tokens';
 import type { Action, ActivityItem, AutonomyMode } from '@/lib/data/models';
 import { ExecutionTraceCard } from './trace/ExecutionTraceCard';
@@ -495,11 +495,9 @@ function ActivityDetail({
         </div>
       ) : null}
 
-      {item.context ? (
-        <Section label="Replying to">
-          <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', fontStyle: 'italic' }}>“{item.context}”</div>
-        </Section>
-      ) : null}
+      {/* A real customer message is quoted; an internal JSON context blob is
+          labeled + collapsed instead of pretending the customer sent it. */}
+      {item.context ? <ReplyContext context={item.context} /> : null}
 
       {item.subject ? (
         <Section label="Subject">

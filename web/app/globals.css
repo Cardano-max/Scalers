@@ -147,6 +147,80 @@ body {
 }
 
 /*
+ * Screen-switch transition: a calm fade + slide-up applied to the active screen
+ * on every nav (the wrapper is keyed by screen id so it re-runs). Starts at
+ * opacity .55 — never fully invisible — so a paused/throttled render context
+ * still shows the content (same invariant as .enter, softened, not gated).
+ */
+@keyframes screen-in {
+  from {
+    transform: translateY(8px);
+    opacity: 0.55;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+.screen-enter {
+  animation: screen-in 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .screen-enter {
+    animation: none;
+  }
+}
+
+/* Count-badge pulse — fired once when the Review-queue badge value CHANGES, so
+ * a 7→6 never happens silently. Scale-only; reduced-motion turns it off. */
+@keyframes badge-pulse {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.35);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.badge-pulse {
+  animation: badge-pulse 420ms cubic-bezier(0.22, 1, 0.36, 1) 1;
+}
+
+/* The ghost note that floats up next to a changed badge ("1 draft left the
+ * queue") then fades — informational only, removed after the animation. */
+@keyframes ghost-note {
+  0% {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  15% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+.ghost-note {
+  animation: ghost-note 2.6s ease-out 1 both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .badge-pulse {
+    animation: none;
+  }
+  .ghost-note {
+    animation: none;
+    opacity: 1;
+  }
+}
+
+/*
  * ── Agency-at-Work + Voice motion system ──────────────────────────────────
  * EVENT-DRIVEN ONLY. These are applied when a REAL event lands (a RunStep
  * appears on poll, a handoff edge becomes real because the downstream step's

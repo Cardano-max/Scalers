@@ -15,6 +15,7 @@ import { useMemo, useState } from 'react';
 import { useAsync } from '@/lib/useAsync';
 import { Skeleton, EmptyState, ErrorState } from '../states';
 import { Chip } from '../console-bits';
+import { ArtifactMedia } from './ArtifactMedia';
 import { artifactRawUrl, fetchArtifacts, type ContextArtifact } from '@/lib/studio/artists';
 
 export function ArtifactLibrary() {
@@ -106,7 +107,6 @@ export function ArtifactLibrary() {
 }
 
 function ArtifactCard({ artifact }: { artifact: ContextArtifact }) {
-  const [imgFailed, setImgFailed] = useState(false);
   const vlmPending =
     artifact.vlmStatus && !['ok', 'done', 'complete'].includes(artifact.vlmStatus.toLowerCase());
 
@@ -121,15 +121,9 @@ function ArtifactCard({ artifact }: { artifact: ContextArtifact }) {
         flexDirection: 'column',
       }}
     >
-      {artifact.hasPreview && !imgFailed ? (
-        // eslint-disable-next-line @next/next/no-img-element -- engine-served bytes; no optimizer configured
-        <img
-          src={artifactRawUrl(artifact.id)}
-          alt={artifact.name}
-          loading="lazy"
-          onError={() => setImgFailed(true)}
-          style={{ width: '100%', height: 110, objectFit: 'cover', display: 'block', background: 'var(--surface-alt)' }}
-        />
+      {artifact.hasPreview ? (
+        // Videos render as a real <video controls>, never a broken <img>.
+        <ArtifactMedia src={artifactRawUrl(artifact.id)} alt={artifact.name} name={artifact.name} />
       ) : (
         <div
           style={{
@@ -143,7 +137,7 @@ function ArtifactCard({ artifact }: { artifact: ContextArtifact }) {
             textAlign: 'center',
           }}
         >
-          {artifact.hasPreview ? 'preview unavailable' : `${artifact.kind} — no image preview`}
+          {artifact.kind} — no image preview
         </div>
       )}
       <div style={{ padding: '8px 10px', display: 'grid', gap: 5 }}>

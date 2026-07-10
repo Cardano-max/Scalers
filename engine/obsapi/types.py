@@ -249,6 +249,14 @@ class Run:
     # Real campaign id derived from the run (run_id convention team-{campaign_id}-{uuid}),
     # authoritative fallback agent_runs.campaign_id. None when no campaign is associated.
     campaign_id: Optional[strawberry.ID] = None
+    # HONEST counts (truth-gap fix): ``steps_total`` = the number of agent STEPS
+    # (agent_runs rows) this run recorded — the value the legacy ``review_count``
+    # actually held, now under its truthful name. ``drafts_staged`` = the number of
+    # REAL drafts (actions rows) staged by this run. The two were previously
+    # conflated ("N staged" showed the step count). None = the count could not be
+    # read (never a fabricated 0).
+    steps_total: Optional[int] = None
+    drafts_staged: Optional[int] = None
 
 
 @strawberry.type

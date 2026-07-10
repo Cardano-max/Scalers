@@ -17,7 +17,7 @@ import { useConsoleOptional } from '@/state/console-store';
 import { useAsync } from '@/lib/useAsync';
 import { AsyncBoundary } from './states';
 import { Dot } from './icons';
-import { Chip, ProviderErrorPanel, Tag, actionIntent, channelLabel, clockTime, matchesFilter, typeLabel, type QueueFilter } from './console-bits';
+import { Chip, ProviderErrorPanel, ReplyContext, Tag, actionIntent, channelLabel, clockTime, matchesFilter, typeLabel, type QueueFilter } from './console-bits';
 import { CHANNEL_COLOR, WORKER_COLOR } from '@/lib/tokens';
 import type { Action, ActionEvidence, ActionType } from '@/lib/data/models';
 import { SendModeToggle } from './studio/send-mode';
@@ -352,14 +352,18 @@ export function ReviewScreen() {
               live={liveMode}
               onChange={setLiveMode}
               disabled={busy || testMode}
+              disabledReason={
+                testMode ? 'Live sending unlocks after test-mode sign-off' : undefined
+              }
             />
             {testMode ? (
               <div
                 role="note"
                 style={{ marginTop: 6, fontSize: 11.5, color: 'var(--warning-text, #7a5200)' }}
               >
-                TEST MODE — real customer sends disabled for this tenant (server-enforced);
-                approve still stages drafts as HELD.
+                Safe mode — nothing goes to real customers, and the system enforces
+                that even past this switch. Approving keeps a draft safely held;
+                test sends go only to your own inbox.
               </div>
             ) : null}
           </div>
@@ -500,8 +504,9 @@ function QueueRow({
   testMode?: boolean;
 }) {
   const preview = action.subject ?? action.draft;
+  const failed = action.status === 'FAILED';
   return (
-    <li>
+    <li className="enter">
       <button
         type="button"
         ref={scrollRef}
@@ -537,9 +542,21 @@ function QueueRow({
           <Tag>{typeLabel(action.type)}</Tag>
           <Dot color={CHANNEL_COLOR[action.channel]} size={7} />
           {testMode ? <TestModeChip /> : null}
-          <Chip tone="amber" style={{ marginLeft: 'auto' }}>
-            {action.escalation.label}
-          </Chip>
+          {failed ? (
+            // Persistent inline failure chip — an approve that failed must stay
+            // visibly failed on the card, not just flash a toast. The verbatim
+            // provider error lives in the tooltip + the detail panel.
+            <Chip
+              tone="danger"
+              style={{ marginLeft: 'auto' }}
+            >
+              <span title={action.lastError ?? undefined}>Send failed — not sent, see details</span>
+            </Chip>
+          ) : (
+            <Chip tone="amber" style={{ marginLeft: 'auto' }}>
+              {action.escalation.label}
+            </Chip>
+          )}
         </div>
         <div
           style={{
@@ -621,6 +638,17 @@ function DetailPane({
   const { adapter } = useData();
   const [evidence, setEvidence] = useState<ActionEvidence | null>(null);
   const [evidenceLoaded, setEvidenceLoaded] = useState(false);
+  // One-click "Are you sure?" on Reject — the button itself asks, no modal maze.
+  // Resets when the selection changes or after a few seconds untouched.
+  const [confirmReject, setConfirmReject] = useState(false);
+  useEffect(() => {
+    setConfirmReject(false);
+  }, [action.id]);
+  useEffect(() => {
+    if (!confirmReject) return;
+    const t = setTimeout(() => setConfirmReject(false), 4000);
+    return () => clearTimeout(t);
+  }, [confirmReject]);
   useEffect(() => {
     let cancelled = false;
     setEvidence(null);
@@ -719,9 +747,13 @@ function DetailPane({
         </div>
       ) : null}
 
-      {/* FAILED approve→publish — show the REAL provider error, not a bare "Failed". */}
+      {/* FAILED approve→publish — plain-language headline; the REAL provider
+          error stays verbatim inside the panel, never paraphrased away. */}
       {action.status === 'FAILED' && action.lastError ? (
-        <ProviderErrorPanel error={action.lastError} />
+        <ProviderErrorPanel
+          error={action.lastError}
+          title="This didn't send — the platform refused it. Nothing went out."
+        />
       ) : null}
 
       {/* ju1.5: full draft lineage — source CSV / customer / artist / studio /
@@ -738,11 +770,9 @@ function DetailPane({
           facts, cited research, tool calls, ...). Real-only + honest-empty. */}
       {evidenceLoaded ? <EvidenceProvenance evidence={evidence} /> : null}
 
-      {action.context ? (
-        <Section label="Replying to">
-          <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', fontStyle: 'italic' }}>“{action.context}”</div>
-        </Section>
-      ) : null}
+      {/* A real customer message is quoted; an internal JSON context blob is
+          labeled + collapsed instead of pretending the customer sent it. */}
+      {action.context ? <ReplyContext context={action.context} /> : null}
 
       {action.subject ? (
         <Section label="Subject">
@@ -792,7 +822,29 @@ function DetailPane({
             <Btn kind="approve" onClick={onApprove} disabled={busy}>{approveLabel(action.type)}</Btn>
             <Btn kind="ghost" onClick={onEdit} disabled={busy}>Edit</Btn>
             <Btn kind="ghost" onClick={onRegenerate} disabled={busy}>Regenerate</Btn>
-            <Btn kind="reject" onClick={onReject} disabled={busy}>Reject</Btn>
+            {/* Reject asks once, inline — a second click confirms; it resets by
+                itself so a stray click never silently discards a draft. */}
+            {confirmReject ? (
+              <>
+                <Btn
+                  kind="reject"
+                  onClick={() => {
+                    setConfirmReject(false);
+                    onReject();
+                  }}
+                  disabled={busy}
+                >
+                  Are you sure? Discard this draft
+                </Btn>
+                <Btn kind="ghost" onClick={() => setConfirmReject(false)} disabled={busy}>
+                  Keep it
+                </Btn>
+              </>
+            ) : (
+              <Btn kind="reject" onClick={() => setConfirmReject(true)} disabled={busy}>
+                Reject
+              </Btn>
+            )}
           </>
         )}
       </div>

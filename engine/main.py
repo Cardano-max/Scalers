@@ -62,6 +62,25 @@ from studio.console_api import mount_console_api  # noqa: E402
 mount_console_api(app)
 
 
+@app.on_event("startup")
+async def _announce_studio_tenant() -> None:
+    """One loud line at boot: which tenant /studio/* serves. An engine started
+    by hand without STUDIO_TENANT_ID silently served 'demo' and every studio
+    surface read empty — this makes that state impossible to miss."""
+    import os
+
+    tenant = os.environ.get("STUDIO_TENANT_ID")
+    if tenant:
+        print(f"[studio] serving tenant: {tenant}", flush=True)
+    else:
+        print(
+            "[studio] WARNING: STUDIO_TENANT_ID is not set — /studio/* routes serve "
+            "the 'demo' tenant and any client data under other tenants will look "
+            "EMPTY. Start via scripts/run-local.* or export STUDIO_TENANT_ID.",
+            flush=True,
+        )
+
+
 @app.get("/tenants/{tenant_id}")
 def tenant_flags(tenant_id: str) -> dict:
     """Tenant safety flags (ju1.1): the server-side TEST-MODE state the console
@@ -92,11 +111,22 @@ class HealthResponse(BaseModel):
     models: dict[str, str]
     temperature: float
     checkpointer: str
+    studioTenant: str
+    studioTenantExplicit: bool
 
 
 @app.get("/healthz", response_model=HealthResponse)
 def healthz() -> HealthResponse:
-    """Liveness + configuration probe."""
+    """Liveness + configuration probe.
+
+    ``studioTenant`` is the tenant every ``/studio/*`` route serves. It is here
+    because an engine started WITHOUT ``STUDIO_TENANT_ID`` silently fell back to
+    'demo' and every studio surface (artists, artifacts, review counts) read
+    empty while the real client data sat under another tenant — a whole class
+    of 'the app is broken' reports. The console compares this value against its
+    own tenant and warns loudly on mismatch; ``studioTenantExplicit`` is False
+    when the fallback is in effect."""
+    import os
 
     settings = get_settings()
     return HealthResponse(
@@ -104,6 +134,8 @@ def healthz() -> HealthResponse:
         models=settings.models.model_dump(),
         temperature=settings.temperature,
         checkpointer="postgres" if settings.database_url else "memory",
+        studioTenant=os.environ.get("STUDIO_TENANT_ID", "demo"),
+        studioTenantExplicit="STUDIO_TENANT_ID" in os.environ,
     )
 
 

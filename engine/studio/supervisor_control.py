@@ -337,6 +337,109 @@ def review_run_coherence(
 
 
 # --------------------------------------------------------------------------- #
+# Cohort-claim conformance — does the SELECTED cohort actually match what the
+# plan CLAIMS about it? (truth-gap fix: a 'Keebs price/timing winback' silently
+# selected 3 non-Keebs leads with non-price objections and drafted anyway.)
+# --------------------------------------------------------------------------- #
+
+# Display names for the thread-shape objection labels (the note reads like the
+# operator talks: 'prerequisite (2), unknown (1)').
+_OBJECTION_DISPLAY = {
+    "blocked_by_prereq": "prerequisite",
+    "went_quiet_mid_booking": "went-quiet",
+}
+
+
+def requested_artist_for_plan(
+    plan: Any, roster: list[str] | None = None
+) -> tuple[str | None, bool]:
+    """The artist this plan CLAIMS the cohort is about, and whether the operator set
+    it EXPLICITLY: ``plan.artist`` when set (explicit=True); else a real roster
+    artist named in the plan's free text (goal / campaign_type / audience / offer —
+    the implicit claim a 'Keebs winback' makes; explicit=False); else (None, False).
+    Pure — the roster is passed in, never guessed."""
+    import re as _re
+
+    explicit = str(getattr(plan, "artist", "") or "").strip()
+    if explicit:
+        return explicit, True
+    text = " ".join(
+        str(getattr(plan, f, "") or "")
+        for f in ("goal", "campaign_type", "audience", "offer")
+    ).lower()
+    for name in roster or []:
+        n = str(name or "").strip()
+        if n and _re.search(rf"\b{_re.escape(n.lower())}\b", text):
+            return n, False
+    return None, False
+
+
+def check_cohort_claim(
+    plan: Any,
+    cohort: list[dict[str, Any]],
+    objections_by_lead: dict[str, Any] | None = None,
+    *,
+    roster: list[str] | None = None,
+) -> dict[str, str] | None:
+    """PURE cohort-claim conformance: compare what the plan CLAIMS about the cohort
+    (the requested artist + the assumed objection) against the SELECTED leads' real
+    attributes — ``customers.artist`` from each lead's facts, and the analysts'
+    classified ``primary_objection`` where available (missing / 'none-found' counts
+    honestly as *unknown*).
+
+    Returns ``{rule, detail, question}`` when the claim and the cohort diverge —
+    e.g. ``0 of 3 selected leads have a Keebs history; objections found:
+    prerequisite (2), unknown (1)`` — else None. It NEVER blocks the run; the caller
+    surfaces the note as a supervisor step + plan-summary line and the operator
+    decides (angle adjusted or proceed)."""
+    from collections import Counter
+
+    n = len(cohort)
+    if n == 0:
+        return None
+    objections_by_lead = objections_by_lead or {}
+    parts: list[str] = []
+    diverged = False
+
+    artist, _explicit = requested_artist_for_plan(plan, roster)
+    if artist:
+        matches = sum(
+            1
+            for f in cohort
+            if str(f.get("artist") or "").strip().lower() == artist.lower()
+        )
+        parts.append(f"{matches} of {n} selected leads have a {artist} history")
+        if matches < n:
+            diverged = True
+
+    requested_obj = str(getattr(plan, "assumed_objection", "") or "").strip().lower()
+    if requested_obj:
+        counts: Counter[str] = Counter()
+        for f in cohort:
+            val = str(objections_by_lead.get(f.get("customer_id")) or "").strip().lower()
+            if not val or val == "none-found":
+                val = "unknown"
+            counts[val] += 1
+        summary = ", ".join(
+            f"{_OBJECTION_DISPLAY.get(k, k)} ({v})" for k, v in counts.most_common()
+        )
+        if counts.get(requested_obj, 0) == 0:
+            diverged = True
+            parts.append(
+                f"objections found: {summary} — none match the plan's assumed "
+                f"'{requested_obj}' objection"
+            )
+
+    if not diverged or not parts:
+        return None
+    return {
+        "rule": "cohort-claim-mismatch",
+        "detail": "; ".join(parts),
+        "question": "angle adjusted or proceed?",
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Plan conformance — did the agents actually DO what the plan ordered?
 # --------------------------------------------------------------------------- #
 def check_plan_conformance(

@@ -27,7 +27,10 @@ function fmt(n: number): string {
 export function ConfidenceEvidence({ action }: { action: Action }) {
   const console = useConsole();
   const { confidence, threshold, jury, gates, escalation } = action;
-  const cleared = confidence >= threshold;
+  // A zero threshold means NO auto-send bar is configured — "cleared the 0%
+  // threshold" is meaningless, so we say what actually happens instead.
+  const noThreshold = threshold <= 0;
+  const cleared = !noThreshold && confidence >= threshold;
   const dims = jury?.dimensions ?? [];
   const judges = action.judges ?? [];
   const failingGates = gates.filter((g) => !g.ok);
@@ -35,9 +38,11 @@ export function ConfidenceEvidence({ action }: { action: Action }) {
   const passJudges = judges.filter((j) => j.vote === 'pass').length;
 
   // Plain-language reason the item is where it is.
-  const verdictLine = cleared
-    ? `Confidence ${pct(confidence)}% cleared the ${pct(threshold)}% threshold.`
-    : `Confidence ${pct(confidence)}% is below the ${pct(threshold)}% threshold — held for review.`;
+  const verdictLine = noThreshold
+    ? `Every draft is held for your approval (no auto-send threshold set). The team scored this one ${pct(confidence)}%.`
+    : cleared
+      ? `Confidence ${pct(confidence)}% cleared the ${pct(threshold)}% threshold.`
+      : `Confidence ${pct(confidence)}% is below the ${pct(threshold)}% threshold — held for review.`;
 
   const driver =
     failingGates.length > 0
@@ -75,7 +80,7 @@ export function ConfidenceEvidence({ action }: { action: Action }) {
             borderRadius: 5,
           }}
         >
-          {cleared ? '✓ cleared' : '↑ review'}
+          {noThreshold ? 'held for you' : cleared ? '✓ cleared' : '↑ review'}
         </span>
       </div>
 
