@@ -21,6 +21,8 @@ import { Chip, ProviderErrorPanel, Tag, actionIntent, channelLabel, clockTime, m
 import { CHANNEL_COLOR, WORKER_COLOR } from '@/lib/tokens';
 import type { Action, ActionEvidence, ActionType } from '@/lib/data/models';
 import { SendModeToggle } from './studio/send-mode';
+// Social Ready Queue — pending IG/FB post packages held at the Meta publish gate.
+import { ReadyQueueBoard } from './studio/ReadyQueueBoard';
 // --- traceability spine (additive) ---
 import { useTraceArrival } from '@/lib/useTraceArrival';
 import { LineageChips } from './trace/LineageChips';
@@ -308,6 +310,10 @@ export function ReviewScreen() {
         }}
       >
         <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid var(--hairline-light)' }}>
+          {/* Social Ready Queue — every pending IG/FB post package, complete and
+              waiting at the Meta publish gate (honest blocked_reason while the
+              operator's credentials are missing). Renders nothing when empty. */}
+          <ReadyQueueBoard />
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {FILTERS.map((f) => {
               const active = filter === f.id;

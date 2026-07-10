@@ -5202,6 +5202,29 @@ def mount_studio_agui(app) -> None:
         board = await asyncio.to_thread(fleet_status, tenant_id, dsn=get_dsn())
         return JSONResponse({"tenantId": tenant_id, "fleet": board})
 
+    @app.get("/studio/social/ready")
+    async def studio_social_ready_route():  # noqa: ANN202
+        """Social Ready Queue: every PENDING instagram/facebook draft as a full
+        post package — caption, target, schedule, and the media resolved from the
+        REAL asset rows its context references (artwork tags + image/video kind,
+        optional b-roll) — plus the honest publish-gate state: publishable=false
+        with the exact blocked_reason while the operator's Meta credentials are
+        absent (the same reason an approve would refuse with). Read-only,
+        honest-empty list when nothing is pending."""
+        from fastapi.responses import JSONResponse
+
+        from studio.social_queue import ready_posts
+
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        try:
+            posts = await asyncio.to_thread(ready_posts, tenant_id, dsn=get_dsn())
+        except Exception as exc:
+            return JSONResponse(
+                {"tenantId": tenant_id, "posts": [],
+                 "error": f"{type(exc).__name__}: {exc}"}
+            )
+        return JSONResponse({"tenantId": tenant_id, "posts": posts})
+
     @app.post("/studio/fleet/patrol")
     async def studio_fleet_patrol_route():  # noqa: ANN202
         """`initech patrol` on demand: one sweep over every non-terminal run —
@@ -5343,3 +5366,26 @@ def mount_studio_agui(app) -> None:
         except Exception as exc:
             return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
         return JSONResponse({"ok": True, **out})
+
+    @app.post("/studio/customers/{customer_id}/enrich")
+    async def studio_customer_enrich_route(customer_id: str):  # noqa: ANN202
+        """OPERATOR-INITIATED evidence-cited lead enrichment (never auto-run in any
+        loop — per-lead live egress stays a deliberate human decision): 1–3 cited
+        public-web lookups through the shared research seam, sensitive-trait
+        post-filter applied, and ONE replaceable customer memory written only when
+        a cited fact survives. Returns the honest result JSON — ``found`` facts
+        each with url+quote, ``misses`` per query, the ``suppressed`` count, and
+        ``memory_id`` (None on an honest miss). 404 for an unknown customer."""
+        from fastapi.responses import JSONResponse
+
+        from studio.lead_enrichment import enrich_lead
+
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        dsn = get_dsn()
+        try:
+            out = await asyncio.to_thread(enrich_lead, tenant_id, customer_id, dsn=dsn)
+        except LookupError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        except Exception as exc:
+            return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+        return JSONResponse(out)

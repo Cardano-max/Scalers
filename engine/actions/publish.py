@@ -6,13 +6,18 @@ calls :func:`reject`. Connector selection is by the action's ``channel``:
 
 * ``gmail``     → :class:`connectors.gmail.GmailConnector` (enabled, real creds
   from env) → a **real** ``users.messages.send`` → ``status='sent'`` + deep_link.
-* ``facebook``  → :class:`connectors.fb.FacebookConnector` (enabled, real creds
-  from env). The Meta page token is currently expired, so this raises the REAL
-  Graph error → ``status='failed'`` + ``last_error``. **Never a fake success.**
-* ``instagram`` → :class:`connectors.ig.InstagramConnector` — ``post`` (the
-  2-step media→media_publish flow) for posts, ``reply_to_comment`` for comment
-  replies. The Meta token is currently expired, so a live call raises the REAL
-  Graph error → ``status='failed'`` + ``last_error``. **Never a fake publish.**
+* ``facebook`` / ``instagram`` → CREDENTIAL-GATED (social ready queue). The
+  operator has not yet provided verified Meta credentials, so the live path
+  checks them FIRST — ``META_PAGE_TOKEN`` + ``META_IG_USER_ID`` for instagram,
+  ``META_PAGE_TOKEN`` + ``META_PAGE_ID`` for facebook — and REFUSES fail-closed
+  (:class:`MetaCredentialsMissingError`, BEFORE the exactly-once claim, so the
+  draft STAYS PENDING in the ready queue with the reason on ``last_error``).
+  With credentials present the post routes to the :func:`publish_to_meta` seam,
+  which deliberately raises ``NotImplementedError`` until the operator's
+  credentials are verified — **never a fake publish, never a silent drop**.
+  An injected test connector bypasses the env gate exactly like every other
+  channel's test seam (``connectors={"instagram": fake}``); an IG comment reply
+  with a real connector still raises the REAL Graph error on failure.
   (An IG post additionally needs a PUBLIC image URL — per-action media resolved
   from ``context.artwork``/``context.attachment_artifact_id`` (+ optional
   ``PUBLIC_ASSET_BASE_URL``), with the global ``DEMO_IG_IMAGE_URL`` as a
@@ -71,6 +76,17 @@ class TestModeSendBlockedError(RuntimeError):
     effect can occur — regardless of redirect config or the operator live toggle."""
 
 
+class MetaCredentialsMissingError(RuntimeError):
+    """An instagram/facebook publish was refused because the operator's Meta
+    credentials are not configured (social ready queue, fail-closed).
+
+    Raised BEFORE the exactly-once claim and BEFORE any connector is built —
+    exactly like :class:`TestModeSendBlockedError` — so the action stays PENDING
+    (waiting in the ready queue, re-approvable the moment credentials arrive)
+    and no side effect can occur. Callers that batch (campaign send, scheduler)
+    treat it as blocked/skipped, never a silent failure."""
+
+
 class MockOnLivePathError(RuntimeError):
     """A mock/stub connector was about to perform a REAL send on the live
     approve→publish path. Refused: a live action MUST use a real connector
@@ -83,6 +99,48 @@ class MockOnLivePathError(RuntimeError):
 #: test-mode gate because they cannot reach anyone — see the gate comment in
 #: :func:`approve_and_publish`.
 SANDBOX_CHANNELS = frozenset({"demo"})
+
+#: The OPERATOR-PROVIDED Meta credential env keys (social ready queue contract).
+#: These are the canonical names the operator will set when Meta access is
+#: verified; until every key a channel needs is present, its publishes refuse
+#: fail-closed and the drafts wait in the ready queue.
+META_ENV_PAGE_TOKEN = "META_PAGE_TOKEN"
+META_ENV_IG_USER_ID = "META_IG_USER_ID"
+META_ENV_PAGE_ID = "META_PAGE_ID"
+
+#: Env keys each Meta channel requires before its publish gate opens.
+_META_REQUIRED_ENV: dict[str, tuple[str, ...]] = {
+    "instagram": (META_ENV_PAGE_TOKEN, META_ENV_IG_USER_ID),
+    "facebook": (META_ENV_PAGE_TOKEN, META_ENV_PAGE_ID),
+}
+
+#: Channel-name aliases seen on REAL rows (the campaign planner writes 'ig'):
+#: folded once here so the credential gate, the channel dispatch, and the social
+#: ready queue all read the same vocabulary — an 'ig' draft must hit the
+#: instagram gate, never fall through to "unknown channel".
+CHANNEL_ALIASES: dict[str, str] = {"ig": "instagram", "fb": "facebook"}
+
+
+def normalize_channel(channel: str | None) -> str:
+    """Lower-cased channel with production aliases folded ('ig' → 'instagram')."""
+    lowered = (channel or "").lower()
+    return CHANNEL_ALIASES.get(lowered, lowered)
+
+
+def meta_credentials_blocked_reason(channel: str) -> str | None:
+    """``None`` when the operator's Meta credentials for ``channel`` are all set
+    (non-blank) in the env; otherwise the honest refusal reason naming the exact
+    keys the channel needs. Non-Meta channels are never blocked here (``None``).
+
+    Single source of truth for the publish gate AND the social ready queue's
+    ``publishable``/``blocked_reason`` fields — the queue shows exactly the
+    reason an approve would refuse with."""
+    required = _META_REQUIRED_ENV.get(normalize_channel(channel))
+    if not required:
+        return None
+    if all(os.environ.get(key, "").strip() for key in required):
+        return None
+    return f"Meta credentials not configured ({' / '.join(required)})"
 
 
 def _sandbox_delivery_tenants() -> frozenset[str]:
@@ -271,7 +329,7 @@ def approve_and_publish(
     if action.status == "sent":
         return action
 
-    channel = (action.channel or "").lower()
+    channel = normalize_channel(action.channel)
 
     # tlv.6 SANDBOX DELIVERY REDIRECT: a designated demo tenant's approved actions
     # execute on the credential-free sandbox channel instead of any real provider, so
@@ -303,6 +361,18 @@ def approve_and_publish(
         if not allowed:
             update_status(action.id, action.status, dsn=dsn, last_error=reason)
             raise TestModeSendBlockedError(reason)
+
+    # META CREDENTIAL GATE (social ready queue, fail-closed): an instagram/facebook
+    # publish on the REAL path (no injected test connector) refuses BEFORE the
+    # exactly-once claim when the operator's Meta credentials are absent, so the
+    # draft STAYS PENDING — visible and complete in the ready queue, re-approvable
+    # the moment credentials arrive — with the honest reason on last_error. Same
+    # machinery as the TEST-MODE gate above: no claim, no connector, no side effect.
+    if channel in _META_REQUIRED_ENV and connectors.get(channel) is None:
+        cred_reason = meta_credentials_blocked_reason(channel)
+        if cred_reason is not None:
+            update_status(action.id, action.status, dsn=dsn, last_error=cred_reason)
+            raise MetaCredentialsMissingError(cred_reason)
 
     # Exactly-once CLAIM (atomic). Replace the old pre-send 'approved' write with a
     # single conditional UPDATE pending->'sending'. If 0 rows are claimed the action
@@ -648,17 +718,41 @@ def _publish_demo(action: ActionRow, connector: Any | None, dsn: str | None) -> 
     )
 
 
+def publish_to_meta(
+    action: ActionRow, *, channel: str, image_url: str | None = None
+) -> Any:
+    """THE Meta Graph publish seam — deliberately NOT implemented yet.
+
+    Reached only when :func:`meta_credentials_blocked_reason` cleared the channel
+    (the operator set META_PAGE_TOKEN + META_IG_USER_ID / META_PAGE_ID) and no
+    test connector was injected. Until those operator credentials are VERIFIED
+    against the real Graph API, this raises instead of pretending — the action is
+    then marked ``failed`` with this exact reason, so nothing fake ever
+    'succeeds' and no Graph call is attempted with unverified credentials. The
+    real two-step IG publish / FB feed post lands here when go-live is signed off.
+    """
+    raise NotImplementedError(
+        "Meta Graph publish activates when operator credentials are verified"
+    )
+
+
 def _publish_facebook(action: ActionRow, connector: Any | None, dsn: str | None) -> ActionRow:
-    conn = connector or _facebook_from_env()
     try:
-        _ensure_real(conn)  # real-only: a mock never live-sends
-        raw = conn.send(
-            action.idempotency_key or action.id,
-            "facebook_feed",
-            {"message": action.draft},
-        )
-        result = _resolve(raw)
-    except Exception as exc:  # noqa: BLE001 — expired token raises the REAL Graph error
+        if connector is None:
+            # REAL path with Meta credentials present (the credential gate already
+            # cleared): the Graph publish is a deliberate seam until the operator's
+            # credentials are verified — it raises, and the honest failure lands
+            # below. No real Graph call is attempted here.
+            result = publish_to_meta(action, channel="facebook")
+        else:
+            _ensure_real(connector)  # real-only: a mock never live-sends
+            raw = connector.send(
+                action.idempotency_key or action.id,
+                "facebook_feed",
+                {"message": action.draft},
+            )
+            result = _resolve(raw)
+    except Exception as exc:  # noqa: BLE001 — surface the REAL reason, never fake success
         _record_send_audit_row(
             action, mode="live", result="failed", transport="facebook-graph",
             detail=str(exc), dsn=dsn,
@@ -674,18 +768,6 @@ def _publish_facebook(action: ActionRow, connector: Any | None, dsn: str | None)
         sent_at=_now(),
         outcome_label="Published",
         outcome_kind="success",
-    )
-
-
-def _facebook_from_env(env: dict[str, str] | None = None):
-    from connectors.fb import FacebookConnector
-
-    e = env if env is not None else os.environ
-    return FacebookConnector(
-        enabled=True,
-        page_token=e.get("LADIES8391_FB_PAGE_TOKEN"),
-        app_secret=e.get("META_APP_SECRET"),
-        page_id=e.get("LADIES8391_FB_PAGE_ID") or e.get("META_PAGE_ID"),
     )
 
 
@@ -760,7 +842,6 @@ def _resolve_ig_image_url(action: ActionRow) -> tuple[str | None, str, str | Non
 
 
 def _publish_instagram(action: ActionRow, connector: Any | None, dsn: str | None) -> ActionRow:
-    conn = connector or _instagram_from_env()
     image_url, source, err = _resolve_ig_image_url(action)
     if image_url is None:
         # No publishable media. Fail honestly rather than attempt a publish that
@@ -780,9 +861,16 @@ def _publish_instagram(action: ActionRow, connector: Any | None, dsn: str | None
     else:
         _log.info("ig publish: action=%s image source=%s url=%s", action.id, source, image_url)
     try:
-        _ensure_real(conn)  # real-only: a mock never live-sends
-        result = _resolve(conn.post(image_url=image_url, caption=action.draft))
-    except Exception as exc:  # noqa: BLE001 — surface the REAL Graph error, never fake success
+        if connector is None:
+            # REAL path with Meta credentials present (the credential gate already
+            # cleared): the Graph publish is a deliberate seam until the operator's
+            # credentials are verified — it raises, and the honest failure lands
+            # below. No real Graph call is attempted here.
+            result = publish_to_meta(action, channel="instagram", image_url=image_url)
+        else:
+            _ensure_real(connector)  # real-only: a mock never live-sends
+            result = _resolve(connector.post(image_url=image_url, caption=action.draft))
+    except Exception as exc:  # noqa: BLE001 — surface the REAL reason, never fake success
         _record_send_audit_row(
             action, mode="live", result="failed", transport="instagram-graph",
             detail=f"{exc} (image source={source})", dsn=dsn,
