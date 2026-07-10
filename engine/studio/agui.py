@@ -4345,6 +4345,55 @@ def mount_studio_agui(app) -> None:
             or "studio-default"
         )
 
+        # CONVERSATION CSVs (speaker + text columns) take the reactivation intake:
+        # verbatim threads land in lead_conversations, customers are upserted, and
+        # the cohort attaches to the plan — same operator gesture, richer evidence.
+        from studio.conversation_import import ingest_conversations_csv, is_conversation_csv
+
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        if is_conversation_csv(content):
+            try:
+                conv = await asyncio.to_thread(
+                    lambda: ingest_conversations_csv(tenant_id, content, dsn=dsn)
+                )
+            except Exception as exc:
+                return JSONResponse(
+                    {"ok": False, "kind": "conversations",
+                     "error": f"{type(exc).__name__}: {exc}"},
+                    status_code=400,
+                )
+            # Attach the cohort so a provided-leads run targets EXACTLY these people
+            # and the supervisor can read back real counts.
+            try:
+
+                def _attach_conversations() -> None:
+                    plan = _load_plan(session_id, dsn)
+                    plan.customers = {
+                        "filename": filename,
+                        "rows": int(conv.get("customers") or 0),
+                        "columns": ["conversation transcript"],
+                        "sample": list(conv.get("sample") or []),
+                        "ingested": True,
+                        "customer_ids": list(conv.get("customer_ids") or []),
+                        "profile": {"kind": "conversations",
+                                    "turns": int(conv.get("turns") or 0)},
+                        "summary": (
+                            f"{conv.get('customers')} customer conversation(s) imported "
+                            f"({conv.get('turns')} verbatim messages); "
+                            f"{len(conv.get('opted_out') or [])} lead(s) opted out of SMS"
+                        ),
+                    }
+                    if conv.get("customers"):
+                        plan.lead_count = int(conv["customers"])
+                    _persist_plan(dsn, session_id, plan)
+
+                await asyncio.to_thread(_attach_conversations)
+                conv["attachedToPlan"] = True
+            except Exception as exc:
+                conv["attachedToPlan"] = False
+                conv["attach_error"] = f"{type(exc).__name__}: {exc}"
+            return JSONResponse({"ok": True, "kind": "conversations", **conv})
+
         try:
             result = parse_customers_csv(content, filename)
         except ValueError as exc:
