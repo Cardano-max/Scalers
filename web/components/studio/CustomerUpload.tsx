@@ -17,6 +17,9 @@ import { useRef, useState } from 'react';
 
 interface UploadAck {
   ok: boolean;
+  /** The intake the backend routed this file to, by header shape:
+   *  'conversations' | 'appointments' | 'competitors' | undefined (customers). */
+  kind?: string;
   filename?: string;
   rows?: number;
   columns?: string[];
@@ -25,7 +28,52 @@ interface UploadAck {
   ingested?: boolean;
   /** Real ingestion counts when `ingested` is true. */
   ingest?: { ingested?: number; created?: number; matched?: number };
+  // conversations intake
+  customers?: number;
+  conversations?: number;
+  turns?: number;
+  opted_out?: string[];
+  // appointments intake
+  appointments?: number;
+  sessions?: number;
+  // competitors intake
+  handles?: string[];
   error?: string;
+}
+
+/** The honest per-intake acknowledgement. Each upload kind returns different
+ *  counts — rendering them all through the customers shape showed
+ *  "Uploaded 0 rows · not ingested" for a conversations file that had in fact
+ *  fully ingested (a real operator hit this). Say what actually happened. */
+function ackText(ack: UploadAck): { headline: string; detail: string } {
+  if (ack.kind === 'conversations') {
+    const opted = ack.opted_out?.length ?? 0;
+    return {
+      headline: `Imported ${ack.customers ?? 0} customer${(ack.customers ?? 0) === 1 ? '' : 's'} · ${ack.conversations ?? 0} conversation${(ack.conversations ?? 0) === 1 ? '' : 's'} · ${ack.turns ?? 0} messages`,
+      detail:
+        opted > 0
+          ? `${opted} customer${opted === 1 ? '' : 's'} opted out of SMS — captured automatically.`
+          : 'Verbatim threads stored — the team reads their exact words.',
+    };
+  }
+  if (ack.kind === 'appointments') {
+    return {
+      headline: `Imported ${ack.appointments ?? 0} appointment${(ack.appointments ?? 0) === 1 ? '' : 's'} (${ack.sessions ?? 0} session day${(ack.sessions ?? 0) === 1 ? '' : 's'}) for ${ack.customers ?? 0} customer${(ack.customers ?? 0) === 1 ? '' : 's'}`,
+      detail: 'Booking history is now on each customer’s record.',
+    };
+  }
+  if (ack.kind === 'competitors') {
+    return {
+      headline: `Stored ${ack.rows ?? 0} competitor post${(ack.rows ?? 0) === 1 ? '' : 's'}${ack.handles?.length ? ` from ${ack.handles.join(', ')}` : ''}`,
+      detail: 'For creative intelligence only — never send targets.',
+    };
+  }
+  return {
+    headline: `Uploaded ${ack.rows ?? 0} row${ack.rows === 1 ? '' : 's'}${ack.columns?.length ? ` · columns: ${ack.columns.join(', ')}` : ''}`,
+    detail: ack.ingested
+      ? `Ingested ${ack.ingest?.ingested ?? ack.rows ?? 0} lead${(ack.ingest?.ingested ?? ack.rows) === 1 ? '' : 's'} — the team can research them.`
+      : 'Parsed only — not ingested yet.',
+  };
 }
 
 type Status = 'idle' | 'parsing' | 'done' | 'error';
@@ -140,17 +188,8 @@ export function CustomerUpload({
             color: '#157F4B',
           }}
         >
-          Uploaded {ack.rows ?? 0} row{ack.rows === 1 ? '' : 's'}
-          {ack.columns && ack.columns.length > 0 && (
-            <> · columns: {ack.columns.join(', ')}</>
-          )}
-          <div style={{ color: '#8C877D' }}>
-            {ack.ingested
-              ? `Ingested ${ack.ingest?.ingested ?? ack.rows ?? 0} lead${
-                  (ack.ingest?.ingested ?? ack.rows) === 1 ? '' : 's'
-                } — the team can research them.`
-              : 'Parsed only — not ingested yet.'}
-          </div>
+          {ackText(ack).headline}
+          <div style={{ color: '#8C877D' }}>{ackText(ack).detail}</div>
         </div>
       )}
 

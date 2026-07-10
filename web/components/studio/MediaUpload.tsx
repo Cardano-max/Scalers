@@ -106,7 +106,12 @@ export function MediaUpload({
     ? result.vlmSummary
       ? `Visual analysis: ${result.vlmSummary}`
       : result.vlmStatus && !['ok', 'done', 'complete'].includes(result.vlmStatus.toLowerCase())
-        ? 'Uploaded — visual analysis unavailable for this file (stored; tags pending).'
+        ? // Say WHY it was skipped (the engine reports the concrete reason —
+          // e.g. a missing model key) and how to recover. "tags pending" was a
+          // lie: nothing was pending, analysis was skipped.
+          `Uploaded and stored — visual analysis skipped: ${
+            result.vlmError || 'the engine could not run the vision model'
+          }. Fix the engine, then re-upload this same file to analyze it.`
         : (result.note ?? 'Uploaded.')
     : null;
 

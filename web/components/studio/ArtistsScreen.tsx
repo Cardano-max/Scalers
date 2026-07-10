@@ -422,7 +422,10 @@ function ArtworkCard({ artwork }: { artwork: ArtistArtwork }) {
         </button>
         {expanded && (
           <p style={{ margin: 0, fontSize: 11.5, lineHeight: 1.5, color: 'var(--text-secondary)' }}>
-            {artwork.vlmSummary ?? 'No visual analysis available for this artwork.'}
+            {artwork.vlmSummary ??
+              (artwork.vlmError
+                ? `Visual analysis was skipped at upload: ${artwork.vlmError} — fix the engine and re-upload this piece to analyze it.`
+                : 'No visual analysis available for this artwork.')}
           </p>
         )}
       </figcaption>

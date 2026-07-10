@@ -173,7 +173,7 @@ def test_library_api_shapes(monkeypatch, tmp_path):
         assert detail["styleTags"] == ["fine-line"]  # from REAL artwork VLM tags
         aw = detail["artworks"][0]
         assert set(aw.keys()) == {"assetId", "artifactId", "styles", "motifs",
-                                  "vlmSummary", "why"}
+                                  "vlmSummary", "vlmStatus", "vlmError", "why"}
         assert aw["artifactId"] == art_id and aw["why"] is None
         camp = detail["campaigns"][0]
         assert camp["name"] == "06.29 BELLA" and camp["offer_price_usd"] == 1200.0

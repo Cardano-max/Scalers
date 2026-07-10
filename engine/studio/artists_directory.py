@@ -175,6 +175,11 @@ def _artwork_entries(tenant_id: str, slug: str, dsn: str | None = None) -> list[
                 "styles": [s for s in (c.get("styles") or []) if isinstance(s, str)],
                 "motifs": [m for m in (c.get("motifs") or []) if isinstance(m, str)],
                 "vlmSummary": str(c.get("vlm_summary") or "") or None,
+                # The honest analysis state: when the VLM was skipped/failed at
+                # upload time, the gallery shows the concrete reason instead of
+                # a bare "no visual analysis" (a real operator hit exactly that).
+                "vlmStatus": str(c.get("vlm_status") or "") or None,
+                "vlmError": str(c.get("vlm_error") or "") or None,
                 "why": None,
             }
         )
