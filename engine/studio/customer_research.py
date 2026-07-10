@@ -716,6 +716,17 @@ _OBJECTION_ANGLES: dict[str, tuple[str, str, str]] = {
               "reassure with real healed work / first-timer care, no hype"),
     "uncertainty": ("low-pressure-consult", "a no-pressure way to decide",
                     "offer a relaxed consult to help them decide, no push"),
+    "trust_concern": ("rebuild-trust", "repairing trust after a rough booking experience",
+                      "acknowledge the past experience without restating painful details; "
+                      "direct-artist commitment, no-reschedule guarantee, manager point "
+                      "of contact — never a hard sell"),
+    "blocked_by_prereq": ("prereq-help", "the prerequisite step that blocks their booking",
+                          "a helpful next-step note on the prerequisite (e.g. laser "
+                          "removal guidance) — explicitly not a discount pitch"),
+    "went_quiet_mid_booking": ("resume-booking",
+                               "picking the booking back up where it stopped",
+                               "low-pressure pick-up-where-we-left-off, referencing the "
+                               "exact step they stopped at"),
 }
 # (category -> angle) for the non-objection lifecycle branches.
 _CATEGORY_ANGLES: dict[str, tuple[str, str]] = {
@@ -743,6 +754,12 @@ def _objection_angle(profile: Any, offer: Any) -> dict[str, Any] | None:
             label = f"their {obj_val} hesitation + a real offer ({offer.code})"
             basis = f'objection "{obj_ev[:110]}" -> offer {offer.as_evidence()}'
             key = "offer-" + ("discount" if obj_val == "price" else "payment")
+        # The thread-shape labels quote the REAL thread (often a studio turn), so the
+        # basis names what the quote IS — never "their stated words" for a studio line.
+        elif obj_val == "went_quiet_mid_booking":
+            basis = f'the exact step the thread stopped at: "{obj_ev[:130]}"'
+        elif obj_val == "blocked_by_prereq":
+            basis = f'the prerequisite stated in the thread: "{obj_ev[:130]}"'
         else:
             basis = f'their stated {obj_val} hesitation: "{obj_ev[:130]}"'
         return {"key": key, "label": label, "basis": basis,
@@ -902,7 +919,27 @@ def _angle_rationale(
 def _offer_prompt_block(offer: Any, objection: str) -> list[str]:
     """The REAL-offer block for the copywriter prompt (or the no-fabrication guard when
     there is no offer). An offer is quoted EXACTLY; a price/payment objection with no real
-    offer is answered honestly, never with an invented discount."""
+    offer is answered honestly, never with an invented discount.
+
+    trust_concern / blocked_by_prereq are NEVER sold to — even a real substantiated
+    offer is withheld (a promo after a refund dispute, or instead of the prerequisite,
+    is exactly the hard sell those angles forbid)."""
+    if objection == "trust_concern":
+        return [
+            "# TRUST-REPAIR GUARD: this customer had a bad prior experience with US. Do "
+            "NOT hard-sell, and do NOT mention any promo, discount, code, or urgency. "
+            "Briefly acknowledge the past experience WITHOUT restating its painful "
+            "details, commit that their artist will work with them directly, that a "
+            "booked date will not be rescheduled on our end, and offer the manager as "
+            "their direct point of contact.",
+        ]
+    if objection == "blocked_by_prereq":
+        return [
+            "# PREREQUISITE GUARD: a real prerequisite blocks this booking. Write a "
+            "HELPFUL next-step message about that prerequisite (what it is, what to do "
+            "first) — explicitly NOT a discount pitch. Do not mention any offer, code, "
+            "or price.",
+        ]
     if offer is not None:
         terms = ", ".join(
             x for x in [
@@ -1093,10 +1130,25 @@ def _build_email_prompt(
         if where:
             obj_bits.append(f"- Where this customer sits: {where}.")
         if objection and objection != "none-found" and obj_ev:
-            obj_bits.append(f'- Their hesitation ({objection}), in their own words: "{obj_ev[:160]}".')
-            obj_bits.append("- Address that hesitation directly and warmly. Do NOT restate "
-                            "their private words back verbatim, and NEVER imply you inspected "
-                            "their social media — write naturally.")
+            # The thread-shape labels quote the thread (often a studio turn) — framed as
+            # what they ARE, never presented as the customer's own words.
+            if objection == "went_quiet_mid_booking":
+                obj_bits.append('- They were actively booking and went quiet; the exact '
+                                f'step the thread stopped at (verbatim): "{obj_ev[:160]}".')
+                obj_bits.append("- Pick the thread back up at that step, low-pressure — "
+                                "make continuing effortless and NEVER guilt them for "
+                                "going quiet.")
+            elif objection == "blocked_by_prereq":
+                obj_bits.append('- Their booking is blocked by a prerequisite, stated in '
+                                f'the real thread: "{obj_ev[:160]}".')
+                obj_bits.append("- Be genuinely helpful about that prerequisite (what to "
+                                "do first and how) — a next-step note, never a sales "
+                                "pitch around it.")
+            else:
+                obj_bits.append(f'- Their hesitation ({objection}), in their own words: "{obj_ev[:160]}".')
+                obj_bits.append("- Address that hesitation directly and warmly. Do NOT restate "
+                                "their private words back verbatim, and NEVER imply you inspected "
+                                "their social media — write naturally.")
         if obj_bits:
             objection_block = ["", "# WHY THEY DIDN'T BOOK (real, grounded — speak to this):", *obj_bits]
 
@@ -1131,6 +1183,12 @@ def _build_email_prompt(
         "past bookings/last tattoo, their favourite artist, or their objection UNLESS that "
         "exact fact is listed above for THIS person. With no such fact, do not reference "
         "it at all — a deterministic guard rejects any draft that fakes this.",
+        # A recorded SMS opt-out (reply-STOP honored) must be visible to the strategy:
+        # the draft may never propose texting as the channel or the follow-up.
+        *(["- CHANNEL GUARD: SMS suppressed — email only. This customer opted out of "
+           "SMS (reply-STOP honored). Never propose texting them, and never mention "
+           "SMS as a follow-up channel."]
+          if facts.get("sms_opt_in") is False else []),
         "- Everything you say about YOURSELF (the sender) must come from the brand "
         "voice's approved claims above — nothing else.",
         # wwy.7 r8 (smoking gun): with NO prior-relationship evidence on file, the copy
@@ -1253,6 +1311,7 @@ def _template_outreach(
         "flexible-timing", "proof-and-portfolio", "low-pressure-consult",
         "loyalty-touchup", "offer-loyalty-touchup", "completion-nudge",
         "win-back", "offer-win-back",
+        "rebuild-trust", "prereq-help", "resume-booking",
     )
 
     # Opener + detail are keyed off the distinct angle so the deterministic path also
@@ -1272,6 +1331,25 @@ def _template_outreach(
     elif key == "low-pressure-consult":
         opener = f"Hi {first}, no pressure either way."
         detail = " If it helps, we can hop on a quick chat to figure out what you want."
+    elif key == "rebuild-trust":
+        # NEVER a hard sell: no offer phrase, and the past experience is acknowledged
+        # without restating its painful details.
+        opener = f"Hi {first}, we know your last experience with us wasn't what it should have been."
+        detail = (" No pitch — if you ever want to give it another go, your artist would "
+                  "work with you directly, your date would be locked in with no "
+                  "reschedules on our end, and our manager would be your direct point "
+                  "of contact.")
+    elif key == "prereq-help":
+        # A next-step note, explicitly not a discount pitch (no offer phrase). The real
+        # prerequisite stays in the angle basis/prompt; the template never guesses it.
+        opener = f"Hi {first}, following up with the honest next step for your piece."
+        detail = (" Our artists flagged one thing to sort out first — happy to walk you "
+                  "through exactly what it involves and what to do, no booking pressure "
+                  "and no sales pitch.")
+    elif key == "resume-booking":
+        opener = f"Hi {first}, no pressure at all — we can pick up right where we left off."
+        detail = (" Everything from your booking is still on file, and the next step is "
+                  "the same one we left off on.")
     elif key in ("loyalty-touchup", "offer-loyalty-touchup"):
         # HONEST BY CONSTRUCTION (ju1.3): only reference "your last piece" when a real
         # tattoo_history is on file — otherwise it fabricates a past piece for a lead we
@@ -1365,6 +1443,9 @@ def _template_outreach(
             "flexible-timing": f"{first}, whenever you're ready",
             "proof-and-portfolio": f"{first}, a bit more about our work",
             "low-pressure-consult": f"{first}, no-pressure chat?",
+            "rebuild-trust": f"{first}, making it right",
+            "prereq-help": f"{first}, the next step for your piece",
+            "resume-booking": f"{first}, picking up where we left off",
             "loyalty-touchup": f"{first}, come back and see us",
             "offer-loyalty-touchup": f"{first}, come back and see us",
             "completion-nudge": f"{first}, finishing your booking",
@@ -1561,8 +1642,19 @@ def build_outreach_draft(
     if ch == "email":
         ch = "gmail"
 
+    # SMS OPT-OUT GUARD: an explicit sms_opt_in=False on the customer row (a real
+    # reply-STOP / withheld consent) suppresses SMS even when the caller requested it —
+    # the draft downgrades to email (or organic IG) and the brief/grounding carries the
+    # note so no strategy output downstream proposes texting this lead. An ABSENT flag
+    # (None) is not an opt-out and changes nothing.
+    sms_suppressed = facts.get("sms_opt_in") is False
+    if sms_suppressed and ch == "sms":
+        ch = "gmail" if (facts.get("email") and facts.get("email_opt_in")) else "instagram"
+
     # --- grounding audit: exactly the facts the copy is allowed to use ----------- #
     grounding: list[str] = [f"name={name}"]
+    if sms_suppressed:
+        grounding.append("channel_guard=SMS suppressed — email only")
     if city:
         grounding.append(f"city={city}")
     if notes:

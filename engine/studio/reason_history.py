@@ -38,16 +38,37 @@ from studio.conversations import (
 # Ordered most-specific-first so "maybe later" reads as timing, not bare uncertainty,
 # and "payment plan" reads as payment, not price. Every phrase is a literal the
 # customer actually has to have written for the objection to be emitted.
+#
+# Beyond the customer-phrase types, two reads come from the REAL thread rather than a
+# customer phrase — still verbatim-quoted, never invented:
+#   * ``blocked_by_prereq`` — a concrete prerequisite stops the booking (laser removal,
+#     healing, a consult first); the quote may be the studio turn stating it.
+#   * ``went_quiet_mid_booking`` — the lead was actively booking and stopped responding
+#     at a concrete step; the quote is the studio's unanswered ask (the exact step).
 # --------------------------------------------------------------------------- #
 OBJECTION_PRICE = "price"
 OBJECTION_TIMING = "timing"
 OBJECTION_TRUST = "trust"
 OBJECTION_UNCERTAINTY = "uncertainty"
 OBJECTION_PAYMENT = "payment"
+OBJECTION_TRUST_CONCERN = "trust_concern"
+OBJECTION_BLOCKED_PREREQ = "blocked_by_prereq"
+OBJECTION_WENT_QUIET = "went_quiet_mid_booking"
 
 # (type, [phrases]) — checked in this order; the first type that matches a turn wins for
 # that turn (a turn can still contribute a secondary type on a different phrase).
 _OBJECTION_PHRASES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # A TRUST BREACH from a bad prior experience with US (reschedules, refund/dispute
+    # language, review threats, lost confidence) outranks everything: "refund of my
+    # deposit" must read as trust_concern, never as a payment objection on "deposit".
+    (OBJECTION_TRUST_CONCERN, (
+        "refund", "dispute the charge", "dispute with my bank", "chargeback",
+        "charge back", "no longer confident", "not confident", "do not have confidence",
+        "don't have confidence", "dont have confidence", "lost confidence",
+        "no confidence", "writing a review", "write a review", "bad experience",
+        "never coming back", "moved my schedule around", "reschedule again",
+        "rescheduled again",
+    )),
     (OBJECTION_PAYMENT, (
         "payment plan", "installment", "instalment", "pay later", "pay it off",
         "deposit", "split the", "afterpay", "klarna", "financing", "pay in",
@@ -79,6 +100,37 @@ _OBJECTION_PHRASES: tuple[tuple[str, tuple[str, ...]], ...] = (
     )),
 )
 
+# Specificity rank for the PRIMARY pick: taxonomy order, with the thread-shape reads
+# (prereq / went-quiet) ranked after every customer-stated type — the customer's own
+# words always outrank a read derived from the studio's turns or the thread shape.
+_OBJECTION_RANK: dict[str, int] = {t: i for i, (t, _) in enumerate(_OBJECTION_PHRASES)}
+_OBJECTION_RANK[OBJECTION_BLOCKED_PREREQ] = len(_OBJECTION_RANK)
+_OBJECTION_RANK[OBJECTION_WENT_QUIET] = len(_OBJECTION_RANK)
+
+# A prerequisite that concretely blocks booking (stated in the thread — often by the
+# studio: "laser removal sessions prior to covering up"). Deliberately narrow: a benign
+# "send healed photos" or "trimmed prior to coming in" must NOT read as a blocker.
+_PREREQ_PHRASES = (
+    "laser removal", "laser session", "removal sessions", "tattoo removal",
+    "removal first", "needs to heal", "fully healed before", "heal first",
+    "consultation first", "consult first", "consultation before", "consult before",
+    "that process first",
+)
+
+# Booking-intent cues — went-quiet requires the lead to have been ACTIVELY booking.
+_BOOKING_INTENT = (
+    "ready to", "ready for", "i'm ready", "im ready", "book", "deposit",
+    "appointment", "how much", "price", "looking for", "looking to get",
+    "i'd like", "id like", "would like", "available", "availability",
+    "what days", "come in", "get in",
+)
+# A final customer message that is an opt-out is a STATED choice, not going quiet.
+_OPT_OUT_WORDS = ("stop", "unsubscribe", "opt out", "opt-out", "do not text",
+                  "don't text", "dont text", "remove me")
+# The unanswered studio ask that marks the concrete step the thread stopped at.
+_REQUEST_MARKERS = ("?", "please", "send", "let me know", "would you", "could you",
+                    "can you")
+
 # Urgency read — high (a near-term commitment window) vs low (an explicit deferral).
 _URGENCY_HIGH = (
     "this week", "this weekend", "asap", "as soon as", "right away", "today",
@@ -109,10 +161,13 @@ _CHANNEL_TERMS = {
 
 @dataclass(frozen=True)
 class Signal:
-    """One fine-grained extracted signal, always grounded on a verbatim customer span."""
+    """One fine-grained extracted signal, always grounded on a verbatim thread span."""
 
     value: str
-    evidence: str  # the exact customer turn text the signal was drawn from
+    evidence: str  # the exact turn text the signal was drawn from (verbatim)
+    # Whose turn the evidence quotes: "customer" (their own words -> a stated read) or
+    # "studio" (a prereq / unanswered ask -> derived, never asserted as their words).
+    source: str = SPEAKER_CUSTOMER
 
 
 @dataclass(frozen=True)
@@ -278,6 +333,50 @@ def extract_signals(
                 if term in low:
                     channel = canon
                     break
+
+    # BLOCKED-BY-PREREQUISITE — a concrete prerequisite stated anywhere in the REAL
+    # thread (usually a studio turn: "laser removal sessions prior to covering up").
+    # The evidence is that verbatim turn; its speaker is recorded so the psych layer
+    # marks a studio-quoted read inferred, never the customer's own stated words.
+    if OBJECTION_BLOCKED_PREREQ not in seen_types:
+        for t in norm:
+            if _match_phrase(t["text"].lower(), _PREREQ_PHRASES) is not None:
+                objections.append(Signal(value=OBJECTION_BLOCKED_PREREQ,
+                                         evidence=t["text"], source=t["speaker"]))
+                seen_types.add(OBJECTION_BLOCKED_PREREQ)
+                break
+
+    # WENT-QUIET-MID-BOOKING — a thread-shape read, the explanation of LAST resort:
+    # emitted ONLY when no other objection explains the stall, the lead showed real
+    # booking intent, their final message was not an opt-out, and the thread ends with
+    # >= 2 unanswered studio turns, at least one carrying a concrete ask (the exact
+    # step they stopped at — that verbatim studio turn is the evidence). Anything less
+    # stays honestly unlabelled rather than a guessed "ghosting".
+    if not objections:
+        last_low = cust_turns[-1]["text"].lower()
+        intent = any(
+            _match_phrase(t["text"].lower(), _BOOKING_INTENT) for t in cust_turns
+        )
+        opted_out = _match_phrase(last_low, _OPT_OUT_WORDS) is not None
+        last_cust_idx = max(
+            i for i, t in enumerate(norm) if t["speaker"] == SPEAKER_CUSTOMER
+        )
+        trailing = norm[last_cust_idx + 1:]
+        if intent and not opted_out and len(trailing) >= 2:
+            pending = next(
+                (t for t in trailing
+                 if any(m in t["text"].lower() for m in _REQUEST_MARKERS)),
+                None,
+            )
+            if pending is not None:
+                objections.append(Signal(value=OBJECTION_WENT_QUIET,
+                                         evidence=pending["text"],
+                                         source=SPEAKER_STUDIO))
+
+    # Primary = the most specific type present (the taxonomy's documented contract):
+    # stable-sorted so ties keep first-evidence order, and a late trust breach ("refund
+    # of my deposit") outranks an early incidental match ("I can provide the deposit").
+    objections.sort(key=lambda o: _OBJECTION_RANK.get(o.value, len(_OBJECTION_RANK)))
 
     return ReasonSignals(
         has_conversation=True,

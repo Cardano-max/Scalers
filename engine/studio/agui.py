@@ -4395,13 +4395,49 @@ def mount_studio_agui(app) -> None:
             or request.query_params.get("session_id")
             or "studio-default"
         )
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+
+        # BRANCH on the upload's header shape. A competitor-posts CSV/JSON
+        # (handle,url,platform,caption,likes,...,niche,posted_at) is COMPETITIVE
+        # INTEL, not an audience: ingest into ``competitor_posts`` (idempotent on
+        # tenant+url; missing metric columns stay absent, never zero-filled) and
+        # return — competitors are never send targets, so no plan attach.
+        from studio.competitor_intel import ingest_competitor_csv, looks_like_competitor_csv
+
+        if looks_like_competitor_csv(content):
+            try:
+                ingest = await asyncio.to_thread(
+                    lambda: ingest_competitor_csv(tenant_id, content, dsn=dsn)
+                )
+            except Exception as exc:  # honest: never claim the intel was stored
+                return JSONResponse(
+                    {"ok": False, "kind": "competitors",
+                     "error": f"{type(exc).__name__}: {exc}"},
+                    status_code=500,
+                )
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "kind": "competitors",
+                    "filename": filename,
+                    "rows": ingest.get("rows", 0),
+                    "ingested": ingest.get("ingested", 0),
+                    "duplicates": ingest.get("duplicates", 0),
+                    "skipped": ingest.get("skipped", 0),
+                    "handles": ingest.get("handles", []),
+                    "note": "Competitor posts stored for creative intelligence — "
+                    "the IG crew molds structure/hook/CTA patterns from the "
+                    "best-scoring posts; artwork, wording, and offers stay ours. "
+                    "Nothing was sent.",
+                }
+            )
 
         # CONVERSATION CSVs (speaker + text columns) take the reactivation intake:
         # verbatim threads land in lead_conversations, customers are upserted, and
         # the cohort attaches to the plan — same operator gesture, richer evidence.
+        from studio.appointment_import import ingest_appointments_csv, is_appointment_csv
         from studio.conversation_import import ingest_conversations_csv, is_conversation_csv
 
-        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
         if is_conversation_csv(content):
             try:
                 conv = await asyncio.to_thread(
@@ -4445,6 +4481,61 @@ def mount_studio_agui(app) -> None:
                 conv["attach_error"] = f"{type(exc).__name__}: {exc}"
             return JSONResponse({"ok": True, "kind": "conversations", **conv})
 
+        # APPOINTMENT CSVs (appointment_id + identity + date columns) take the
+        # booking-history intake: session days land in `appointments` keyed on
+        # (tenant, appointment_id, slot date) so a re-upload never duplicates,
+        # customers are upserted, and each gets ONE dossier-visible history memory.
+        elif is_appointment_csv(content):
+            try:
+                appt = await asyncio.to_thread(
+                    lambda: ingest_appointments_csv(
+                        tenant_id, content, dsn=dsn, source_file=filename
+                    )
+                )
+            except Exception as exc:
+                return JSONResponse(
+                    {"ok": False, "kind": "appointments",
+                     "error": f"{type(exc).__name__}: {exc}"},
+                    status_code=400,
+                )
+            # Attach the cohort so a provided-leads run targets EXACTLY these people
+            # and the supervisor can read back real counts.
+            try:
+
+                def _attach_appointments() -> None:
+                    plan = _load_plan(session_id, dsn)
+                    perf = dict(appt.get("performance") or {})
+                    span = perf.get("date_span") or {}
+                    span_note = (
+                        f", spanning {span.get('from')}..{span.get('to')}"
+                        if span.get("from") else ""
+                    )
+                    plan.customers = {
+                        "filename": filename,
+                        "rows": int(appt.get("customers") or 0),
+                        "columns": ["appointment history"],
+                        "sample": list(appt.get("sample") or []),
+                        "ingested": True,
+                        "customer_ids": list(appt.get("customer_ids") or []),
+                        "profile": {"kind": "appointments", **perf},
+                        "summary": (
+                            f"{appt.get('appointments')} appointment(s) "
+                            f"({appt.get('sessions')} session day(s)) imported for "
+                            f"{appt.get('customers')} customer(s){span_note}"
+                        ),
+                    }
+                    if appt.get("customers"):
+                        plan.lead_count = int(appt["customers"])
+                    _persist_plan(dsn, session_id, plan)
+
+                await asyncio.to_thread(_attach_appointments)
+                appt["attachedToPlan"] = True
+            except Exception as exc:
+                appt["attachedToPlan"] = False
+                appt["attach_error"] = f"{type(exc).__name__}: {exc}"
+            return JSONResponse({"ok": True, "kind": "appointments", **appt})
+
+        # (default branch) customers CSV → parse + ingest + attach + register.
         try:
             result = parse_customers_csv(content, filename)
         except ValueError as exc:
@@ -4454,7 +4545,6 @@ def mount_studio_agui(app) -> None:
         # ``research_lead`` / ``research_and_stage_leads`` can find them. Idempotent —
         # re-uploading already-seeded leads matches them and creates no duplicates.
         # Honest: if ingestion fails we still return the parse preview with the error.
-        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
         try:
             from studio.customer_research import ingest_leads
 

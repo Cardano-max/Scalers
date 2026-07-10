@@ -476,12 +476,45 @@ def build_ig_brief_block(
              "broll_on_file": len(broll)},
         )
 
+    # COMPETITOR CREATIVE INTELLIGENCE (operator-uploaded posts, ADDITIVE):
+    # the best-scoring competitor post's SHAPE — structure/hook/CTA pattern — as
+    # inspiration to MOLD; artwork/wording/offers always stay OURS. Best-effort +
+    # honest-empty: with no competitor data the block SAYS so, and no crew step is
+    # recorded (no competitor read contributed to this brief). When a pattern
+    # exists, the crew step carries the full score breakdown so the live panel
+    # shows the reasoning; model is 'db+cell' only when the clamped LLM read ran.
+    competitor_block = ""
+    try:
+        from studio.competitor_intel import best_pattern, render_competitor_pattern_block
+
+        competitor = best_pattern(tenant_id, artist=artist, dsn=dsn)
+        competitor_block = render_competitor_pattern_block(competitor)
+        if run_id and competitor:
+            _record_crew_step(
+                dsn, run_id, campaign_id,
+                "competitor_intel",
+                "db+cell" if competitor.get("llm_refined") else "db",
+                {"artist": artist, "tenant_id": tenant_id},
+                {"handle": competitor.get("handle"),
+                 "url": competitor.get("url"),
+                 "total_score": competitor.get("total_score"),
+                 "scores": competitor.get("scores"),
+                 "hook_line": competitor.get("hook_line"),
+                 "emotional_angle": competitor.get("emotional_angle"),
+                 "why_it_worked": competitor.get("why_it_worked"),
+                 "llm_refined": bool(competitor.get("llm_refined"))},
+            )
+    except Exception:
+        competitor_block = ""  # grounding never breaks the run; block simply absent
+
     parts = [
         render_artist_memory_block(mem),
         render_deep_research_block(deep),
         render_brand_patterns_block(patterns),
-        render_broll_block(broll),
     ]
+    if competitor_block:
+        parts.append(competitor_block)
+    parts.append(render_broll_block(broll))
     if artwork:
         parts.append(
             "\nSELECTED ARTWORK (operator-picked, REAL): asset "
