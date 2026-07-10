@@ -108,10 +108,121 @@ export function matchesFilter(type: ActionType, filter: QueueFilter): boolean {
   }
 }
 
-/** HH:MM (UTC) extracted from an ISO timestamp — deterministic, no tz drift. */
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * Date + time from an ISO timestamp — timestamps always tell the whole truth
+ * (a bare "20:11" reads as today even when it was last week). Today's stamps
+ * render "Today 13:57"; anything else "Jul 9 · 20:11". The date/clock digits
+ * are extracted literally from the ISO string (no tz conversion, no drift);
+ * only the "is it today" check compares against the current UTC date.
+ */
 export function clockTime(iso: string): string {
-  const m = /T(\d{2}:\d{2})/.exec(iso);
-  return m ? m[1] : iso;
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}:\d{2})/.exec(iso);
+  if (!m) return iso;
+  const [, y, mo, d, hm] = m;
+  const now = new Date();
+  const isToday =
+    Number(y) === now.getUTCFullYear() &&
+    Number(mo) === now.getUTCMonth() + 1 &&
+    Number(d) === now.getUTCDate();
+  if (isToday) return `Today ${hm}`;
+  return `${MONTHS[Number(mo) - 1]} ${Number(d)} · ${hm}`;
+}
+
+/**
+ * Honest run-duration label: the API string verbatim when it is a real
+ * measurement, and "—" when it is absent or a meaningless zero ("0.0s") —
+ * never a fake number.
+ */
+export function durationLabel(d?: string | null): string {
+  const t = (d ?? '').trim();
+  if (!t) return '—';
+  if (/^0+(\.0+)?\s*(ms|s|m|h)?$/.test(t)) return '—';
+  return t;
+}
+
+/**
+ * Truthful work label for a run row. The API's `reviewCount` counts the agent
+ * STEPS the run executed (engine: review_count=len(agent_runs)), so it is
+ * labeled "steps". A draft count is appended ONLY when the payload really
+ * carries one — never inferred.
+ */
+export function runWorkLabel(r: {
+  reviewCount: number;
+  autoCount: number;
+  draftCount?: number | null;
+}): string {
+  const steps = `${r.reviewCount} step${r.reviewCount === 1 ? '' : 's'}`;
+  const drafts =
+    typeof r.draftCount === 'number' && r.draftCount > 0
+      ? ` · ${r.draftCount} draft${r.draftCount === 1 ? '' : 's'}`
+      : '';
+  const auto = r.autoCount > 0 ? ` · ${r.autoCount} auto-approved` : '';
+  return `${steps}${drafts}${auto}`;
+}
+
+/**
+ * True when a "customer message" context field is actually an internal JSON
+ * blob (draft/campaign context) — it must never be quoted as if the customer
+ * wrote it.
+ */
+export function looksLikeJsonBlob(s: string): boolean {
+  const t = s.trim();
+  if (!t.startsWith('{') && !t.startsWith('[')) return false;
+  try {
+    const parsed = JSON.parse(t);
+    return typeof parsed === 'object' && parsed !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Renders an action's `context`: a real customer message is quoted; an internal
+ * JSON context blob is labeled honestly and collapsed (never passed off as
+ * something the customer sent).
+ */
+export function ReplyContext({ context }: { context: string }) {
+  if (looksLikeJsonBlob(context)) {
+    return (
+      <div style={{ display: 'grid', gap: 6 }}>
+        <span className="label">Draft context (internal)</span>
+        <details>
+          <summary style={{ fontSize: 12, color: 'var(--text-muted)', cursor: 'pointer' }}>
+            Notes the team attached to this draft — technical detail
+          </summary>
+          <pre
+            className="mono"
+            style={{
+              margin: '8px 0 0',
+              fontSize: 11.5,
+              lineHeight: 1.5,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              maxHeight: 220,
+              overflow: 'auto',
+              background: 'var(--surface-alt)',
+              border: '1px solid var(--hairline)',
+              borderRadius: 8,
+              padding: '10px 12px',
+              color: 'var(--text-secondary)',
+            }}
+          >
+            {context}
+          </pre>
+        </details>
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: 'grid', gap: 6 }}>
+      <span className="label">Replying to</span>
+      <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+        “{context}”
+      </div>
+    </div>
+  );
 }
 
 /** A small uppercase mono tag (type tag / section label). */

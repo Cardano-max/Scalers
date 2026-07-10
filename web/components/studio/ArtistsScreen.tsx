@@ -20,6 +20,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { useAsync } from '@/lib/useAsync';
 import { Skeleton, EmptyState, ErrorState } from '../states';
 import { Chip } from '../console-bits';
+import { ArtifactMedia } from './ArtifactMedia';
 import {
   addArtistMemory,
   artifactRawUrl,
@@ -47,16 +48,54 @@ export function ArtistsScreen() {
 
 // ── Roster ───────────────────────────────────────────────────────────────────
 
+/** Content-first roster order: artists with artwork/campaigns/memories sort
+ *  before empty profiles; ties keep alphabetical order. */
+function rosterSort(a: { artworkCount: number; campaignCount: number; memoryCount: number; name: string }, b: typeof a): number {
+  const weight = (x: typeof a) => x.artworkCount * 100 + x.campaignCount * 10 + x.memoryCount;
+  const d = weight(b) - weight(a);
+  return d !== 0 ? d : a.name.localeCompare(b.name);
+}
+
 function ArtistRoster({ onOpen }: { onOpen: (slug: string) => void }) {
   const roster = useAsync(() => fetchArtists(), []);
+  const [query, setQuery] = useState('');
+
+  const visible = useMemo(() => {
+    const all = [...(roster.data ?? [])].sort(rosterSort);
+    const q = query.trim().toLowerCase();
+    if (!q) return all;
+    return all.filter(
+      (a) =>
+        a.name.toLowerCase().includes(q) ||
+        a.studios.some((s) => s.toLowerCase().includes(q)),
+    );
+  }, [roster.data, query]);
 
   return (
     <div style={{ padding: 'var(--pad-section)', maxWidth: 1180, marginInline: 'auto' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>Artist roster</h2>
         <span className="label" style={{ fontSize: 10 }}>
           {roster.data ? `${roster.data.length} artist${roster.data.length === 1 ? '' : 's'}` : ''}
         </span>
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search artists or studios…"
+          aria-label="Search artists"
+          style={{
+            marginLeft: 'auto',
+            font: 'inherit',
+            fontSize: 12.5,
+            padding: '7px 12px',
+            minWidth: 220,
+            border: '1px solid var(--hairline)',
+            borderRadius: 'var(--radius-pill)',
+            background: 'var(--surface)',
+            color: 'var(--ink)',
+          }}
+        />
       </div>
 
       {roster.loading && roster.data === undefined ? (
@@ -68,6 +107,11 @@ function ArtistRoster({ onOpen }: { onOpen: (slug: string) => void }) {
           title="No artists yet"
           hint="The engine has no artist profiles for this tenant. They appear here once artist data is ingested."
         />
+      ) : visible.length === 0 ? (
+        <EmptyState
+          title={`No artists match “${query.trim()}”`}
+          hint="Try a shorter name, or clear the search."
+        />
       ) : (
         <div
           style={{
@@ -76,7 +120,7 @@ function ArtistRoster({ onOpen }: { onOpen: (slug: string) => void }) {
             gap: 14,
           }}
         >
-          {roster.data.map((a) => (
+          {visible.map((a) => (
             <button
               key={a.slug}
               type="button"
@@ -142,6 +186,11 @@ function ArtistRoster({ onOpen }: { onOpen: (slug: string) => void }) {
                 <Chip tone="neutral">{a.campaignCount} campaign{a.campaignCount === 1 ? '' : 's'}</Chip>
                 <Chip tone="neutral">{a.memoryCount} memor{a.memoryCount === 1 ? 'y' : 'ies'}</Chip>
               </div>
+              {a.artworkCount === 0 && a.campaignCount === 0 && a.memoryCount === 0 && (
+                <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
+                  No artwork yet — upload from the Voice tab, or open this profile to add some.
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -315,7 +364,6 @@ function ArtworkGallery({ artworks }: { artworks: ArtistArtwork[] }) {
 
 function ArtworkCard({ artwork }: { artwork: ArtistArtwork }) {
   const [expanded, setExpanded] = useState(false);
-  const [imgFailed, setImgFailed] = useState(false);
   const chips = [...artwork.styles, ...artwork.motifs];
 
   return (
@@ -330,37 +378,13 @@ function ArtworkCard({ artwork }: { artwork: ArtistArtwork }) {
         flexDirection: 'column',
       }}
     >
-      <button
-        type="button"
-        onClick={() => setExpanded((e) => !e)}
-        aria-expanded={expanded}
-        title={artwork.vlmSummary ?? 'No visual analysis for this artwork'}
-        style={{ border: 'none', padding: 0, background: 'var(--surface-alt)', cursor: 'pointer', display: 'block' }}
-      >
-        {imgFailed ? (
-          <div
-            style={{
-              height: 140,
-              display: 'grid',
-              placeItems: 'center',
-              fontSize: 11.5,
-              color: 'var(--text-faint)',
-              padding: 8,
-            }}
-          >
-            image unavailable
-          </div>
-        ) : (
-          // eslint-disable-next-line @next/next/no-img-element -- engine-served bytes; no optimizer configured
-          <img
-            src={artifactRawUrl(artwork.artifactId)}
-            alt={artwork.vlmSummary ?? 'artwork'}
-            loading="lazy"
-            onError={() => setImgFailed(true)}
-            style={{ width: '100%', height: 140, objectFit: 'cover', display: 'block' }}
-          />
-        )}
-      </button>
+      {/* Videos render as a playable <video controls>; images stay images. The
+          media sits OUTSIDE the expand button so video controls stay clickable. */}
+      <ArtifactMedia
+        src={artifactRawUrl(artwork.artifactId)}
+        alt={artwork.vlmSummary ?? 'artwork'}
+        height={140}
+      />
       <figcaption style={{ padding: '8px 10px', display: 'grid', gap: 6 }}>
         {chips.length > 0 ? (
           <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
@@ -378,6 +402,24 @@ function ArtworkCard({ artwork }: { artwork: ArtistArtwork }) {
         ) : (
           <span style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>no style/motif tags</span>
         )}
+        <button
+          type="button"
+          onClick={() => setExpanded((e) => !e)}
+          aria-expanded={expanded}
+          style={{
+            font: 'inherit',
+            fontSize: 10.5,
+            fontWeight: 600,
+            color: TEAL,
+            background: 'transparent',
+            border: 'none',
+            padding: 0,
+            cursor: 'pointer',
+            textAlign: 'left',
+          }}
+        >
+          {expanded ? 'Hide description ▲' : 'What is this piece? ▾'}
+        </button>
         {expanded && (
           <p style={{ margin: 0, fontSize: 11.5, lineHeight: 1.5, color: 'var(--text-secondary)' }}>
             {artwork.vlmSummary ?? 'No visual analysis available for this artwork.'}

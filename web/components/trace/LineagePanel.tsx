@@ -113,7 +113,7 @@ export function LineagePanel({ actionId }: { actionId: string }) {
                 </button>
               ))
             ) : (
-              <Missing why="per-draft example provenance lands with ju1.4" />
+              <Missing why="not recorded for this draft" />
             )}
           </Row>
           <Row label="Offer">{lin.offer ?? <Missing why="no substantiated offer used" />}</Row>

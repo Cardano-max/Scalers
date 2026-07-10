@@ -7,10 +7,11 @@
  * `screen` state). The shell owns the tenant read (engine state + Review-queue
  * badge count) and the master Pause/Resume.
  */
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
 import { TestModeBanner } from './TestModeBanner';
+import { StatusStrip } from './StatusStrip';
 import { useConsole } from '@/state/console-store';
 import { useData } from '@/lib/data/DataProvider';
 import { useAsync } from '@/lib/useAsync';
@@ -24,9 +25,10 @@ export function AppShell() {
   const { adapter, tenantId } = useData();
   const { screen, navigate } = useConsole();
 
-  // Optional deep-link: open a screen directly from the URL hash (e.g.
-  // `#voice`). No-op in jsdom (empty hash) and when the hash isn't a known
-  // screen, so default routing and tests are unaffected.
+  // ── URL-hash routing ──────────────────────────────────────────────────────
+  // Every screen switch updates the URL hash (history.pushState) and browser
+  // back/forward + pasted deep links (#review, #runs, …) navigate the console —
+  // real, shareable navigation, still on the existing screen registry.
   useEffect(() => {
     const hash =
       typeof window !== 'undefined' ? window.location.hash.replace('#', '') : '';
@@ -36,6 +38,49 @@ export function AppShell() {
     // run once on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Reflect the active screen into the hash. IMPORTANT: never write while an
+  // unconsumed deep-link hash exists (e.g. arriving on /#review while state
+  // still says the default screen) — writing then would clobber the deep link
+  // before the mount navigation lands (StrictMode double-effects made this a
+  // real race). We only start writing once state and hash have met.
+  const hashSynced = useRef(false);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const current = window.location.hash.replace('#', '');
+    try {
+      if (!hashSynced.current) {
+        // Still converging: a valid, different hash is a deep link the mount
+        // effect is about to consume — leave it alone.
+        if (current && current in SCREENS && current !== screen) return;
+        hashSynced.current = true;
+        if (current !== screen) {
+          // Initial mount: set the default hash without growing history.
+          window.history.replaceState(null, '', `#${screen}`);
+        }
+        return;
+      }
+      if (current === screen) return;
+      window.history.pushState(null, '', `#${screen}`);
+    } catch {
+      /* history unavailable (very old browsers / odd embeds) — nav still works */
+    }
+  }, [screen]);
+
+  // Back/forward + manual hash edits navigate the console.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onHash = () => {
+      const hash = window.location.hash.replace('#', '');
+      if (hash && hash in SCREENS) navigate(hash as keyof typeof SCREENS);
+    };
+    window.addEventListener('popstate', onHash);
+    window.addEventListener('hashchange', onHash);
+    return () => {
+      window.removeEventListener('popstate', onHash);
+      window.removeEventListener('hashchange', onHash);
+    };
+  }, [navigate]);
 
   // Collapsible left sidebar (VS Code / Cursor parity), toggled by Ctrl/Cmd+B and a
   // visible chevron, persisted to localStorage so it survives reloads.
@@ -122,13 +167,18 @@ export function AppShell() {
         {/* ju1.5: server-driven TEST-MODE banner — renders only when the tenants
             API reports testMode; the ladies8391 dev fixture shows nothing. */}
         <TestModeBanner />
+        {/* What's-happening strip — visible on every screen; reuses the shared
+            fleet poll + the review count this shell already loads. */}
+        <StatusStrip reviewCount={reviewCount} />
         {/* screen area: position:relative; each screen inset:0, active one rendered.
             The StudioRunProvider lives HERE (above the single active-screen mount) so
             the Voice + Agency tabs share ONE live run — switching between them does not
             rebuild the run or lose the per-agent reasoning stream. */}
         <StudioRunProvider>
           <section style={{ position: 'relative', flex: 1, overflow: 'auto', background: 'var(--canvas)' }}>
-            <div className="enter" style={{ position: 'absolute', inset: 0, overflow: 'auto' }}>
+            {/* keyed by screen id so the fade/slide-up transition re-runs on
+                every switch (prefers-reduced-motion turns it off). */}
+            <div key={screen} className="screen-enter" style={{ position: 'absolute', inset: 0, overflow: 'auto' }}>
               <ActiveScreen />
             </div>
           </section>

@@ -94,7 +94,7 @@ export function ReadyQueueBoard() {
     <div style={{ margin: '0 0 14px', border: '1px solid var(--border, #E5E1D8)', borderRadius: 9, padding: '10px 12px' }}>
       <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', paddingBottom: 8 }}>
         <span style={{ fontSize: 10, fontFamily: MONO, color: '#A8A299', letterSpacing: '0.7px' }}>
-          SOCIAL READY QUEUE — HELD AT PUBLISH GATE
+          POSTS READY TO PUBLISH
         </span>
         <span style={{ fontSize: 10, fontFamily: MONO, color: '#A8A299' }}>
           {posts.length} post{posts.length === 1 ? '' : 's'} waiting
@@ -149,14 +149,24 @@ export function ReadyQueueBoard() {
                 </span>
               ) : null}
             </div>
-            <div style={{ fontSize: 11, fontFamily: MONO, color: '#A8A299', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {p.artwork
-                ? p.artwork.found
+            {p.artwork && !p.artwork.found ? (
+              // Plain language for a missing asset — the id + engine error stay
+              // in the tooltip for anyone who needs the technical detail.
+              <div
+                title={`artwork ${p.artwork.asset_id} · ${p.artwork.error ?? 'not found'}`}
+                style={{ fontSize: 11.5, color: '#B45309' }}
+              >
+                The artwork for this post is no longer in the library — pick a new
+                one before publishing.
+              </div>
+            ) : (
+              <div style={{ fontSize: 11, fontFamily: MONO, color: '#A8A299', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {p.artwork
                   ? `artwork ${p.artwork.asset_id} · ${p.artwork.tags.length > 0 ? p.artwork.tags.join(', ') : 'no tags'} · ${p.artwork.media}`
-                  : `artwork ${p.artwork.asset_id} · ${p.artwork.error ?? 'not found'}`
-                : 'no artwork attached'}
-              {p.broll ? ` · b-roll ${p.broll.asset_id}${p.broll.found && p.broll.media ? ` (${p.broll.media})` : ''}` : ''}
-            </div>
+                  : 'no artwork attached'}
+                {p.broll ? ` · b-roll ${p.broll.asset_id}${p.broll.found && p.broll.media ? ` (${p.broll.media})` : ''}` : ''}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -167,12 +177,22 @@ export function ReadyQueueBoard() {
             marginTop: 10,
             paddingTop: 8,
             borderTop: '1px solid var(--border, #E5E1D8)',
-            fontSize: 11,
-            fontFamily: MONO,
+            fontSize: 11.5,
             color: '#B45309',
           }}
         >
-          ● publish blocked — {blockedReasons.join(' · ')}
+          {/* Plain language up front; the engine's verbatim refusal stays one
+              click away for whoever does the setup. */}
+          ● Connect the studio&rsquo;s Instagram / Facebook to publish — a one-time
+          setup. These posts stay safely held until then.
+          <details style={{ marginTop: 4 }}>
+            <summary style={{ cursor: 'pointer', fontSize: 10.5, color: '#A8A299' }}>
+              Technical detail
+            </summary>
+            <div style={{ fontFamily: MONO, fontSize: 10.5, marginTop: 4, color: '#A8A299', whiteSpace: 'pre-wrap' }}>
+              {blockedReasons.join('\n')}
+            </div>
+          </details>
         </div>
       ) : null}
     </div>

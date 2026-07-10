@@ -36,7 +36,7 @@ function studioRoute(aguiUrl: string, suffix: string): string {
 
 /** Caption for each real voice state — never implies a state the session isn't in. */
 function caption(conn: string, awaitingGo: boolean, disabled: boolean): string {
-  if (disabled) return 'Microphone / backend unavailable — type below instead.';
+  if (disabled) return 'Voice is unavailable right now — you can keep typing below.';
   switch (conn) {
     case 'minting':
     case 'connecting':
@@ -44,7 +44,7 @@ function caption(conn: string, awaitingGo: boolean, disabled: boolean): string {
     case 'live':
       return awaitingGo ? "Say “go ahead” to spin up the team." : 'Interviewing you…';
     case 'error':
-      return 'Voice error — you can still type below.';
+      return 'Voice is unavailable right now — you can keep typing below.';
     case 'closed':
     case 'idle':
     default:
@@ -67,8 +67,12 @@ export function VoiceScreen() {
     onAssistantFinal: (t) => studio.recordVoiceTurn('SYSTEM', 'Studio Host', t),
   });
 
-  const orbDisabled = !connected;
-  const cap = caption(voice.conn, voice.awaitingGo, orbDisabled);
+  // Voice is DOWN when the backend is unreachable or the session errored (e.g.
+  // the mint call failed). The orb must not invite tapping while voice is down —
+  // recovery goes through the explicit Retry button below.
+  const voiceDown = !connected || voice.conn === 'error';
+  const orbDisabled = voiceDown;
+  const cap = caption(voice.conn, voice.awaitingGo, !connected);
 
   // The center thread is the ONE conversation (operator + host) — interleaving what
   // you TYPED (studio.send) and what you SAID (recordVoiceTurn), both on the same
@@ -205,8 +209,45 @@ export function VoiceScreen() {
           )}
 
           {voice.error && (
-            <div role="alert" style={{ fontSize: 12.5, color: 'var(--danger-text)' }}>
-              {voice.error}
+            // Plain-language failure + an explicit Retry — the raw error (e.g.
+            // "voice session mint HTTP 502") stays in a collapsed detail.
+            <div
+              role="alert"
+              style={{
+                display: 'grid',
+                gap: 8,
+                justifyItems: 'center',
+                fontSize: 12.5,
+                color: 'var(--danger-text)',
+                maxWidth: 420,
+              }}
+            >
+              <span>Voice is unavailable right now — you can keep typing below.</span>
+              <button
+                type="button"
+                onClick={voice.start}
+                style={{
+                  font: 'inherit',
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  color: 'var(--accent-dark)',
+                  background: 'var(--surface)',
+                  border: '1px solid var(--hairline-strong)',
+                  borderRadius: 'var(--radius-button)',
+                  padding: '6px 14px',
+                  cursor: 'pointer',
+                }}
+              >
+                Retry voice
+              </button>
+              <details style={{ justifySelf: 'stretch', textAlign: 'center' }}>
+                <summary style={{ fontSize: 11, color: 'var(--text-muted)', cursor: 'pointer' }}>
+                  Technical detail
+                </summary>
+                <span className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                  {voice.error}
+                </span>
+              </details>
             </div>
           )}
         </div>

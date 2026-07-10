@@ -222,7 +222,11 @@ export interface Run {
   startedAt: string;
   duration?: string | null;
   autoCount: number;
+  /** NOTE: on the live engine this counts the run's agent STEPS
+   *  (review_count=len(agent_runs)) — label it "steps", never "staged". */
   reviewCount: number;
+  /** Real staged-draft count, ONLY when the API payload carries one. */
+  draftCount?: number | null;
   retries: number;
   idempotencyKey: string;
   channels: Channel[];

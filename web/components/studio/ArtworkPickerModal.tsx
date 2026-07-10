@@ -15,6 +15,7 @@ import { useState } from 'react';
 import type { SelectionRequest, SelectionOption } from '@/lib/studio/run-trace';
 import { artifactRawUrl } from '@/lib/studio/artists';
 import { Chip } from '../console-bits';
+import { ArtifactMedia } from './ArtifactMedia';
 
 const TEAL = '#0F8A82';
 
@@ -157,7 +158,6 @@ function ArtworkOption({
   selecting: boolean;
   onPick: () => void;
 }) {
-  const [imgFailed, setImgFailed] = useState(false);
   return (
     <button
       type="button"
@@ -184,29 +184,14 @@ function ArtworkOption({
         if (!selecting) (e.currentTarget as HTMLElement).style.borderColor = 'var(--hairline)';
       }}
     >
-      {imgFailed ? (
-        <div
-          style={{
-            height: 150,
-            display: 'grid',
-            placeItems: 'center',
-            fontSize: 11.5,
-            color: 'var(--text-faint)',
-            background: 'var(--surface-alt)',
-          }}
-        >
-          image unavailable
-        </div>
-      ) : (
-        // eslint-disable-next-line @next/next/no-img-element -- engine-served bytes; no optimizer configured
-        <img
-          src={artifactRawUrl(option.artifactId)}
-          alt={option.why ?? 'artwork option'}
-          loading="lazy"
-          onError={() => setImgFailed(true)}
-          style={{ width: '100%', height: 150, objectFit: 'cover', display: 'block', background: 'var(--surface-alt)' }}
-        />
-      )}
+      {/* Video artwork shows its first frame (no controls inside the pick
+          button); images stay images — never a broken-image icon. */}
+      <ArtifactMedia
+        src={artifactRawUrl(option.artifactId)}
+        alt={option.why ?? 'artwork option'}
+        height={150}
+        controls={false}
+      />
       <span style={{ padding: '8px 10px', display: 'grid', gap: 6 }}>
         {(option.styles.length > 0 || option.motifs.length > 0) && (
           <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>

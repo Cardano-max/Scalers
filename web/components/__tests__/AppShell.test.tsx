@@ -26,11 +26,12 @@ describe('AppShell — locked shell', () => {
     expect(await screen.findByLabelText('3 in review queue')).toHaveTextContent('3');
   });
 
-  it('renders the top bar client pill + LangGraph live pill', async () => {
+  it('renders the top bar client pill + engine live pill', async () => {
     renderShell();
     expect(await screen.findByText('Northwind Heating & Air')).toBeInTheDocument();
     expect(screen.getByText('HVAC PACK')).toBeInTheDocument();
-    expect(screen.getByText('LangGraph · live')).toBeInTheDocument();
+    // Plain-language pill (the LangGraph detail lives in the tooltip).
+    expect(screen.getByText('Engine · live')).toBeInTheDocument();
   });
 
   it('renders the harness status card with the master control', async () => {
@@ -42,12 +43,12 @@ describe('AppShell — locked shell', () => {
 
   it('nav switches the single active screen', async () => {
     renderShell();
-    // Overview shows the KPI strip (SmokeScreen)
-    expect(await screen.findByText(/Autonomy · today/)).toBeInTheDocument();
+    // Overview shows the KPI strip (SmokeScreen) — plain-language label
+    expect(await screen.findByText(/Approved automatically/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Runs/ }));
     expect(await screen.findByText(/WORKFLOW RUNS/)).toBeInTheDocument();
     // Overview KPIs are no longer mounted (single active screen)
-    expect(screen.queryByText(/Autonomy · today/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Approved automatically/)).not.toBeInTheDocument();
   });
 
   it('Pause/Resume toggles harness state (master control, not autonomy)', async () => {

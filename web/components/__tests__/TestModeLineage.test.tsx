@@ -31,7 +31,9 @@ describe('TestModeBanner (server-driven)', () => {
   it('renders the banner when the server reports testMode', async () => {
     mount(<TestModeBanner />, 'skindesign');
     const banner = await screen.findByRole('status', { name: /test mode/i });
-    expect(banner).toHaveTextContent(/real customer sends disabled/i);
+    // Plain language for a non-technical owner — no HELD/allowlist jargon.
+    expect(banner).toHaveTextContent(/nothing is sent to real customers/i);
+    expect(banner).toHaveTextContent(/wait for your approval/i);
     expect(banner).toHaveTextContent(/skin design tattoo/i);
   });
 
@@ -57,8 +59,8 @@ describe('ReviewScreen under a test-mode tenant', () => {
     const group = screen.getByRole('group', { name: /send mode/i });
     const liveBtn = within(group).getByRole('button', { name: /live/i });
     expect(liveBtn).toBeDisabled();
-    // ...with a plain-language reason naming the server as the enforcer
-    expect(screen.getByRole('note')).toHaveTextContent(/server-enforced/i);
+    // ...with a plain-language reason naming the system as the enforcer
+    expect(screen.getByRole('note')).toHaveTextContent(/the system enforces/i);
     // approve (stages HELD) keeps working
     expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
   });
@@ -74,8 +76,8 @@ describe('ReviewScreen under a test-mode tenant', () => {
     expect(panel).toHaveTextContent('Skin Design Tattoo Las Vegas');
     expect(panel).toHaveTextContent('MINIAPP1200');
     expect(panel).toHaveTextContent('reply YES to claim your spot');
-    // example provenance is honestly absent until ju1.4
-    expect(panel).toHaveTextContent(/per-draft example provenance lands with ju1\.4/i);
+    // example provenance is honestly absent — no internal ticket ids on operator surfaces
+    expect(panel).toHaveTextContent(/not recorded for this draft/i);
     expect(panel).toHaveTextContent(/limited personalization/i);
   });
 });

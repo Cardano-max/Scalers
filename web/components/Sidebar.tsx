@@ -6,10 +6,34 @@
  * control + operator chip. Nav switches the single active `screen`; the active
  * item gets the teal tint.
  */
+import { useEffect, useRef, useState } from 'react';
 import { NAV_ITEMS, useConsole } from '@/state/console-store';
 import { NavIcon, Dot } from './icons';
 import { HarnessStatusCard } from './HarnessStatusCard';
 import type { EngineState } from '@/lib/data/models';
+
+/** The badge never changes silently: on a count change it pulses once, and a
+ *  decrease floats a short ghost note ("1 draft left the queue") so the 7→6
+ *  moment is explained rather than just mutated. */
+function useBadgeChange(count: number): { pulseKey: number; ghost: string | null } {
+  const prev = useRef<number | null>(null);
+  const [pulseKey, setPulseKey] = useState(0);
+  const [ghost, setGhost] = useState<string | null>(null);
+  useEffect(() => {
+    const last = prev.current;
+    prev.current = count;
+    if (last === null || last === count) return;
+    setPulseKey((k) => k + 1);
+    if (count < last) {
+      const n = last - count;
+      setGhost(`${n} draft${n === 1 ? '' : 's'} left the queue`);
+      const t = setTimeout(() => setGhost(null), 2600);
+      return () => clearTimeout(t);
+    }
+    return undefined;
+  }, [count]);
+  return { pulseKey, ghost };
+}
 
 export function Sidebar({
   reviewCount,
@@ -28,6 +52,7 @@ export function Sidebar({
   onToggleCollapsed?: () => void;
 }) {
   const { screen, navigate } = useConsole();
+  const { pulseKey, ghost } = useBadgeChange(reviewCount);
 
   return (
     <aside
@@ -131,6 +156,8 @@ export function Sidebar({
               {!collapsed && <span style={{ flex: 1 }}>{item.label}</span>}
               {item.id === 'review' && reviewCount > 0 ? (
                 <span
+                  key={pulseKey}
+                  className={pulseKey > 0 ? 'badge-pulse' : undefined}
                   aria-label={`${reviewCount} in review queue`}
                   style={{
                     fontFamily: 'var(--font-mono)',
@@ -146,6 +173,27 @@ export function Sidebar({
                   }}
                 >
                   {reviewCount}
+                </span>
+              ) : null}
+              {item.id === 'review' && ghost && !collapsed ? (
+                <span
+                  role="status"
+                  className="ghost-note"
+                  style={{
+                    position: 'absolute',
+                    right: 8,
+                    top: -14,
+                    fontSize: 10,
+                    color: 'var(--text-muted)',
+                    background: 'var(--surface)',
+                    border: '1px solid var(--hairline)',
+                    borderRadius: 'var(--radius-pill)',
+                    padding: '1px 7px',
+                    whiteSpace: 'nowrap',
+                    pointerEvents: 'none',
+                  }}
+                >
+                  {ghost}
                 </span>
               ) : null}
               {item.id === 'feed' && !collapsed ? <Dot color="var(--danger-dot)" size={7} live /> : null}

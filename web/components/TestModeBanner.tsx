@@ -59,14 +59,11 @@ export function TestModeBanner() {
           color: '#fff',
         }}
       >
-        TEST MODE
+        SAFE MODE
       </span>
       <span>
-        Real customer sends disabled
-        {meta?.name ? ` for ${meta.name}` : ''} — approvals stage drafts as HELD;
-        the server refuses any live send{typeof meta?.allowlistSize === 'number'
-          ? ` (allowlist: ${meta.allowlistSize} operator address${meta.allowlistSize === 1 ? '' : 'es'})`
-          : ''}.
+        Nothing is sent to real customers{meta?.name ? ` of ${meta.name}` : ''}.
+        Drafts wait for your approval; test sends go only to your own inbox.
       </span>
     </div>
   );
@@ -89,7 +86,7 @@ export function TestModeChip() {
         whiteSpace: 'nowrap',
       }}
     >
-      TEST MODE
+      SAFE MODE
     </span>
   );
 }

@@ -18,7 +18,7 @@ import { useConsole } from '@/state/console-store';
 import { AsyncBoundary } from './states';
 import { Dot } from './icons';
 import { FeedRow } from './FeedRow';
-import { Chip, clockTime } from './console-bits';
+import { Chip, clockTime, runWorkLabel } from './console-bits';
 import type { ChipTone } from './console-bits';
 import type { FeedEvent, Overview, Run } from '@/lib/data/models';
 import type { SSEStatus } from '@/lib/data/sse';
@@ -67,15 +67,63 @@ export function SmokeScreen() {
         emptyTitle="Engine has no data yet"
         emptyHint="Once the harness produces actions, KPIs appear here."
       >
-        {(ov) => (
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <Kpi label="Autonomy · today" value={`${Math.round(ov.kpis.autonomyPct * 100)}%`} accent="teal" />
-            <Kpi label="Review queue" value={String(ov.kpis.reviewQueueCount)} accent="amber" />
-            <Kpi label="Outreach · today" value={String(ov.kpis.outreachToday)} />
-            <Kpi label="Comments handled" value={String(ov.kpis.commentsAuto + ov.kpis.commentsReview)} />
-            <Kpi label="Posts published" value={String(ov.kpis.postsPublished)} />
-          </div>
-        )}
+        {(ov) => {
+          const autonomy = Math.round(ov.kpis.autonomyPct * 100);
+          const comments = ov.kpis.commentsAuto + ov.kpis.commentsReview;
+          // Consistent scoping: no tile claims a time window the others don't.
+          // Every number gets a one-line plain subtitle; every ZERO explains itself.
+          return (
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <Kpi
+                label="Approved automatically"
+                value={`${autonomy}%`}
+                accent="teal"
+                sub={
+                  autonomy === 0
+                    ? 'You approve everything right now'
+                    : 'Share of work that went out without needing you'
+                }
+              />
+              <Kpi
+                label="Waiting for review"
+                value={String(ov.kpis.reviewQueueCount)}
+                accent="amber"
+                sub={
+                  ov.kpis.reviewQueueCount === 0
+                    ? 'Nothing needs you right now'
+                    : 'Drafts waiting for your okay'
+                }
+              />
+              <Kpi
+                label="Emails sent"
+                value={String(ov.kpis.outreachToday)}
+                sub={
+                  ov.kpis.outreachToday === 0
+                    ? 'None yet — drafts wait for your approval first'
+                    : 'Outreach emails that went out'
+                }
+              />
+              <Kpi
+                label="Comments handled"
+                value={String(comments)}
+                sub={
+                  comments === 0
+                    ? 'No comments have needed a reply yet'
+                    : 'Replies to comments and messages'
+                }
+              />
+              <Kpi
+                label="Posts published"
+                value={String(ov.kpis.postsPublished)}
+                sub={
+                  ov.kpis.postsPublished === 0
+                    ? 'Unlocks when Instagram is connected'
+                    : 'Instagram / Facebook posts that went live'
+                }
+              />
+            </div>
+          );
+        }}
       </AsyncBoundary>
 
       {/* Recent campaign runs (real runs derived from the engine) */}
@@ -126,8 +174,8 @@ export function SmokeScreen() {
         >
           <Dot color={status === 'open' ? 'var(--danger-dot)' : 'var(--amber-dot)'} live={status === 'open'} />
           <span style={{ fontWeight: 600, fontSize: 13 }}>Live feed</span>
-          <span className="label" style={{ marginLeft: 'auto' }}>
-            sse: {status}
+          <span className="label" style={{ marginLeft: 'auto' }} title={`stream status: ${status}`}>
+            {status === 'open' ? 'live' : status === 'connecting' ? 'connecting…' : 'reconnecting…'}
           </span>
         </div>
         {feedRows.length === 0 ? (
@@ -179,24 +227,39 @@ function RunRow({ run, onOpen }: { run: Run; onOpen: () => void }) {
         <span className="mono" style={{ fontSize: 12, color: '#0B6F68', flex: '0 0 auto' }}>{run.id}</span>
         <span style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{run.type}</span>
         <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
-          {run.reviewCount} staged · {run.autoCount} auto
+          {runWorkLabel(run)}
         </span>
         <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
           <span className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{clockTime(run.startedAt)}</span>
           <Chip tone={statusTone}>{run.status}</Chip>
+          <span aria-hidden style={{ fontSize: 12, color: 'var(--accent-dark)', fontWeight: 600 }}>
+            View →
+          </span>
         </span>
       </button>
     </li>
   );
 }
 
-function Kpi({ label, value, accent }: { label: string; value: string; accent?: 'teal' | 'amber' }) {
+function Kpi({
+  label,
+  value,
+  accent,
+  sub,
+}: {
+  label: string;
+  value: string;
+  accent?: 'teal' | 'amber';
+  /** One-line plain-language subtitle — required so every number (and every
+   *  zero) explains itself to a non-technical owner. */
+  sub: string;
+}) {
   const bg = accent === 'amber' ? 'var(--amber-kpi-bg)' : accent === 'teal' ? 'var(--auto-chip-bg)' : 'var(--surface)';
   return (
     <div
       style={{
-        flex: '1 1 150px',
-        minWidth: 150,
+        flex: '1 1 170px',
+        minWidth: 170,
         border: '1px solid var(--hairline)',
         borderRadius: 'var(--radius-card)',
         background: bg,
@@ -206,6 +269,7 @@ function Kpi({ label, value, accent }: { label: string; value: string; accent?: 
     >
       <div className="label">{label}</div>
       <div style={{ fontSize: 29, fontWeight: 600, letterSpacing: '-0.6px', marginTop: 4 }}>{value}</div>
+      <div style={{ fontSize: 11.5, lineHeight: 1.45, color: 'var(--text-muted)', marginTop: 4 }}>{sub}</div>
     </div>
   );
 }
