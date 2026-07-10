@@ -208,3 +208,93 @@ def test_scheduler_publish_due_blocks_credentialless_ig_and_clears_schedule(monk
     finally:
         with psycopg.connect(dsn, autocommit=True) as conn:
             conn.execute("DELETE FROM actions WHERE id = %s", (action_id,))
+
+
+# ── (4) comment replies exempt from the META gate + tenant-scoped media ─────────
+
+
+@pytest.mark.integration
+@_pg
+def test_ready_posts_comment_rows_exempt_and_foreign_assets_do_not_resolve(monkeypatch):
+    """(a) A pending IG COMMENT reply carries NO META blocked_reason (replies
+    publish via the engagement connector's own keys — see actions.publish); (b) an
+    asset id from ANOTHER tenant's library reports found:false instead of leaking
+    that tenant's media into this operator's approval package."""
+    import psycopg
+
+    from studio.social_queue import ready_posts
+    from team.store import TeamStore
+
+    for key in ("META_PAGE_TOKEN", "META_IG_USER_ID", "META_PAGE_ID"):
+        monkeypatch.delenv(key, raising=False)
+    dsn = os.environ["ENGINE_DATABASE_URL"]
+    tenant = "t_socialq_" + uuid.uuid4().hex[:8]
+    other_tenant = "t_socialq_" + uuid.uuid4().hex[:8]
+    reply_id = "act_sq_" + uuid.uuid4().hex[:8]
+    post_id = "act_sq_" + uuid.uuid4().hex[:8]
+    foreign_asset = "art_sq_" + uuid.uuid4().hex[:8]
+
+    TeamStore(dsn).setup()
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO assets (id, campaign_id, asset_type, content, status) "
+            "VALUES (%s, %s, 'studio_artwork', %s, 'library')",
+            (foreign_asset, f"portfolio:{other_tenant}",
+             json.dumps({"artist": "Other", "styles": ["bold"], "media": "video"})),
+        )
+        conn.execute(
+            "INSERT INTO actions (id, tenant_id, type, channel, draft, status) "
+            "VALUES (%s, %s, 'comment', 'instagram', 'thanks, DM us!', 'pending')",
+            (reply_id, tenant),
+        )
+        conn.execute(
+            "INSERT INTO actions (id, tenant_id, type, channel, draft, status, context) "
+            "VALUES (%s, %s, 'post', 'instagram', 'new drop', 'pending', %s)",
+            (post_id, tenant, json.dumps({"artwork_asset_id": foreign_asset})),
+        )
+    try:
+        posts = {p["action_id"]: p for p in ready_posts(tenant, dsn=dsn)}
+        reply = posts[reply_id]
+        assert reply["type"] == "comment"
+        assert reply["blocked_reason"] is None  # not gated on META_* keys
+        post = posts[post_id]
+        assert post["blocked_reason"] is not None  # posts stay gated
+        # Foreign-tenant asset must not resolve into this tenant's package.
+        assert post["artwork"]["found"] is False
+    finally:
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            conn.execute("DELETE FROM actions WHERE id IN (%s, %s)", (reply_id, post_id))
+            conn.execute("DELETE FROM assets WHERE id = %s", (foreign_asset,))
+
+
+@pytest.mark.integration
+@_pg
+def test_load_broll_is_tenant_scoped():
+    """A no-artist run must never pick up another tenant's video as b-roll: the
+    library query is scoped to campaign_id='portfolio:<tenant>'."""
+    import psycopg
+
+    from studio.ig_pipeline import load_broll
+    from team.store import TeamStore
+
+    dsn = os.environ["ENGINE_DATABASE_URL"]
+    tenant_a = "t_broll_" + uuid.uuid4().hex[:8]
+    tenant_b = "t_broll_" + uuid.uuid4().hex[:8]
+    vid = "art_broll_" + uuid.uuid4().hex[:8]
+
+    TeamStore(dsn).setup()
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO assets (id, campaign_id, asset_type, content, status) "
+            "VALUES (%s, %s, 'studio_artwork', %s, 'library')",
+            (vid, f"portfolio:{tenant_a}",
+             json.dumps({"artist": "Keebs", "media": "video", "caption": "reel"})),
+        )
+    try:
+        mine = load_broll(tenant_a, None, dsn=dsn)
+        assert [b["asset_id"] for b in mine] == [vid]
+        # The other tenant sees NOTHING — not tenant A's newest video.
+        assert load_broll(tenant_b, None, dsn=dsn) == []
+    finally:
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            conn.execute("DELETE FROM assets WHERE id = %s", (vid,))

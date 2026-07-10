@@ -241,14 +241,24 @@ def _data_inventory_block(tenant_id: str, *, dsn: str | None = None) -> str:
     real DB counts + missing-data sentence. Best-effort: unreadable store adds nothing."""
     try:
         from studio.interview import campaign_interview_prompt
-        from studio.inventory import build_data_inventory
+        from studio.inventory import build_data_inventory, live_operations_block
 
         readback = build_data_inventory(tenant_id, dsn=dsn)
     except Exception:
         return ""
     if not readback:
         return ""
-    return "\n\n" + readback + "\n\n" + campaign_interview_prompt()
+    # LIVE OPERATIONS STATE from the same shared builder as the chat host: the
+    # true queue/run numbers are IN the instructions, so the voice supervisor
+    # never has a reason (or license) to estimate them.
+    try:
+        ops = live_operations_block(tenant_id, dsn=dsn)
+    except Exception:
+        ops = ""
+    block = "\n\n" + readback
+    if ops:
+        block += "\n\n" + ops
+    return block + "\n\n" + campaign_interview_prompt()
 
 
 def live_state_snapshot(tenant_id: str, *, dsn: str | None = None) -> dict[str, Any]:

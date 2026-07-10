@@ -334,6 +334,29 @@ def _data_inventory_context(ctx: RunContext[StudioDeps]) -> str:
 
 
 @studio_agent.instructions
+def _live_operations_context(ctx: RunContext[StudioDeps]) -> str:
+    """Inject the LIVE review-queue + run state on EVERY turn (anti-fabrication).
+
+    A browser-driven audit caught the host answering "the review queue is empty —
+    0 drafts" while 7 pending drafts sat in the DB (and on the sidebar badge of
+    the same page). Instructions alone decay; this makes fabrication structurally
+    unnecessary: the true numbers are already in context, computed by SQL, and
+    the host is told these are the ONLY operational numbers it may state.
+    Best-effort: an unreadable store yields the honest can't-read line, never a
+    guessed count. Built by the ONE shared builder the voice supervisor also
+    injects, so chat and voice cannot diverge."""
+    try:
+        from studio.inventory import live_operations_block
+
+        return live_operations_block(ctx.deps.tenant_id, dsn=ctx.deps.dsn)
+    except Exception:
+        return (
+            "LIVE OPERATIONS STATE unavailable this turn — say so if asked about "
+            "the queue; never guess counts."
+        )
+
+
+@studio_agent.instructions
 def _interview_checklist_context(ctx: RunContext[StudioDeps]) -> str:
     """Surface the canonical 10-question campaign-creation interview (ju1.3) so the host
     asks the right questions after the data readback. The SAME block the voice supervisor

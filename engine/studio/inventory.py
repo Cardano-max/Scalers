@@ -226,3 +226,54 @@ def build_data_inventory(tenant_id: str, *, dsn: str | None = None) -> str:
     except Exception:
         files = ""
     return f"{readback}\n\n{files}" if files else readback
+
+
+def live_operations_block(tenant_id: str, *, dsn: str | None = None) -> str:
+    """The LIVE review-queue + run state as a per-turn context block — the single
+    builder BOTH the chat host and the voice supervisor inject, so neither surface
+    can state an operational number the database doesn't back (a browser audit
+    caught the host claiming "0 drafts" against 7 pending rows). Best-effort: an
+    unreadable store yields the honest unavailable-line, never a guessed count."""
+    import os
+
+    try:
+        import psycopg
+
+        conninfo = dsn or os.environ.get(
+            "ENGINE_DATABASE_URL", "postgresql://scalers:scalers@localhost:5432/scalers"
+        )
+        with psycopg.connect(conninfo, autocommit=True, connect_timeout=3) as conn:
+            pending = conn.execute(
+                "SELECT coalesce(channel,'?') AS ch, count(*) FROM actions "
+                "WHERE tenant_id = %s AND status = 'pending' GROUP BY 1 ORDER BY 2 DESC",
+                (tenant_id,),
+            ).fetchall()
+            scheduled = conn.execute(
+                "SELECT count(*) FROM actions WHERE tenant_id = %s "
+                "AND status = 'pending' AND scheduled_for IS NOT NULL",
+                (tenant_id,),
+            ).fetchone()[0]
+            last_run = conn.execute(
+                "SELECT run_id, status, created_at FROM runs WHERE tenant_id = %s "
+                "ORDER BY created_at DESC LIMIT 1",
+                (tenant_id,),
+            ).fetchone()
+        total = sum(n for _, n in pending)
+        by_ch = ", ".join(f"{ch}: {n}" for ch, n in pending) or "none"
+        last = (
+            f"latest run {last_run[0]} — {last_run[1]} ({last_run[2]:%Y-%m-%d %H:%M} UTC)"
+            if last_run else "no runs recorded yet"
+        )
+        return (
+            "LIVE OPERATIONS STATE (computed from the database THIS turn — these are "
+            "the ONLY review-queue / run numbers you may state; for anything not "
+            "listed here call the matching live-state tool instead of estimating):\n"
+            f"- review queue: {total} pending draft(s) awaiting approval ({by_ch}); "
+            f"{scheduled} scheduled\n"
+            f"- {last}"
+        )
+    except Exception as exc:  # noqa: BLE001 — honest degradation beats a guess
+        return (
+            "LIVE OPERATIONS STATE unavailable this turn "
+            f"({type(exc).__name__}) — say so if asked about the queue; never guess counts."
+        )

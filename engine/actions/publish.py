@@ -6,8 +6,8 @@ calls :func:`reject`. Connector selection is by the action's ``channel``:
 
 * ``gmail``     → :class:`connectors.gmail.GmailConnector` (enabled, real creds
   from env) → a **real** ``users.messages.send`` → ``status='sent'`` + deep_link.
-* ``facebook`` / ``instagram`` → CREDENTIAL-GATED (social ready queue). The
-  operator has not yet provided verified Meta credentials, so the live path
+* ``facebook`` / ``instagram`` POSTS → CREDENTIAL-GATED (social ready queue).
+  The operator has not yet provided verified Meta credentials, so the live path
   checks them FIRST — ``META_PAGE_TOKEN`` + ``META_IG_USER_ID`` for instagram,
   ``META_PAGE_TOKEN`` + ``META_PAGE_ID`` for facebook — and REFUSES fail-closed
   (:class:`MetaCredentialsMissingError`, BEFORE the exactly-once claim, so the
@@ -16,8 +16,10 @@ calls :func:`reject`. Connector selection is by the action's ``channel``:
   which deliberately raises ``NotImplementedError`` until the operator's
   credentials are verified — **never a fake publish, never a silent drop**.
   An injected test connector bypasses the env gate exactly like every other
-  channel's test seam (``connectors={"instagram": fake}``); an IG comment reply
-  with a real connector still raises the REAL Graph error on failure.
+  channel's test seam (``connectors={"instagram": fake}``). Comment REPLIES are
+  NOT governed by this gate: the engagement reply connector reads its own env
+  keys, so a reply approve surfaces that connector's own config/Graph error —
+  gating replies on ``META_*`` would validate keys the reply never uses.
   (An IG post additionally needs a PUBLIC image URL — per-action media resolved
   from ``context.artwork``/``context.attachment_artifact_id`` (+ optional
   ``PUBLIC_ASSET_BASE_URL``), with the global ``DEMO_IG_IMAGE_URL`` as a
@@ -363,12 +365,22 @@ def approve_and_publish(
             raise TestModeSendBlockedError(reason)
 
     # META CREDENTIAL GATE (social ready queue, fail-closed): an instagram/facebook
-    # publish on the REAL path (no injected test connector) refuses BEFORE the
+    # POST publish on the REAL path (no injected test connector) refuses BEFORE the
     # exactly-once claim when the operator's Meta credentials are absent, so the
     # draft STAYS PENDING — visible and complete in the ready queue, re-approvable
     # the moment credentials arrive — with the honest reason on last_error. Same
     # machinery as the TEST-MODE gate above: no claim, no connector, no side effect.
-    if channel in _META_REQUIRED_ENV and connectors.get(channel) is None:
+    # Comment REPLIES are exempt: the engagement reply path builds its connector
+    # from its own env keys (InstagramConnector.from_env), so gating replies on
+    # META_PAGE_TOKEN/META_IG_USER_ID would (a) block working legacy-configured
+    # replies and (b) pass the gate on keys the reply never reads and then burn
+    # the exactly-once claim on a connector config error. Replies keep their own
+    # config-error surfacing at reply time.
+    if (
+        channel in _META_REQUIRED_ENV
+        and (action.type or "").lower() != "comment"
+        and connectors.get(channel) is None
+    ):
         cred_reason = meta_credentials_blocked_reason(channel)
         if cred_reason is not None:
             update_status(action.id, action.status, dsn=dsn, last_error=cred_reason)

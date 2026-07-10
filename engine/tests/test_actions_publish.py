@@ -249,6 +249,30 @@ def test_ig_alias_channel_hits_the_meta_gate_not_unknown_channel(patched_store, 
     assert "unknown channel" not in (row.last_error or "")
 
 
+def test_comment_reply_is_exempt_from_meta_credential_gate(patched_store, monkeypatch):
+    # An IG COMMENT REPLY publishes via the engagement reply connector (its own
+    # env keys) — the META_* gate must NOT govern it: gating replies would block
+    # working legacy-configured replies AND pass approves on keys the reply path
+    # never reads. With no META creds and no injected connector, the approve must
+    # reach the reply path (here: a mock connector that the real-only check
+    # refuses → honest 'failed'), never MetaCredentialsMissingError / stuck
+    # pending with a META reason it wouldn't actually hit.
+    for key in ("META_PAGE_TOKEN", "META_IG_USER_ID", "META_PAGE_ID"):
+        monkeypatch.delenv(key, raising=False)
+    ig = _FakeInstagram(reply_result=types.SimpleNamespace(
+        reply_id="r_gate", comment_id="ig_comment:77"))
+    monkeypatch.setattr(publish, "_instagram_from_env", lambda: ig)
+    store = patched_store(_pending(channel="instagram", type="comment", id="act_igr_gate",
+                                   target="ig_comment:77", draft="thanks!"))
+    out = approve_and_publish("act_igr_gate")  # would raise MetaCredentialsMissingError pre-fix
+    row = store.rows["act_igr_gate"]
+    # The reply path was genuinely reached (its connector was invoked)...
+    assert ig.calls == [("reply", "ig_comment:77", "thanks!")]
+    # ...and the row was never parked on a META reason it wouldn't actually hit.
+    assert out.status != "pending" and row.status != "pending"
+    assert "Meta credentials not configured" not in (row.last_error or "")
+
+
 def test_instagram_comment_reply_sent_via_connector(patched_store):
     patched_store(_pending(channel="instagram", type="comment", id="act_igr",
                            target="ig_comment:123", draft="thanks! dm us to book"))

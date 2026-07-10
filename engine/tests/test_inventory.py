@@ -135,6 +135,12 @@ def test_live_skindesign_inventory_matches_db():
             "SELECT count(*) FROM customers WHERE tenant_id='skindesign'").fetchone()[0]
         want_artists = c.execute(
             "SELECT count(*) FROM artists WHERE tenant_id='skindesign'").fetchone()[0]
+        want_examples = c.execute(
+            "SELECT count(*) FROM campaign_examples WHERE tenant_id='skindesign'"
+        ).fetchone()[0]
+        want_convs = c.execute(
+            "SELECT count(*) FROM lead_conversations WHERE tenant_id='skindesign'"
+        ).fetchone()[0]
 
     if want_customers == 0:
         pytest.skip("skindesign not imported in this DB")
@@ -144,16 +150,17 @@ def test_live_skindesign_inventory_matches_db():
     assert inv.customers == want_customers  # live, not hardcoded
     assert inv.artists == want_artists
     assert inv.studios and inv.studios >= 1
-    assert inv.examples == 5
-    assert inv.example_artists == ["Angel", "Bella", "Keebs", "Lynn"]
-    # The real skindesign customers have contact but no social / conversation history.
+    assert inv.examples == want_examples  # live — the campaign memory grows
+    assert "Keebs" in inv.example_artists
+    # Contact data is real; conversation history tracks the live intake (31 real
+    # threads imported 2026-07-10), social profiles are still absent.
     assert inv.presence.with_email and inv.presence.with_email > 0
     assert inv.presence.has_social is False
-    assert inv.presence.has_conversation_history is False
+    assert inv.presence.has_conversation_history is (want_convs > 0)
 
     out = build_data_inventory("skindesign", dsn=_DSN)
     assert f"{want_customers:,} customers" in out
-    assert "no conversation history, social profiles" in out
+    assert "social" in out  # still honestly reported missing
 
 
 @pytest.mark.integration
@@ -172,3 +179,40 @@ def test_unknown_tenant_reads_zeros_honestly_not_crash():
     inv = read_inventory("t_never_exists_ju13", dsn=_DSN)
     assert inv.readable  # the query ran; it's a real 0, not a read failure
     assert inv.customers == 0 and inv.artists == 0 and inv.examples == 0
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not os.environ.get("ENGINE_DATABASE_URL"),
+    reason="requires Postgres (set ENGINE_DATABASE_URL)",
+)
+def test_live_operations_block_states_real_queue_counts():
+    """The anti-fabrication block: the host/voice context must carry the TRUE
+    pending-draft count (a browser audit caught the host claiming '0 drafts'
+    against 7 pending rows). Seed one pending action on a throwaway tenant and
+    the block must say exactly 1; an empty tenant must say exactly 0."""
+    import uuid
+
+    import psycopg
+
+    from studio.inventory import live_operations_block
+
+    dsn = os.environ["ENGINE_DATABASE_URL"]
+    tenant = "t_ops_" + uuid.uuid4().hex[:8]
+    action_id = "act_ops_" + uuid.uuid4().hex[:8]
+
+    assert "0 pending draft(s)" in live_operations_block(tenant, dsn=dsn)
+
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO actions (id, tenant_id, type, channel, draft, status) "
+            "VALUES (%s, %s, 'outreach', 'gmail', 'hello', 'pending')",
+            (action_id, tenant),
+        )
+    try:
+        block = live_operations_block(tenant, dsn=dsn)
+        assert "1 pending draft(s)" in block and "gmail: 1" in block
+        assert "ONLY review-queue / run numbers" in block
+    finally:
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            conn.execute("DELETE FROM actions WHERE id = %s", (action_id,))

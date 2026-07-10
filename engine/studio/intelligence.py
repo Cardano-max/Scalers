@@ -52,12 +52,19 @@ def campaign_intelligence(tenant_id: str, *, dsn: str | None = None) -> dict[str
              ORDER BY delivered_count DESC NULLS LAST LIMIT 5
         """, (tenant_id,))
 
+        # TENANT SCOPING on every section (a QA empty-tenant probe caught this
+        # board presenting the incumbent client's patterns/artists/objections
+        # under a brand-new tenant's id — a fabrication AND a confidentiality
+        # leak). patterns: direct tenant column; artists: the assets library is
+        # bucketed by campaign_id='portfolio:<tenant>'; objections: agent_runs
+        # carries no tenant column, so attribute through its run's row.
         patterns = _q(conn, """
             SELECT pattern_key, description,
                    coalesce(jsonb_array_length(to_jsonb(evidence_example_ids)), 0) AS evidence_n
               FROM campaign_example_patterns
+             WHERE tenant_id = %s
              ORDER BY 3 DESC LIMIT 8
-        """)
+        """, (tenant_id,))
 
         # Artist portfolio depth (real library counts; performance joins later).
         artists = _q(conn, """
@@ -66,17 +73,19 @@ def campaign_intelligence(tenant_id: str, *, dsn: str | None = None) -> dict[str
                    count(*) FILTER (WHERE content->>'media' = 'video') AS videos
               FROM assets
              WHERE coalesce(content->>'artist','') <> ''
+               AND campaign_id = %s
              GROUP BY 1 ORDER BY pieces DESC LIMIT 8
-        """)
+        """, (f"portfolio:{tenant_id}",))
 
         # Objection landscape from the analysts' REAL per-lead reads.
         objections = _q(conn, """
-            SELECT output->>'primary_objection' AS objection, count(*) AS leads
-              FROM agent_runs
-             WHERE role = 'analyst' AND output->>'primary_objection' IS NOT NULL
-               AND output->>'primary_objection' NOT IN ('', 'none-found')
+            SELECT ar.output->>'primary_objection' AS objection, count(*) AS leads
+              FROM agent_runs ar
+              JOIN runs r ON r.run_id = ar.run_id AND r.tenant_id = %s
+             WHERE ar.role = 'analyst' AND ar.output->>'primary_objection' IS NOT NULL
+               AND ar.output->>'primary_objection' NOT IN ('', 'none-found')
              GROUP BY 1 ORDER BY leads DESC LIMIT 8
-        """)
+        """, (tenant_id,))
 
         queue = _q(conn, """
             SELECT channel, count(*) AS pending
