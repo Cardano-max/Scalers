@@ -373,3 +373,96 @@ def test_no_deep_research_means_no_public_enrichment(monkeypatch):
     assert researchers and all(
         ar["output"].get("public_enrichment") is None for ar in researchers
     )
+
+
+# --------------------------------------------------------------------------- #
+# Model-failure circuit breaker (operator defect: a 3-draft ask ran 81 leads
+# while EVERY model call failed 400, staging junk template drafts).
+# --------------------------------------------------------------------------- #
+
+def _model_http_error():
+    from pydantic_ai.exceptions import ModelHTTPError
+
+    return ModelHTTPError(
+        status_code=400,
+        model_name="anthropic:claude-opus-4-8",
+        body={"error": {"type": "invalid_request_error", "message": "bad request"}},
+    )
+
+
+def _big_plan(n: int) -> CampaignPlan:
+    return CampaignPlan(
+        lead_source="provided", goal="win back lapsed clients", channels=["gmail"],
+        customers={"customer_ids": [f"c{i}" for i in range(n)], "rows": n},
+    )
+
+
+def test_model_failure_circuit_breaker_stops_the_loop_at_five(monkeypatch):
+    # Strategist failed AND every per-lead critic hits a real ModelHTTPError ->
+    # the loop STOPS after 5 consecutive model-error leads (never all 12), records
+    # ONE honest supervisor step, keeps the already-staged drafts, and the run is
+    # FAILED with the breaker reason.
+    err = _model_http_error()
+    _wire(monkeypatch, strat_exc=err, crit_exc=err)
+    summary = _execute_provided_leads_sync(_big_plan(12), "sess1", "ladies8391", None, None)
+    roles = _roles(summary)
+
+    assert roles.count("draft") == 5
+    assert roles.count("critic") == 5
+    assert summary["n_pending"] == 5  # drafts already staged are kept
+
+    sups = [
+        ar for ar in summary["agent_runs"]
+        if ar["role"] == "supervisor" and (ar["output"] or {}).get("stopped")
+    ]
+    assert len(sups) == 1
+    note = sups[0]["output"]["finding"]
+    assert "stopped after 5 lead(s)" in note
+    assert "model calls are failing consistently" in note
+    assert "ModelHTTPError" in note
+    assert "key/credits" in note
+    assert "drafts already staged are kept" in note
+
+    # The run is failed WITH the breaker reason surfaced in the failure summary.
+    assert summary["run_status"] == "failed"
+    assert any(
+        f.get("step_id") == "model_failure_circuit_breaker"
+        for f in summary["failure_summary"]
+    )
+    # The ledger still reconciles: 5 drafted + a counted not-attempted remainder.
+    ol = summary["output_ledger"]
+    assert ol["expected"] == 12 and ol["drafted"] == 5
+    assert ol["reconciled"] is True
+
+
+def test_breaker_needs_the_strategist_to_have_failed_too(monkeypatch):
+    # Only the critic failing (strategist fine) is the existing per-draft isolation
+    # case: every lead still drafts; the breaker does NOT fire.
+    _wire(monkeypatch, crit_exc=_model_http_error())
+    summary = _execute_provided_leads_sync(_big_plan(8), "sess1", "ladies8391", None, None)
+    roles = _roles(summary)
+    assert roles.count("draft") == 8 and roles.count("critic") == 8
+    assert not [
+        ar for ar in summary["agent_runs"]
+        if ar["role"] == "supervisor" and (ar["output"] or {}).get("stopped")
+    ]
+
+
+def test_missing_key_fallback_never_trips_the_breaker(monkeypatch):
+    # No key AT ALL: cells fail with a config-style error (no model call was ever
+    # attempted) -> deterministic-fallback drafts. The breaker must NOT fire; every
+    # lead is still covered (per-draft isolation preserved).
+    err = RuntimeError("ANTHROPIC_API_KEY not set; cell never attempted a model call")
+    _wire(monkeypatch, strat_exc=err, crit_exc=err)
+    summary = _execute_provided_leads_sync(_big_plan(8), "sess1", "ladies8391", None, None)
+    roles = _roles(summary)
+    assert roles.count("draft") == 8 and roles.count("critic") == 8
+    assert summary["n_pending"] == 8
+    assert not [
+        ar for ar in summary["agent_runs"]
+        if ar["role"] == "supervisor" and (ar["output"] or {}).get("stopped")
+    ]
+    assert all(
+        f.get("step_id") != "model_failure_circuit_breaker"
+        for f in summary["failure_summary"]
+    )
