@@ -216,3 +216,26 @@ def test_live_operations_block_states_real_queue_counts():
     finally:
         with psycopg.connect(dsn, autocommit=True) as conn:
             conn.execute("DELETE FROM actions WHERE id = %s", (action_id,))
+
+
+def test_readback_states_conversation_thread_count_explicitly():
+    # The threads live in lead_conversations, NOT the uploaded-files registry —
+    # without this line the host saw "175 images, 1 video" and honestly told the
+    # operator there was "no conversation history export yet" while 31 verbatim
+    # threads sat on file (a real operator hit this mid-demo-prep).
+    rich = DataInventory(
+        tenant_id="t", customers=1181, artists=36, studios=6, examples=5,
+        presence=DataPresence(
+            with_email=1181, with_phone=1000, with_social=0,
+            with_conversation_history=31, with_interests=0,
+        ),
+    )
+    out = build_inventory_readback(rich)
+    assert "31 imported conversation threads" in out
+    assert "do NOT appear in the uploaded-files list" in out
+    assert "list_conversation_leads" in out
+
+
+def test_readback_has_no_thread_line_when_none_imported():
+    out = build_inventory_readback(_SKINDESIGN)  # with_conversation_history=0
+    assert "imported conversation threads" not in out

@@ -187,6 +187,89 @@ class InstagramConnector(GatedConnector):
             media_id=media_id, creation_id=creation_id, permalink=permalink
         )
 
+    def post_reel(
+        self,
+        video_url: str,
+        caption: str,
+        *,
+        poll_seconds: float = 5.0,
+        max_polls: int = 24,
+    ) -> InstagramPostResult:
+        """Publish an IG REEL via the async container flow: create a REELS container
+        (``video_url`` — Meta fetches and transcodes it off-line), poll the container's
+        ``status_code`` until FINISHED, then ``media_publish``. Bounded polling
+        (default ~2 minutes); raises with the REAL last status on timeout or a
+        container ERROR — never a fake success. Disabled-by-default like ``post``."""
+        self._require_enabled()
+        proof = self._proof()
+
+        creation = self._graph_post(
+            f"/{_GRAPH_VERSION}/{self._ig_id}/media",
+            {"media_type": "REELS", "video_url": video_url, "caption": caption},
+            proof,
+            error_cls=InstagramPublishError,
+            what="create reels container",
+        )
+        creation_id = str(creation.get("id", ""))
+        if not creation_id:
+            raise InstagramPublishError("ig create reels container returned no creation_id")
+
+        status = ""
+        for attempt in range(max_polls):
+            status = self._container_status(creation_id, proof)
+            if status == "FINISHED":
+                break
+            if status in ("ERROR", "EXPIRED"):
+                raise InstagramPublishError(
+                    f"ig reels container {creation_id} ended {status} (Meta could not "
+                    "process the video — check format/length/public reachability)"
+                )
+            if attempt < max_polls - 1:
+                time.sleep(poll_seconds)
+        if status != "FINISHED":
+            raise InstagramPublishError(
+                f"ig reels container {creation_id} not ready after "
+                f"~{int(max_polls * poll_seconds)}s (last status {status or 'unknown'}) "
+                "— the post did NOT publish; retry the approve once Meta finishes processing"
+            )
+
+        published = self._graph_post(
+            f"/{_GRAPH_VERSION}/{self._ig_id}/media_publish",
+            {"creation_id": creation_id},
+            proof,
+            error_cls=InstagramPublishError,
+            what="publish reels",
+        )
+        media_id = str(published.get("id", ""))
+        if not media_id:
+            raise InstagramPublishError("ig reels media_publish returned no media id")
+        permalink = self._fetch_permalink(media_id, proof)
+        return InstagramPostResult(
+            media_id=media_id, creation_id=creation_id, permalink=permalink
+        )
+
+    def _container_status(self, creation_id: str, proof: str) -> str:
+        """One ``GET /{creation_id}?fields=status_code`` read. Token in the Bearer
+        header (never the URL); returns the raw status string ('' on a read failure —
+        the poll loop treats that as not-ready rather than crashing mid-publish)."""
+        try:
+            resp = self._secure_request(
+                api_base=GRAPH_API_BASE,
+                host=_GRAPH_HOST,
+                method="GET",
+                path=(
+                    f"/{_GRAPH_VERSION}/{creation_id}"
+                    f"?fields=status_code&appsecret_proof={proof}"
+                ),
+                headers={"Authorization": f"Bearer {self._page_token}"},
+            )
+        except Exception:  # noqa: BLE001 — poll read failure = not ready yet
+            return ""
+        if resp.status >= 400:
+            return ""
+        data = _safe_json(resp.body)
+        return str(data.get("status_code", "") or "")
+
     def reply_to_comment(self, comment_id: str, message: str) -> InstagramReplyResult:
         """Reply to an IG comment (the engagement / auto-reply path):
         ``POST /v25.0/{comment_id}/replies``. Disabled-by-default; raises on the REAL

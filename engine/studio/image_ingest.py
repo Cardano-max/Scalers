@@ -362,6 +362,11 @@ def process_image_upload(
             else None
         ),
         "vlmError": vlm.get("error"),
+        # Top-level mirror of vlm.summary — the console ack reads THIS field to
+        # show "Visual analysis: …" (nested-only summary rendered as a generic
+        # "Uploaded." note, hiding a real analysis from the operator).
+        "vlmSummary": (vlm.get("summary") or None)
+        if vlm["status"] in ("ok", "no_facts") else None,
         "assetId": asset_id,
         "memoryId": memory_id,
         "note": note,

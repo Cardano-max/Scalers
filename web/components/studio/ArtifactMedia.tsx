@@ -41,6 +41,11 @@ export function ArtifactMedia({
   const [stage, setStage] = useState<'image' | 'video' | 'failed'>(
     startAsVideo ? 'video' : 'image',
   );
+  // One cache-busted retry before giving up on the image: a gallery mounts
+  // dozens of raw-bytes requests at once and a single dropped connection
+  // (dev-proxy warm-up, engine restart) permanently rendered a real image as
+  // "preview unavailable" until a full page reload.
+  const [retried, setRetried] = useState(false);
 
   if (stage === 'failed') {
     return (
@@ -80,11 +85,12 @@ export function ArtifactMedia({
   return (
     // eslint-disable-next-line @next/next/no-img-element -- engine-served bytes; no optimizer configured
     <img
-      src={src}
+      src={retried ? `${src}${src.includes('?') ? '&' : '?'}retry=1` : src}
       alt={alt}
       loading="lazy"
-      // Bytes that aren't an image (a video artifact) fall back to <video>.
-      onError={() => setStage('video')}
+      // Retry the image once (cache-busted), THEN fall back: bytes that aren't
+      // an image (a video artifact) render as <video> on the second failure.
+      onError={() => (retried ? setStage('video') : setRetried(true))}
       style={{ width: '100%', height, objectFit: 'cover', display: 'block', background: 'var(--surface-alt)' }}
     />
   );

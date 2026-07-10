@@ -181,6 +181,18 @@ def build_inventory_readback(inv: DataInventory) -> str:
         f"- {_fmt(inv.artists)} artists across {_fmt(inv.studios)} studios",
         f"- {_fmt(inv.examples)} previous campaign examples{ex_artists}",
     ]
+    # Conversation threads live in the DATABASE (lead_conversations), not in the
+    # uploaded-files registry — without this line the host saw "175 images, 1 video"
+    # and honestly concluded there was "no conversation history export yet" while
+    # 31 verbatim threads sat on file (a real operator hit this).
+    if isinstance(p.with_conversation_history, int) and p.with_conversation_history > 0:
+        lines.append(
+            f"- {p.with_conversation_history:,} imported conversation threads "
+            "(verbatim customer transcripts) — stored in the database, so they do "
+            "NOT appear in the uploaded-files list; per-lead history is queryable "
+            "(`list_conversation_leads`) and the campaign cohort uses these warm "
+            "leads first"
+        )
 
     # What I do NOT have — derived from real field presence, never assumed.
     missing: list[str] = []
@@ -199,10 +211,18 @@ def build_inventory_readback(inv: DataInventory) -> str:
             "conversation history to unlock deeper personalization."
         )
     else:
+        present: list[str] = []
+        if p.has_conversation_history:
+            present.append(f"conversation history ({p.with_conversation_history:,} threads)")
+        if p.has_social:
+            present.append(f"social handles ({p.with_social:,} customers)")
+        if p.has_interests:
+            present.append(f"per-customer interests ({p.with_interests:,} customers)")
         lines.append(
-            "PERSONALIZATION: this studio has richer per-customer signals on file "
-            "(some of conversation history / social / interests) — you may ground "
-            "personalization ONLY in a field that is actually present for that customer."
+            "PERSONALIZATION: this studio has richer per-customer signals on file — "
+            + "; ".join(present)
+            + " — you may ground personalization ONLY in a field that is actually "
+            "present for that customer."
         )
     return "\n".join(lines)
 

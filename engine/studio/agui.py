@@ -237,6 +237,12 @@ class CampaignPlan(BaseModel):
     # "I see your CSV, N rows: col, col" and reason over the rows. Empty = no CSV
     # uploaded (the supervisor must NOT pretend a list exists).
     customers: dict[str, Any] = Field(default_factory=dict)
+    # Explicit per-lead targets picked in chat/voice (emails, or exact names when a
+    # lead has no email) — e.g. the three price-objection leads chosen via
+    # `list_conversation_leads`. The provided-leads executor resolves THESE first
+    # (before the uploaded-CSV ids and the DB cohort), so "run the full team on
+    # exactly these people" is a plan state, not a lucky cohort overlap.
+    leads: list[str] = Field(default_factory=list)
 
 
 @dataclass
@@ -284,7 +290,24 @@ _SYSTEM = (
     "draft per lead — each draft is staged as a PENDING action in the Review Queue "
     "(HELD, approve-first) and a memory of the outreach is written so you remember "
     "it next time. Reason per-lead before drafting; ground every claim in the facts "
-    "the tool returns — never invent a customer detail.\n"
+    "the tool returns — never invent a customer detail. When the operator says to "
+    "pick the cohort from the IMPORTED CONVERSATIONS / 'their real threads' (e.g. "
+    "'customers who stepped back over price or timing'), call "
+    "`list_conversation_leads` (topic='price'/'timing'/…) — the verbatim threads "
+    "live in the DATABASE (they are not files), and the campaign run's cohort "
+    "already prioritizes them. NEVER reply that you have no conversation history "
+    "without calling that tool first.\n"
+    "4b. ONE SPINE PER ASK — for a per-lead CAMPAIGN on picked leads: "
+    "`list_conversation_leads` → `revise_plan(leads=[their emails], "
+    "lead_source='provided', per_lead=true, channels=[the operator's channel], "
+    "lead_count=N, output_count=N, campaign_type='outreach', deep_research=…, "
+    "offer=…)` → `run_campaign`. The full team (researcher → analyst → "
+    "copywriter → critic → jury) then runs per lead, live in the Agency tab, and "
+    "stages EXACTLY N drafts. Do NOT also call `research_and_stage_leads` for "
+    "the same ask — that is the lightweight NO-TEAM path (quick staging without "
+    "the live per-agent run) and calling both stages duplicates. Never launch "
+    "`run_campaign` without first setting the plan fields to what the operator "
+    "just asked — an unset plan runs the session's stale configuration.\n"
     "5. NEVER send or publish anything yourself. If the operator wants something "
     "posted/emailed, call `stage_publish` — it stages a PENDING action that a "
     "human must approve; it is held, never sent.\n"
@@ -1187,9 +1210,29 @@ async def revise_plan(
     channels: list[str] | None = None,
     sections: list[str] | None = None,
     schedule: dict[str, str] | None = None,
+    campaign_type: str | None = None,
+    output_count: int | None = None,
+    lead_count: int | None = None,
+    offer: str | None = None,
+    tone: str | None = None,
+    artist: str | None = None,
+    deep_research: bool | None = None,
+    per_lead: bool | None = None,
+    lead_source: str | None = None,
+    leads: list[str] | None = None,
+    use_conversation_history: bool | None = None,
+    research_depth: str | None = None,
 ) -> Any:
     """Apply the operator's edits to the SHARED campaign plan, persist it, and
-    snap the new state back to the UI. Pass ONLY the fields that changed."""
+    snap the new state back to the UI. Pass ONLY the fields that changed.
+
+    This is how a TYPED brief becomes the run's configuration — the same fields
+    the interview panel sets. For a per-lead outreach run on specific people, set
+    ``leads`` (their emails, or exact names when a lead has no email),
+    ``lead_source='provided'``, ``per_lead=True``, ``channels``, ``lead_count``/
+    ``output_count`` to the operator's exact number, and ``deep_research`` /
+    ``research_depth='deep'`` when asked — THEN call `run_campaign`. Without
+    these the run executes whatever stale plan the session last held."""
     plan = ctx.deps.state
     if goal is not None:
         plan.goal = goal
@@ -1201,6 +1244,30 @@ async def revise_plan(
         plan.sections = sections
     if schedule is not None:
         plan.schedule = schedule
+    if campaign_type is not None:
+        plan.campaign_type = campaign_type
+    if output_count is not None:
+        plan.output_count = max(0, int(output_count))
+    if lead_count is not None:
+        plan.lead_count = max(0, int(lead_count))
+    if offer is not None:
+        plan.offer = offer
+    if tone is not None:
+        plan.tone = tone
+    if artist is not None:
+        plan.artist = artist
+    if deep_research is not None:
+        plan.deep_research = deep_research
+    if per_lead is not None:
+        plan.per_lead = per_lead
+    if lead_source is not None:
+        plan.lead_source = lead_source
+    if leads is not None:
+        plan.leads = [h.strip() for h in leads if (h or "").strip()]
+    if use_conversation_history is not None:
+        plan.use_conversation_history = use_conversation_history
+    if research_depth is not None:
+        plan.research_depth = research_depth
 
     await asyncio.to_thread(_persist_plan, ctx.deps.dsn, ctx.deps.session_id, plan)
     await asyncio.to_thread(
@@ -1835,7 +1902,42 @@ def _execute_provided_leads_sync(
     skipped: list[dict[str, Any]] = []
     requested_ids = list((plan.customers or {}).get("customer_ids") or [])
     cust_ids = requested_ids
-    if cust_ids:
+    # 0) Operator-PICKED leads (plan.leads: emails / exact names chosen in chat,
+    # e.g. from `list_conversation_leads`) outrank every other source: the operator
+    # said "these three", so the full per-lead team loop runs on exactly those —
+    # never a cohort that merely overlaps them. Same reconciliation contract as the
+    # CSV path: every handle is a staged draft or a counted skip.
+    picked_handles = [h.strip() for h in (plan.leads or []) if (h or "").strip()]
+    if picked_handles:
+        n_requested = len(picked_handles)
+        expected = int(n_requested)
+        for idx, h in enumerate(picked_handles[effective_cap:], start=effective_cap + 1):
+            skipped.append(
+                {"row": idx, "lead": h, "reason": f"beyond output cap of {effective_cap}"}
+            )
+        picked_handles = picked_handles[:effective_cap]
+        leads = lookup_leads(
+            tenant_id,
+            [{"email": h} if "@" in h else {"name": h} for h in picked_handles],
+            dsn=dsn,
+            memory_store=store,
+        )
+        resolved_keys = {
+            (f.get("email") or "").lower() for f in leads
+        } | {(f.get("name") or "").lower() for f in leads}
+        for idx, h in enumerate(picked_handles, start=1):
+            if h.lower() not in resolved_keys:
+                skipped.append(
+                    {
+                        "row": idx,
+                        "lead": h,
+                        "reason": "not found in database (no customer matched this email/name)",
+                    }
+                )
+        source_note = (
+            f"operator-picked leads ({len(leads)} of {n_requested} resolved in DB)"
+        )
+    elif cust_ids:
         n_requested = len(cust_ids)
         # Provided path: the operator handed us N leads and expects one draft per lead
         # (AC: "10 leads = 10 drafts"). ``output_count`` is a cohort-sizing knob, not the
@@ -1918,7 +2020,9 @@ def _execute_provided_leads_sync(
     # (requested = created + accounted-shortfall), never a silent undercount. The reason
     # is HONEST about the cause: contact-supply exhaustion vs the output hard cap — never
     # "only N contactable" when it was actually the cap that clipped the run.
-    if not requested_ids:
+    # (Skipped for the picked-leads and CSV paths — their branches already reconciled
+    # every requested handle/row, and ``limit`` only exists on the cohort path.)
+    if not requested_ids and not picked_handles:
         expected = int(plan.output_count or plan.lead_count or len(leads))
         # ``limit`` was min(requested, effective_cap): a request above the cap is clipped
         # by the cap, not by contact supply.
@@ -2156,7 +2260,13 @@ def _execute_provided_leads_sync(
     # guard rejects a draft — never a silent under-delivery. The uploaded-CSV path NEVER
     # substitutes leads the operator did not provide: there a skip stays a skip, with
     # its concrete reason in the ledger (spec: "Requested 25, valid 18 -> Created 18").
-    _quota = min(int(expected), effective_cap) if requested_ids else min(limit, effective_cap)
+    # Picked-leads and CSV paths pin the quota to the operator's explicit rows and
+    # never substitute; only the DB-cohort path has a ``limit`` and may refill.
+    _operator_rows = bool(requested_ids or picked_handles)
+    _quota = (
+        min(int(expected), effective_cap) if _operator_rows
+        else min(limit, effective_cap)
+    )
     _refill_cap = _quota * 2
     _refilled = 0
 
@@ -2164,7 +2274,7 @@ def _execute_provided_leads_sync(
         nonlocal _refilled
         for _f in leads:
             yield _f
-        if requested_ids:
+        if _operator_rows:
             return  # operator-provided rows only — no substitution
         while len(pending) < _quota and _refilled < _refill_cap:
             _batch = contactable_leads(
@@ -3314,6 +3424,20 @@ def start_registered_run(
                 "tenant_id": tenant_id,
                 "session_id": session_id,
             }
+            # FAIL LOUD IN THE THREAD: the operator was told "launched — I'll post
+            # the summary here". A crash that only lands in the in-memory registry
+            # is dead air (the host said LIVE, then nothing ever arrived) — post the
+            # honest failure as a host turn so the conversation itself says so.
+            try:
+                await asyncio.to_thread(
+                    _log_turn, dsn, session_id, "host",
+                    f"Run {run_id} FAILED before completing: "
+                    f"{type(exc).__name__}: {exc}. No drafts were staged by this "
+                    "run. Fix the cause and launch again — nothing was sent.",
+                    HOST_AGUI_MODEL,
+                )
+            except Exception:
+                pass
 
     asyncio.create_task(_bg())
 
@@ -3777,6 +3901,46 @@ async def research_and_stage_leads(
         f"personalized PENDING outreach draft(s) across {', '.join(summary['channels']) or 'n/a'} "
         f"— all HELD in the Review Queue, nothing sent.{nf_note}{skip_note} {lead_lines}"
     )
+
+
+@studio_agent.tool
+async def list_conversation_leads(
+    ctx: RunContext[StudioDeps], topic: str = "", limit: int = 12
+) -> str:
+    """The customers whose REAL imported conversation threads are on file — name,
+    email, thread length — read fresh from the database. Pass ``topic`` ('price',
+    'timing', 'trust', or any keyword) to keep only leads whose OWN words match,
+    each returned with the verbatim quote as the receipt. Use this whenever the
+    operator says to pick a cohort from the (imported) conversations — e.g.
+    'customers who stepped back over price or timing' — then hand the chosen
+    emails to `research_and_stage_leads`, or launch `run_campaign` (the run's
+    cohort already prioritizes these warm conversation leads). The threads live
+    in the DATABASE, not the uploaded-files list — never reply that there is no
+    conversation history without calling this first."""
+    from studio.customer_research import conversation_lead_index
+
+    rows = await asyncio.to_thread(
+        lambda: conversation_lead_index(
+            ctx.deps.tenant_id, topic=(topic or None),
+            limit=max(1, min(int(limit or 12), 50)), dsn=ctx.deps.dsn,
+        )
+    )
+    if not rows:
+        return (
+            f"No imported conversation threads have a customer turn matching {topic!r} "
+            "— honest miss, do not force the theme." if topic
+            else "No imported conversation threads on file for this studio."
+        )
+    lines = [
+        f"IMPORTED CONVERSATION LEADS ({len(rows)} shown, live from the database"
+        + (f", topic {topic!r} — each quote is the customer's verbatim words" if topic else "")
+        + "):"
+    ]
+    for r in rows:
+        q = f' — their words: "{(r["quote"] or "")[:180]}"' if r.get("quote") else ""
+        email = r.get("email") or "no email"
+        lines.append(f"- {r['name']} <{email}> · {r['turns']} messages{q}")
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- #

@@ -426,3 +426,94 @@ def test_unknown_action_raises(patched_store):
 # Whole module needs a live Postgres (ENGINE_DATABASE_URL): it runs in the CI
 # integration lane (schema applied via initdb + bootstrap), not the DB-free unit lane.
 pytestmark = pytest.mark.integration
+
+
+# ── IG REELS channel (operator go-live): routing, honesty, publish ───────────
+
+
+class _FakeInstagramReels(_FakeInstagram):
+    def __init__(self, *, reel_result=None, exc=None, **kw):
+        super().__init__(exc=exc, **kw)
+        self._reel = reel_result
+
+    def post_reel(self, video_url, caption):
+        self.calls.append(("post_reel", video_url, caption))
+        if self._exc:
+            raise self._exc
+        return self._reel
+
+
+def test_reels_alias_hits_meta_gate_not_unknown_channel(patched_store, monkeypatch):
+    # 'reels' rows must route to the instagram_reels credential gate — never fall
+    # through to "unknown channel 'reels'".
+    for k in ("META_PAGE_TOKEN", "META_IG_USER_ID"):
+        monkeypatch.delenv(k, raising=False)
+    patched_store(_pending(channel="reels", type="post", id="act_reel1"))
+    with pytest.raises(publish.MetaCredentialsMissingError) as exc:
+        approve_and_publish("act_reel1")
+    assert "META_PAGE_TOKEN" in str(exc.value)
+    assert "META_IG_USER_ID" in str(exc.value)
+
+
+def test_reels_without_staged_video_fails_honestly(patched_store, monkeypatch):
+    monkeypatch.setenv("META_PAGE_TOKEN", "tok_unit_test")
+    monkeypatch.setenv("META_IG_USER_ID", "17840000000000000")
+    patched_store(_pending(channel="reels", type="post", id="act_reel2"))
+    reels = _FakeInstagramReels()
+    out = approve_and_publish("act_reel2", connectors={"instagram": reels})
+    assert out.status == "failed"
+    assert "video" in (out.last_error or "").lower()
+    assert reels.calls == []  # no publish attempted without media
+
+
+def test_reels_with_staged_video_publishes_via_connector(patched_store, monkeypatch):
+    monkeypatch.setenv("META_PAGE_TOKEN", "tok_unit_test")
+    monkeypatch.setenv("META_IG_USER_ID", "17840000000000000")
+    import json as _json
+
+    from connectors.ig import InstagramPostResult
+
+    patched_store(_pending(
+        channel="reels", type="post", id="act_reel3",
+        context=_json.dumps({"artwork": {"videoUrl": "https://vid.example/broll.mp4"}}),
+    ))
+    reels = _FakeInstagramReels(reel_result=InstagramPostResult(
+        media_id="18000000000_reel", creation_id="17888_c",
+        permalink="https://www.instagram.com/reel/XYZ/",
+    ))
+    out = approve_and_publish("act_reel3", connectors={"instagram": reels})
+    assert out.status == "sent"
+    assert out.outcome_label == "Published"
+    assert out.deep_link == "https://www.instagram.com/reel/XYZ/"
+    assert reels.calls and reels.calls[0][0] == "post_reel"
+    assert reels.calls[0][1] == "https://vid.example/broll.mp4"
+
+
+def test_publish_to_meta_builds_operator_ig_connector_from_env(monkeypatch):
+    # The real activation path: publish_to_meta(channel='instagram') constructs an
+    # ENABLED InstagramConnector from the operator META_* env keys and calls post.
+    import connectors.ig as ig_mod
+
+    captured: dict = {}
+
+    class _RecordingConnector:
+        def __init__(self, **kw):
+            captured.update(kw)
+
+        def post(self, image_url, caption):
+            captured["posted"] = (image_url, caption)
+            return "RESULT"
+
+    monkeypatch.setattr(ig_mod, "InstagramConnector", _RecordingConnector)
+    monkeypatch.setenv("META_PAGE_TOKEN", "tok_operator")
+    monkeypatch.setenv("META_IG_USER_ID", "17841400361721657")
+    monkeypatch.setenv("META_APP_SECRET", "sec_operator")
+
+    row = _pending(channel="instagram", type="post", id="act_meta1")
+    out = publish.publish_to_meta(row, channel="instagram", image_url="https://img.example/a.jpg")
+    assert out == "RESULT"
+    assert captured["enabled"] is True
+    assert captured["ig_business_account_id"] == "17841400361721657"
+    assert captured["page_token"] == "tok_operator"
+    assert captured["app_secret"] == "sec_operator"
+    assert captured["posted"] == ("https://img.example/a.jpg", row.draft)

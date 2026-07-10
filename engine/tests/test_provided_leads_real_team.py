@@ -466,3 +466,18 @@ def test_missing_key_fallback_never_trips_the_breaker(monkeypatch):
         f.get("step_id") != "model_failure_circuit_breaker"
         for f in summary["failure_summary"]
     )
+
+
+def test_campaign_plan_persists_operator_picked_leads():
+    """plan.leads (the chat-picked cohort, e.g. from list_conversation_leads) must
+    survive the persist round-trip — dropping it would silently demote 'run the
+    team on THESE three' back to the generic cohort."""
+    from studio.agui import CampaignPlan
+
+    p = CampaignPlan(
+        leads=["ava@x.example", "Ben Busy"], lead_source="provided",
+        per_lead=True, lead_count=2, output_count=2, channels=["email"],
+    )
+    rt = CampaignPlan.model_validate(p.model_dump())
+    assert rt.leads == ["ava@x.example", "Ben Busy"]
+    assert rt.lead_source == "provided" and rt.lead_count == 2
