@@ -2234,6 +2234,33 @@ def _execute_provided_leads_sync(
                 pending.append(_prior_aid)
             continue
         research = research_studio(facts, enabled=deep)  # real Firecrawl about THIS studio
+        # PER-LEAD PUBLIC ENRICHMENT (deep research on): the cited public-web read
+        # of THIS lead (their business/professional/social presence — every stored
+        # fact carries its source URL; sensitive traits are suppressed and counted;
+        # zero facts is an honest miss, never invented). The enrichment memory it
+        # writes flows into the dossier/draft prompt via enrichment_prompt_lines,
+        # so the copywriter personalizes on evidence, not vibes. Best-effort: a
+        # failure records honestly and the draft proceeds on DB facts alone.
+        public_enrichment: dict[str, Any] | None = None
+        if deep:
+            try:
+                from studio.lead_enrichment import enrich_lead
+
+                _enr = enrich_lead(tenant_id, cust_id, dsn=dsn)
+                public_enrichment = {
+                    "found": len(_enr.get("found") or []),
+                    "suppressed": int(_enr.get("suppressed") or 0),
+                    "misses": len(_enr.get("misses") or []),
+                    "memory_id": _enr.get("memory_id"),
+                    "urls": [
+                        f.get("url") for f in (_enr.get("found") or []) if f.get("url")
+                    ][:5],
+                }
+            except Exception as exc:  # noqa: BLE001 — honest failure, never fatal
+                public_enrichment = {
+                    "found": 0,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
         th = facts.get("tattoo_history", []) or []
         traits = facts.get("persona_traits", {}) or {}
         sources = [
@@ -2256,6 +2283,7 @@ def _execute_provided_leads_sync(
                 "sources": sources,
                 "lead": facts.get("name"),
                 "customer_id": cust_id,
+                "public_enrichment": public_enrichment,
                 "db_history": {
                     "city": facts.get("city"),
                     "past_tattoos": len(th),
