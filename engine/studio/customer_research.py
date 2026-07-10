@@ -319,6 +319,71 @@ def conversation_leads(
     )
 
 
+# Keyword families for filtering conversation threads by what the CUSTOMER said.
+# Deterministic substring matching over their verbatim words — never a model call,
+# never an inferred trait; the returned quote IS the receipt.
+_TOPIC_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "price": ("price", "pricing", "cost", "expensive", "afford", "budget",
+              "deposit", "payment", "financ", "money", "$", "cheap"),
+    "timing": ("time", "schedul", "busy", "later", "postpon", "resched",
+               "next month", "wait", "delay", "travel", "moved", "moving"),
+    "trust": ("nervous", "scared", "worried", "pain", "trust", "unsure",
+              "not sure", "second thought"),
+}
+
+
+def conversation_lead_index(
+    tenant_id: str, *, topic: str | None = None, limit: int = 12,
+    dsn: str | None = None,
+) -> list[dict[str, Any]]:
+    """Index of the customers whose imported conversation threads are on file —
+    name/email/turn-count, plus (when ``topic`` is given) the first CUSTOMER turn
+    matching that keyword family, quoted verbatim. A topic outside the known
+    families is used as a literal substring. Leads whose thread has no matching
+    customer turn are excluded when a topic is set. Ordered like the campaign
+    cohort (earliest thread first) so 'the first three' here and the run's
+    warm-lead picks line up."""
+    want = (topic or "").strip().lower()
+    kws = _TOPIC_KEYWORDS.get(want) or ((want,) if want else ())
+    out: list[dict[str, Any]] = []
+    with _connect(dsn) as conn:
+        rows = conn.execute(
+            """
+            SELECT lc.customer_id, c.name, c.email, c.phone, lc.turns
+              FROM lead_conversations lc
+              JOIN customers c
+                ON c.tenant_id = lc.tenant_id AND c.id = lc.customer_id
+             WHERE lc.tenant_id = %s
+             ORDER BY lc.created_at, lc.customer_id
+            """,
+            (tenant_id,),
+        ).fetchall()
+    for r in rows:
+        turns = r["turns"] or []
+        quote: str | None = None
+        if kws:
+            for t in turns:
+                if (t.get("speaker") or "").lower() != "customer":
+                    continue
+                low = (t.get("text") or "").lower()
+                if any(k in low for k in kws):
+                    quote = t.get("text")
+                    break
+            if quote is None:
+                continue
+        out.append({
+            "customer_id": r["customer_id"],
+            "name": r["name"],
+            "email": r["email"],
+            "phone": r["phone"],
+            "turns": len(turns),
+            "quote": quote,
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Personalized draft builder — grounded in REAL persona facts only
 # --------------------------------------------------------------------------- #
