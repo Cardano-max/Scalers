@@ -82,6 +82,59 @@ def _draft_quality_conf(verdict: str | None, confidence: float | None) -> float 
 
 
 # --------------------------------------------------------------------------- #
+# Model-failure circuit breaker (operator defect: a 3-draft ask ran the whole
+# roster while EVERY model call failed 400, staging junk template drafts).
+# --------------------------------------------------------------------------- #
+# How many CONSECUTIVE per-lead model/HTTP failures — with the strategist ALSO
+# failed — stop the per-lead loop instead of grinding the whole cohort.
+MODEL_FAILURE_BREAKER_THRESHOLD = 5
+
+# Exception type names that prove a REAL model call was attempted and rejected/
+# failed at the provider/HTTP layer (unlike a missing-key/config error, where the
+# cell never attempts a call — the deterministic-fallback case).
+_MODEL_ERROR_NAMES = ("ModelHTTPError", "APIStatusError", "HTTPStatusError")
+
+
+def _is_model_error(exc: BaseException | None) -> bool:
+    """True iff ``exc`` (or an exception in its explicit ``__cause__`` chain — cells
+    wrap provider errors in ``CellExecutionError``) is a REAL model/HTTP failure: an
+    attempted provider call that failed (e.g. pydantic-ai's ``ModelHTTPError`` for a
+    400/402/429/5xx). A no-key / config error never attempted a call, so it is NOT a
+    model error — deterministic fallbacks must never trip the circuit breaker."""
+    try:
+        from pydantic_ai.exceptions import ModelHTTPError
+
+        _http_types: tuple[type, ...] = (ModelHTTPError,)
+    except Exception:  # pragma: no cover - pydantic_ai is a hard dependency
+        _http_types = ()
+    hops = 0
+    while exc is not None and hops < 8:
+        if _http_types and isinstance(exc, _http_types):
+            return True
+        if type(exc).__name__ in _MODEL_ERROR_NAMES:
+            return True
+        if isinstance(getattr(exc, "status_code", None), int):
+            return True
+        exc = exc.__cause__
+        hops += 1
+    return False
+
+
+def _draft_model_fallback(draft: dict[str, Any]) -> bool:
+    """True iff this draft's grounding shows the copywriter cell ATTEMPTED a real
+    model call that failed at the model/HTTP layer, so the copy fell back to the
+    deterministic template (``copy=deterministic_fallback(ModelHTTPError)``). A pure
+    no-key template (``copy=deterministic_template`` — no call attempted) is False."""
+    for g in draft.get("grounding") or []:
+        s = str(g)
+        if s.startswith("copy=deterministic_fallback(") and any(
+            name in s for name in _MODEL_ERROR_NAMES
+        ):
+            return True
+    return False
+
+
+# --------------------------------------------------------------------------- #
 # Shared state: the editable campaign plan
 # --------------------------------------------------------------------------- #
 
@@ -1986,6 +2039,16 @@ def _execute_provided_leads_sync(
     from cells.strategy import build_strategy_cell, build_strategy_prompt
     from config.loader import describe_tenant
 
+    # MODEL-FAILURE CIRCUIT BREAKER state (see MODEL_FAILURE_BREAKER_THRESHOLD): when
+    # the strategist ALSO failed and N CONSECUTIVE leads hit a REAL model/HTTP error
+    # (critic and/or draft cell), the loop stops honestly instead of grinding the whole
+    # cohort staging junk fallback drafts. Missing-key deterministic fallbacks (cells
+    # never attempt a call) never count — only repeated real model errors do.
+    _strategist_failed = False
+    _model_fail_streak = 0
+    _last_model_error: str | None = None
+    _breaker_tripped = False
+
     # Build the strategist cell OUTSIDE the try so BOTH the success and the honest-failed
     # run record its REAL model (never a hardcoded literal that could drift from the pin).
     strat_cell = build_strategy_cell()
@@ -2004,6 +2067,7 @@ def _execute_provided_leads_sync(
             id_=f"ar_strategist_{hashlib.sha1(str(run_id).encode()).hexdigest()[:16]}",
         )
     except Exception as exc:  # honest failed run, never a fabricated strategy
+        _strategist_failed = True
         _rec(
             "strategist",
             strat_model,
@@ -2401,6 +2465,11 @@ def _execute_provided_leads_sync(
                 artist_voice=_artist_voice,
             )
         except Exception as exc:  # honest per-row skip; never a crash or a fake draft
+            if _is_model_error(exc):
+                _model_fail_streak += 1
+                _last_model_error = f"{type(exc).__name__}: {exc}"
+            else:
+                _model_fail_streak = 0
             skipped.append(
                 {
                     "row": _row,
@@ -2408,6 +2477,9 @@ def _execute_provided_leads_sync(
                     "reason": f"draft generation failed: {type(exc).__name__}",
                 }
             )
+            if _strategist_failed and _model_fail_streak >= MODEL_FAILURE_BREAKER_THRESHOLD:
+                _breaker_tripped = True
+                break
             continue
 
         # FOREIGN-IDENTITY GATE (wwy.7 r8, the smoking gun): a draft staged for this
@@ -2552,6 +2624,8 @@ def _execute_provided_leads_sync(
         try:
             crit = critic_cell.run_sync(crit_prompt)
             crit_verdict, crit_confidence = crit.verdict.value, float(crit.confidence)
+            # A REAL model call succeeded for this lead — the failure streak breaks.
+            _model_fail_streak = 0
             _rec(
                 "critic",
                 _cell_model(critic_cell),
@@ -2563,6 +2637,13 @@ def _execute_provided_leads_sync(
                 },
             )
         except Exception as exc:  # honest failed verdict, never fabricated praise
+            # Circuit-breaker signal: this lead hit a REAL model/HTTP error (in the
+            # critic, or already in the draft cell whose copy fell back to template).
+            if _is_model_error(exc) or _draft_model_fallback(draft):
+                _model_fail_streak += 1
+                _last_model_error = f"{type(exc).__name__}: {exc}"
+            else:
+                _model_fail_streak = 0
             _rec(
                 "critic",
                 _cell_model(critic_cell),
@@ -2573,6 +2654,17 @@ def _execute_provided_leads_sync(
                     "rationale": f"critic cell failed: {type(exc).__name__}: {exc}",
                 },
             )
+
+        # MODEL-FAILURE CIRCUIT BREAKER trip check: strategist failed AND the last
+        # MODEL_FAILURE_BREAKER_THRESHOLD leads ALL hit real model errors. This lead's
+        # draft still stages below (per-draft isolation kept; staged drafts are kept)
+        # — the loop then stops at the end of this iteration.
+        if (
+            not _breaker_tripped
+            and _strategist_failed
+            and _model_fail_streak >= MODEL_FAILURE_BREAKER_THRESHOLD
+        ):
+            _breaker_tripped = True
 
         # Land the critic's quality score on the draft so the Review Queue shows REAL,
         # varying confidence (a generic draft the critic flags scores lower than a
@@ -2659,6 +2751,55 @@ def _execute_provided_leads_sync(
                 _durable.checkpoint(cursor=len(pending))
             except Exception:
                 pass  # ledger is best-effort; the idempotency key is the real guard
+
+        if _breaker_tripped:
+            break  # model calls are failing consistently — stop the fan-out honestly
+
+    # MODEL-FAILURE CIRCUIT BREAKER (post-loop record): ONE honest supervisor step
+    # naming what happened + a counted skip row so the output ledger still reconciles.
+    # The run is marked FAILED with this reason below (summary + materialized runs row).
+    _breaker_note: str | None = None
+    if _breaker_tripped:
+        _n_processed = len(_sup_processed_ids)
+        _breaker_note = (
+            f"stopped after {_n_processed} lead(s): model calls are failing "
+            f"consistently (last error: {_last_model_error or 'model/HTTP error'}) — "
+            "check the ANTHROPIC key/credits and relaunch; drafts already staged "
+            "are kept"
+        )
+        _rec(
+            "supervisor",
+            "circuit_breaker:deterministic",
+            {
+                "rule": "model_failure_circuit_breaker",
+                "consecutive_model_failures": _model_fail_streak,
+                "threshold": MODEL_FAILURE_BREAKER_THRESHOLD,
+            },
+            {
+                "stopped": True,
+                "finding": _breaker_note,
+                "last_error": _last_model_error,
+                "leads_processed": _n_processed,
+                "drafts_staged": len(pending),
+            },
+        )
+        _already_accounted = sum(int(s.get("count", 1) or 1) for s in skipped)
+        try:
+            _left = max(int(expected) - len(pending) - _already_accounted, 0)
+        except (TypeError, ValueError):
+            _left = 0
+        if _left:
+            skipped.append(
+                {
+                    "row": None,
+                    "lead": "run",
+                    "count": _left,
+                    "reason": (
+                        "stopped by the model-failure circuit breaker before drafting "
+                        f"({_left} lead(s) not attempted)"
+                    ),
+                }
+            )
 
     # 2a-bis) COHORT-CLAIM CONFORMANCE (truth-gap fix): the cohort is finalized —
     # compare what the plan CLAIMS about it (requested artist / assumed objection)
@@ -2845,6 +2986,24 @@ def _execute_provided_leads_sync(
     # 'completed'. The failure_summary surfaces agent/step/error/retryable/can_continue/impact.
     run_status = campaign_run_status(agent_runs, FAILCLOSED_REQUIRED_ROLES)
     failure_summary = required_step_failures(agent_runs, FAILCLOSED_REQUIRED_ROLES)
+    # The circuit breaker is a hard failure with an explicit reason: the run is FAILED
+    # (never 'completed') and the honest stop note rides the failure_summary so both
+    # the summary and the materialized runs row carry WHY the loop stopped.
+    if _breaker_note:
+        run_status = "failed"
+        failure_summary = list(failure_summary) + [
+            {
+                "agent": "supervisor",
+                "step_id": "model_failure_circuit_breaker",
+                "error": _breaker_note,
+                "retryable": True,
+                "can_continue": False,
+                "impact": (
+                    f"{len(pending)} staged draft(s) kept HELD; remaining leads "
+                    "not attempted"
+                ),
+            }
+        ]
 
     runs_row = _materialize_runs_row(
         dsn=dsn,
@@ -2936,6 +3095,7 @@ def _execute_provided_leads_sync(
         # (None = the cohort matches the claim). Also emitted below in step_notes.
         "cohort_note": cohort_note,
         "step_notes": ([cohort_note] if cohort_note else [])
+        + ([f"circuit breaker: {_breaker_note}"] if _breaker_note else [])
         + ([f"artwork: {artwork_note}"] if artwork_note else [])
         + ([
             f"artwork attached to every staged draft: asset {selected_artwork.get('assetId')}"

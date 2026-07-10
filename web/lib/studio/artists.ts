@@ -33,6 +33,8 @@ export interface ArtistArtwork {
   styles: string[];
   motifs: string[];
   vlmSummary: string | null;
+  /** Why analysis is missing, when it is (engine's concrete reason). */
+  vlmError?: string | null;
 }
 
 export interface ArtistCampaign {
@@ -81,6 +83,9 @@ export interface UploadImageResult {
   vlmSummary?: string | null;
   /** e.g. 'ok' | 'unavailable' | 'pending' — the engine's honest VLM state. */
   vlmStatus?: string | null;
+  /** The engine's concrete reason when analysis was skipped/failed (e.g. a
+   *  missing model key) — shown to the operator so recovery is obvious. */
+  vlmError?: string | null;
   /** The engine's own honest note about what was (and was not) captured. */
   note?: string | null;
   error?: string;
@@ -135,6 +140,7 @@ export async function fetchArtist(slug: string, signal?: AbortSignal): Promise<A
       styles: strArr(w.styles),
       motifs: strArr(w.motifs),
       vlmSummary: str(w.vlmSummary),
+      vlmError: str(w.vlmError),
     })),
     campaigns: campaigns.map((c) => ({
       // engine serves the key as `name`; accept the contract's `campaign_name` too
@@ -242,6 +248,7 @@ export async function uploadArtworkImage(args: {
     name: str(data.name) ?? undefined,
     vlmSummary: str(data.vlmSummary),
     vlmStatus: str(data.vlmStatus),
+    vlmError: str(data.vlmError),
     note: str(data.note),
   };
 }

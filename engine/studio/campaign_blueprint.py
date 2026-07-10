@@ -30,6 +30,7 @@ it: ``planner_model`` reads ``grounded_rules`` (not a fake Opus).
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -136,6 +137,13 @@ class CampaignBlueprint(BaseModel):
     angle: str = ""
     targets: TargetCohort = Field(default_factory=TargetCohort)
     per_channel_quota: dict[str, int] = Field(default_factory=dict)
+    # EXPLICIT COUNT CAP (honest reconciliation): the operator's explicitly requested
+    # draft count (``None`` when none was stated — a numeric plan field or an explicit
+    # "three drafts" in the goal/audience text) and, when that count capped the quota,
+    # the honest note saying so. Serialized with the blueprint so the UI's "Requested"
+    # reconciliation shows the operator's number, never a silently different one.
+    requested_count: int | None = None
+    capped_by: str = ""
     artist_shop_rules: list[str] = Field(default_factory=list)
     offer_logic: list[OfferRule] = Field(default_factory=list)
     # The objection the plan assumes dominates the cohort — the replan hook checks it.
@@ -207,6 +215,62 @@ def _distribute_quota(total: int, channels: list[str]) -> dict[str, int]:
         return {}
     base, extra = divmod(total, len(channels))
     return {c: base + (1 if i < extra else 0) for i, c in enumerate(channels)}
+
+
+# --------------------------------------------------------------------------- #
+# Explicit operator draft-count (the "3-draft ask ran the whole roster" defect).
+# --------------------------------------------------------------------------- #
+_NUMBER_WORDS: dict[str, int] = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+
+# Conservative by design: the number must DIRECTLY modify drafts/emails/messages/
+# leads ("3 drafts", "three drafts only", "make 5 emails") — never a price ("$1200
+# full-day") or a bare number. The lookbehind refuses a digit run that is part of a
+# money/decimal/thousands token ($1200, 4.5, 1,200).
+_EXPLICIT_COUNT_RE = re.compile(
+    r"(?<![$\d.,])\b(\d{1,4}|one|two|three|four|five|six|seven|eight|nine|ten)"
+    r"\s+(?:drafts?|emails?|messages?|leads?)\b",
+    re.IGNORECASE,
+)
+
+
+def parse_explicit_count(text: str | None) -> int | None:
+    """Parse an EXPLICIT requested count ("three drafts", "5 emails") out of free
+    text, or ``None`` when the text states no such count. Conservative: only a number
+    (digits or the words one..ten) that directly modifies drafts/emails/messages/leads
+    counts — a price ("$1200 full-day") or an unrelated number never parses. Pure."""
+    if not text:
+        return None
+    for m in _EXPLICIT_COUNT_RE.finditer(text):
+        tok = m.group(1).lower()
+        n = _NUMBER_WORDS.get(tok)
+        if n is None:
+            try:
+                n = int(tok)
+            except ValueError:  # pragma: no cover - the regex only admits digits/words
+                continue
+        if n > 0:
+            return n
+    return None
+
+
+def requested_draft_count(plan: Any) -> int | None:
+    """The operator's EXPLICITLY requested draft count, or ``None`` when they stated
+    none. Priority: (a) the numeric ``plan.lead_count`` field (the host/interview sets
+    it when its tooling works); (b) an explicit count parsed from the plan's
+    goal/audience free text — the fallback for a run whose host LLM was failing, so
+    ``revise_plan`` never landed the number on a plan field. Pure."""
+    try:
+        lead_count = int(getattr(plan, "lead_count", 0) or 0)
+    except (TypeError, ValueError):
+        lead_count = 0
+    if lead_count > 0:
+        return lead_count
+    return parse_explicit_count(
+        getattr(plan, "goal", None) or ""
+    ) or parse_explicit_count(getattr(plan, "audience", None) or "")
 
 
 def _artist_shop_rules(scope: str) -> list[str]:
@@ -356,6 +420,21 @@ def build_blueprint(
             uploaded = 0
         if uploaded:
             total_quota = uploaded
+
+    # EXPLICIT COUNT CAP (the "3-draft ask ran the whole roster" defect): when the
+    # operator EXPLICITLY asked for N drafts — a numeric plan field, or "three drafts"
+    # / "5 emails" in the goal/audience text — N HARD-CAPS the quota. The uploaded-list
+    # sizing above can grow a run to the whole roster even when the host LLM was down
+    # (``revise_plan`` never landed the number on the plan); the operator's stated
+    # count must win. Recorded honestly on the blueprint (requested_count / capped_by)
+    # so the "Requested" reconciliation shows the operator's number.
+    requested = requested_draft_count(plan)
+    capped_by = ""
+    if requested is not None and (total_quota <= 0 or total_quota > requested):
+        capped_by = f"operator explicitly requested {requested} draft(s)" + (
+            f" — quota capped from {total_quota} to {requested}" if total_quota > 0 else ""
+        )
+        total_quota = requested
     per_channel = _distribute_quota(total_quota, channels)
 
     targets = TargetCohort(
@@ -373,7 +452,8 @@ def build_blueprint(
             "Stop when the per-channel quota is met.",
             "Stop when the cohort is exhausted (no more eligible leads).",
             "Flag + stop-to-replan when measured evidence contradicts the plan.",
-        ],
+        ]
+        + ([capped_by] if capped_by else []),
     )
 
     blueprint = CampaignBlueprint(
@@ -384,6 +464,8 @@ def build_blueprint(
         angle=(strategist_angle or "").strip() or goal,
         targets=targets,
         per_channel_quota=per_channel,
+        requested_count=requested,
+        capped_by=capped_by,
         artist_shop_rules=_artist_shop_rules(scope),
         offer_logic=_build_offer_logic(tenant_id, dsn),
         assumed_dominant_objection=assumed,

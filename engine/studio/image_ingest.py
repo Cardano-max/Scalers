@@ -271,6 +271,7 @@ def process_image_upload(
                     "source": "upload",
                     "vlm_summary": vlm.get("summary") or "",
                     "vlm_status": vlm["status"],
+                    "vlm_error": vlm.get("error") or "",
                     "color_mode": tags.get("color_mode", ""),
                     "mood": tags.get("mood", ""),
                     "complexity": tags.get("complexity", ""),

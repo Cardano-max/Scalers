@@ -15,6 +15,7 @@ from studio.campaign_blueprint import (
     CampaignBlueprint,
     build_blueprint,
     offer_rule_for,
+    parse_explicit_count,
 )
 
 _REAL_OFFERS = [
@@ -139,6 +140,94 @@ def test_offer_text_never_becomes_a_channel_quota_key(monkeypatch) -> None:
     assert bp.per_channel_quota == {"email": 3}
     assert all(k in ("email", "instagram", "facebook", "sms", "gmail")
                for k in bp.per_channel_quota)
+
+
+# --------------------------------------------------------------------------- #
+# Explicit operator count (the "3-draft ask ran the whole roster" defect).
+# --------------------------------------------------------------------------- #
+
+def test_parse_explicit_count_is_conservative() -> None:
+    # Number words AND digits, but ONLY when they directly modify drafts/emails/
+    # messages/leads.
+    assert parse_explicit_count("three drafts") == 3
+    assert parse_explicit_count("make three drafts only for this campaign") == 3
+    assert parse_explicit_count("5 emails") == 5
+    assert parse_explicit_count("make 5 emails for the winback") == 5
+    assert parse_explicit_count("send 2 messages to warm leads first") == 2
+    assert parse_explicit_count("target ten leads") == 10
+    # NEVER a price, a bare number, or empty text.
+    assert parse_explicit_count("$1200 full-day") is None
+    assert parse_explicit_count("a $1200 full-day session offer") is None
+    assert parse_explicit_count("$1200 leads") is None  # money never reads as a count
+    assert parse_explicit_count("no numbers") is None
+    assert parse_explicit_count("") is None
+    assert parse_explicit_count(None) is None
+
+
+def test_explicit_count_in_goal_text_hard_caps_the_quota(monkeypatch) -> None:
+    """THE 81-LEAD DEFECT: the operator asked for THREE drafts in the goal text while
+    the host LLM was down (revise_plan never landed a numeric plan field) — so the
+    uploaded roster must NOT size the run. The explicit count HARD-CAPS total_quota,
+    every per-channel quota, and estimated_size, and the cap is recorded honestly on
+    the blueprint (requested_count / capped_by) for the Requested reconciliation."""
+    monkeypatch.setattr(offers_mod, "get_offers", lambda tid, dsn=None: [])
+    plan = CampaignPlan(
+        goal="make three drafts only to win back lapsed clients",
+        lead_source="provided", channels=["email"],
+        customers={"rows": 81, "customer_ids": [f"c{i}" for i in range(81)]},
+    )
+    bp = build_blueprint(plan, "t", None, use_llm=False)
+    assert bp.stop_conditions.total_quota == 3
+    assert bp.targets.estimated_size == 3
+    assert bp.per_channel_quota == {"email": 3}
+    assert sum(bp.per_channel_quota.values()) <= 3
+    # Honest record of the cap, serialized with the blueprint.
+    assert bp.requested_count == 3
+    assert bp.capped_by and "3" in bp.capped_by
+    assert bp.capped_by in bp.stop_conditions.notes
+
+
+def test_numeric_lead_count_field_outranks_free_text(monkeypatch) -> None:
+    # Priority (a): the numeric plan field the host sets when its tooling works wins
+    # over a count parsed from free text.
+    monkeypatch.setattr(offers_mod, "get_offers", lambda tid, dsn=None: [])
+    plan = CampaignPlan(
+        goal="five emails for the winback", lead_count=2,
+        lead_source="provided", channels=["email"],
+        customers={"rows": 10, "customer_ids": [f"c{i}" for i in range(10)]},
+    )
+    bp = build_blueprint(plan, "t", None, use_llm=False)
+    assert bp.requested_count == 2
+    assert bp.stop_conditions.total_quota == 2
+    assert bp.per_channel_quota == {"email": 2}
+
+
+def test_price_text_never_caps_the_quota(monkeypatch) -> None:
+    # "$1200 full-day" is a price, not a requested count — the roster sizing stands.
+    monkeypatch.setattr(offers_mod, "get_offers", lambda tid, dsn=None: [])
+    plan = CampaignPlan(
+        goal="win back lapsed clients with the $1200 full-day offer",
+        lead_source="provided", channels=["email"],
+        customers={"rows": 10, "customer_ids": [f"c{i}" for i in range(10)]},
+    )
+    bp = build_blueprint(plan, "t", None, use_llm=False)
+    assert bp.requested_count is None
+    assert bp.capped_by == ""
+    assert bp.stop_conditions.total_quota == 10
+
+
+def test_explicit_count_above_supply_never_inflates_quota(monkeypatch) -> None:
+    # Requested 10 but only 3 uploaded rows: the cap only ever LOWERS the quota
+    # (total <= requested), it never invents leads.
+    monkeypatch.setattr(offers_mod, "get_offers", lambda tid, dsn=None: [])
+    plan = CampaignPlan(
+        goal="10 drafts please", lead_source="provided", channels=["email"],
+        customers={"rows": 3, "customer_ids": ["c1", "c2", "c3"]},
+    )
+    bp = build_blueprint(plan, "t", None, use_llm=False)
+    assert bp.requested_count == 10
+    assert bp.capped_by == ""  # nothing was capped — supply was already below the ask
+    assert bp.stop_conditions.total_quota == 3
 
 
 def test_provided_leads_quota_covers_whole_uploaded_list(monkeypatch) -> None:

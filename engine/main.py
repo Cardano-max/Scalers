@@ -113,6 +113,7 @@ class HealthResponse(BaseModel):
     checkpointer: str
     studioTenant: str
     studioTenantExplicit: bool
+    modelKeyPresent: bool
 
 
 @app.get("/healthz", response_model=HealthResponse)
@@ -136,6 +137,9 @@ def healthz() -> HealthResponse:
         checkpointer="postgres" if settings.database_url else "memory",
         studioTenant=os.environ.get("STUDIO_TENANT_ID", "demo"),
         studioTenantExplicit="STUDIO_TENANT_ID" in os.environ,
+        # False = the LLM cells run on deterministic fallbacks and the VLM skips —
+        # the single most common "nothing seems to work" cause on a fresh machine.
+        modelKeyPresent=bool((os.environ.get("ANTHROPIC_API_KEY") or "").strip()),
     )
 
 
