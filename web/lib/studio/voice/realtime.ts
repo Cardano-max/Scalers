@@ -110,9 +110,26 @@ export async function postOrchestrate(
   return (await res.json()) as OrchestrateResult;
 }
 
-/** The ONLY two tool names this relay will route. Anything else is dropped with an
- *  honest error output — there is no send/publish handler in the browser. */
-export const ROUTABLE_TOOLS = ['update_plan', 'request_orchestration'] as const;
+/** Forward a `get_run_status` tool call to the server's READ-ONLY run-state route —
+ *  the real steps, staged drafts (lead names/recipients) and queue counts the voice
+ *  host is allowed to narrate. No send/launch path. */
+export async function postRunStatus(
+  aguiUrl: string,
+  sessionId: string,
+): Promise<Record<string, unknown>> {
+  const res = await fetch(`${studioBase(aguiUrl)}/voice/run_status`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId }),
+  });
+  if (!res.ok) throw new Error(`voice run_status HTTP ${res.status}`);
+  return (await res.json()) as Record<string, unknown>;
+}
+
+/** The ONLY tool names this relay will route (two write-shaped, one read-only).
+ *  Anything else is dropped with an honest error output — there is no send/publish
+ *  handler in the browser. */
+export const ROUTABLE_TOOLS = ['update_plan', 'request_orchestration', 'get_run_status'] as const;
 export type RoutableTool = (typeof ROUTABLE_TOOLS)[number];
 
 export interface ToolRouteDeps {
@@ -173,6 +190,11 @@ export async function routeToolCall(
         'The server GO-gate refused (not a launch). Treat this as an edit / keep ' +
         'interviewing — do not claim the campaign ran.',
     };
+  }
+
+  if (name === 'get_run_status') {
+    // Read-only: the model must narrate ONLY what this returns.
+    return await postRunStatus(deps.aguiUrl, deps.sessionId);
   }
 
   // No other tool is routable — there is deliberately no send/publish handler.

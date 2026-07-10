@@ -77,9 +77,14 @@ VOICE_TOOLS: list[dict[str, Any]] = [
         "name": "update_plan",
         "description": (
             "Persist an edit to the SHARED campaign plan during the scoping "
-            "interview. Call this whenever the operator states or changes the goal, "
-            "audience, channels, sections, or schedule. Pass ONLY the fields that "
-            "changed. This NEVER launches anything — it only edits the plan."
+            "interview. Call this whenever the operator states or changes ANY plan "
+            "field: the goal, audience, channels, the offer, the artist, HOW MANY "
+            "drafts/leads ('exactly three drafts' → lead_count=3 AND output_count=3), "
+            "deep research on/off, specific leads by email, or the lead source. Pass "
+            "ONLY the fields that changed. Counts are CRITICAL: if the operator says a "
+            "number of drafts and you do not record it, the run will size itself and "
+            "produce the wrong count. This NEVER launches anything — it only edits "
+            "the plan."
         ),
         "parameters": {
             "type": "object",
@@ -99,7 +104,70 @@ VOICE_TOOLS: list[dict[str, Any]] = [
                     "type": "object",
                     "additionalProperties": {"type": "string"},
                 },
+                "offer": {
+                    "type": "string",
+                    "description": "The offer / call-to-action (e.g. '$1200 full-day session, payment plans').",
+                },
+                "artist": {"type": "string", "description": "Which artist the campaign fronts."},
+                "tone": {"type": "string"},
+                "campaign_type": {
+                    "type": "string",
+                    "description": "e.g. outreach / winback / artistspotlight / holiday.",
+                },
+                "lead_count": {
+                    "type": "integer",
+                    "description": "EXACT number of leads to target when the operator states one.",
+                },
+                "output_count": {
+                    "type": "integer",
+                    "description": "EXACT number of drafts to produce when the operator states one.",
+                },
+                "deep_research": {
+                    "type": "boolean",
+                    "description": "True when the operator asks for deep research on each lead.",
+                },
+                "research_depth": {
+                    "type": "string",
+                    "description": "light / standard / deep.",
+                },
+                "per_lead": {
+                    "type": "boolean",
+                    "description": "One personalized message per lead (true) vs one shared message.",
+                },
+                "lead_source": {
+                    "type": "string",
+                    "description": "'provided' = use ONLY the operator's own leads (uploaded/DB/named).",
+                },
+                "leads": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Specific leads by email (or exact name) when the operator names them.",
+                },
+                "use_conversation_history": {
+                    "type": "boolean",
+                    "description": "Read each lead's imported conversation thread for the psych analysis.",
+                },
             },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "get_run_status",
+        "description": (
+            "READ the REAL current state of the campaign run and the review queue "
+            "from the database: run status, which agents actually ran (in order, "
+            "with each lead's REAL name), and the staged drafts (position, lead "
+            "name, recipient, subject) plus honest counts. Call this EVERY time the "
+            "operator asks what is happening, how many drafts exist, who a draft is "
+            "for, or to review drafts — and answer ONLY from its output. If it shows "
+            "nothing yet, say the team is still working. NEVER answer such questions "
+            "from memory: names or counts not in this tool's output are fabrication. "
+            "Read-only — it cannot launch or send anything."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
             "additionalProperties": False,
         },
     },
@@ -124,7 +192,56 @@ VOICE_TOOLS: list[dict[str, Any]] = [
 ]
 
 # Names of the only tools the voice agent may call — used to assert the surface.
+# update_plan + get_run_status are edit/read; request_orchestration launches a HELD
+# run behind the server GO-gate. There is still NO send/publish tool.
 VOICE_TOOL_NAMES: tuple[str, ...] = tuple(t["name"] for t in VOICE_TOOLS)
+
+# One GO = one run. Repeat GO utterances (and duplicate deliveries of one tool
+# call) within this window return the ALREADY-launched run instead of stacking
+# fresh runs — a real session stacked ~25 runs / 105 drafts this way.
+_VOICE_LAUNCH_DEBOUNCE_S = 45.0
+#: session_id -> (monotonic_ts, run_id, campaign_id) of the last launch.
+_VOICE_LAUNCHES: dict[str, tuple[float, str, str]] = {}
+
+
+def voice_run_status_snapshot(
+    tenant_id: str, session_id: str, *, dsn: str | None = None
+) -> dict[str, Any]:
+    """The REAL run + queue state the voice host may narrate — live DB reads only.
+
+    Composes the existing live-state seams: the most recent run id, its finalized
+    leads / staged drafts (real names + recipients, in order), the current agent
+    activity, and the tenant's review-queue truth block. Everything the voice model
+    says about a run MUST come from here."""
+    from studio.inventory import live_operations_block
+    from studio.live_state import agent_activity, finalized_leads, resolve_recent_run_id
+
+    out: dict[str, Any] = {"sessionId": session_id}
+    run_id = resolve_recent_run_id(tenant_id, dsn)
+    out["runId"] = run_id
+    if run_id:
+        try:
+            out["drafts"] = finalized_leads(tenant_id, run_id, dsn=dsn)
+        except Exception as exc:
+            out["drafts"] = {"error": f"{type(exc).__name__}: {exc}"}
+        try:
+            out["activity"] = agent_activity(tenant_id, dsn=dsn)
+        except Exception as exc:
+            out["activity"] = {"error": f"{type(exc).__name__}: {exc}"}
+    else:
+        out["drafts"] = None
+        out["activity"] = None
+        out["note_no_run"] = "No campaign run exists yet for this studio."
+    try:
+        out["queue"] = live_operations_block(tenant_id, dsn=dsn)
+    except Exception as exc:
+        out["queue"] = f"unreadable: {type(exc).__name__}: {exc}"
+    out["rule"] = (
+        "These are the ONLY run facts, lead names, draft counts and statuses you "
+        "may state. Draft #1 is the first entry in drafts. If a name or number is "
+        "not here, you do not know it — say so instead of guessing."
+    )
+    return out
 
 VOICE_INSTRUCTIONS = (
     "You are the senior marketing-agency executive who hosts this Campaign Studio "
@@ -176,13 +293,21 @@ VOICE_INSTRUCTIONS = (
     "happened or that you ran a different channel than the one requested.\n\n"
     "REAL STATE ONLY — never guess about the run. When the operator asks how many "
     "drafts exist, which agent is working, whether the strategist / researcher / critic "
-    "/ jury ran, what draft #1 (or #N) says and WHO it is to, or why it was written, "
-    "answer ONLY from the real run-state briefing you are given (the STATE section / the "
-    "run-state surface). NEVER invent a lead name, a count, or a status. Draft #1 is the "
-    "FIRST lead in that ordered list — say that exact name so it matches what the "
-    "operator sees on screen. If a required step (e.g. the strategist or critic) is "
-    "reported as failed, say so honestly — do not claim the run finished cleanly. If you "
-    "do not have the state yet, say you are pulling it up rather than guessing.\n\n"
+    "/ jury ran, what draft #1 (or #N) says and WHO it is to, or why it was written, or "
+    "asks to REVIEW the drafts: CALL the get_run_status tool FIRST and answer ONLY from "
+    "its output. NEVER invent a lead name, a count, or a status — a name that did not "
+    "come from get_run_status is fabrication. Draft #1 is the FIRST entry in the tool's "
+    "drafts list — say that exact name so it matches what the operator sees on screen. "
+    "While a run executes, do NOT narrate steps you have not read: call get_run_status "
+    "again for fresh steps, and if nothing new landed, say the team is still working. "
+    "If a required step (e.g. the strategist or critic) is reported as failed, say so "
+    "honestly — do not claim the run finished cleanly. If the tool errors, say you "
+    "cannot read the state right now rather than guessing.\n\n"
+    "ONE GO = ONE RUN — after a successful launch, NEVER call request_orchestration "
+    "again for the same campaign. A repeated 'go ahead' from the operator while a run "
+    "is executing is them being polite, not a new launch order; the server will also "
+    "return the SAME run id if you do. Only a NEW plan (new interview) may launch a "
+    "new run.\n\n"
     "Never claim to have sent, posted, emailed, or published anything — you cannot."
 )
 
@@ -610,14 +735,37 @@ def mount_studio_voice(app) -> None:
         dsn = get_dsn()
         payload = await _json_body(request)
         session_id = _session_id(payload, request)
+        _PLAN_FIELDS = (
+            "goal", "audience", "channels", "sections", "schedule",
+            "offer", "artist", "tone", "campaign_type",
+            "lead_count", "output_count", "deep_research", "research_depth",
+            "per_lead", "lead_source", "leads", "use_conversation_history",
+        )
         fields = payload.get("fields")
         if not isinstance(fields, dict):
-            fields = {k: payload[k] for k in ("goal", "audience", "channels", "sections", "schedule") if k in payload}
+            fields = {k: payload[k] for k in _PLAN_FIELDS if k in payload}
 
         plan = await _to_thread(_load_plan, session_id, dsn)
-        for key in ("goal", "audience", "channels", "sections", "schedule"):
+        # Apply EVERY run-shaping field the interview can gather — the handler
+        # previously accepted only goal/audience/channels/sections/schedule, so a
+        # spoken "exactly three drafts, deep research on" was silently DROPPED and
+        # the run sized itself off stale plan state (a real operator watched a
+        # '3 drafts' ask fan out to a 31-lead cohort because of this).
+        for key in _PLAN_FIELDS:
             if key in fields and fields[key] is not None:
-                setattr(plan, key, fields[key])
+                value = fields[key]
+                if key in ("lead_count", "output_count"):
+                    try:
+                        value = max(0, int(value))
+                    except (TypeError, ValueError):
+                        continue
+                elif key in ("deep_research", "per_lead", "use_conversation_history"):
+                    value = bool(value)
+                elif key == "leads":
+                    if not isinstance(value, list):
+                        continue
+                    value = [str(h).strip() for h in value if str(h or "").strip()]
+                setattr(plan, key, value)
         await _to_thread(_persist_plan, dsn, session_id, plan)
 
         runnable = plan_is_runnable(plan)
@@ -665,10 +813,40 @@ def mount_studio_voice(app) -> None:
                 {"ok": True, "launched": False, "gate": gate, "liveState": live}
             )
 
+        # LAUNCH DEBOUNCE (per session): a real operator's session showed every
+        # repeated "go ahead" — and duplicate tool-call deliveries of ONE go —
+        # launching a FRESH run each time; ~25 stacked runs filled the review queue
+        # with 105 drafts. One GO = one run: while a run this session launched in
+        # the last window is still fresh, a repeat GO returns THAT run id instead
+        # of launching another.
+        import time as _time
+
+        now = _time.monotonic()
+        last = _VOICE_LAUNCHES.get(session_id)
+        if last is not None and (now - last[0]) < _VOICE_LAUNCH_DEBOUNCE_S:
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "launched": True,
+                    "runId": last[1],
+                    "campaignId": last[2],
+                    "status": "already-running",
+                    "deduped": True,
+                    "gate": gate,
+                    "liveState": live,
+                    "note": (
+                        f"Run {last[1]} was already launched by this session "
+                        f"{int(now - last[0])}s ago — NOT launching a duplicate. "
+                        "Narrate that run; do not claim a second run started."
+                    ),
+                }
+            )
+
         info = await launch_studio_run(
             app, dsn, session_id, tenant_id, plan,
             trigger_note=f"[voice GO] {transcript}".strip(),
         )
+        _VOICE_LAUNCHES[session_id] = (now, info["runId"], info["campaignId"])
         return JSONResponse(
             {
                 "ok": True,
@@ -680,6 +858,31 @@ def mount_studio_voice(app) -> None:
                 "liveState": live,
             }
         )
+
+    @app.post("/studio/voice/run_status")
+    async def studio_voice_run_status(request: Request):  # noqa: ANN202
+        """Server handler for the model's read-only ``get_run_status`` tool: the REAL
+        run + review-queue state from the database, so the voice host answers
+        'what's happening / who is draft #1 for / how many drafts' from rows —
+        never from imagination (a real operator was told invented lead names).
+        Read-only: cannot launch or send anything."""
+        dsn = get_dsn()
+        payload = await _json_body(request)
+        session_id = _session_id(payload, request)
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        try:
+            snapshot = await _to_thread(
+                voice_run_status_snapshot, tenant_id, session_id, dsn=dsn
+            )
+        except Exception as exc:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "note": "Could not read the run state — say so honestly; do not guess.",
+                }
+            )
+        return JSONResponse({"ok": True, **snapshot})
 
 
 def _readback_text(plan: CampaignPlan) -> str:

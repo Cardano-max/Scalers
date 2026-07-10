@@ -32,8 +32,11 @@ from studio.voice import (
 
 
 def test_voice_tool_surface_is_exactly_two() -> None:
-    assert VOICE_TOOL_NAMES == ("update_plan", "request_orchestration")
-    assert len(VOICE_TOOLS) == 2
+    # Exactly three names: two write-shaped (plan edit + GATED launch request) and
+    # one READ-ONLY (get_run_status — real run/queue truth for narration). Still no
+    # send/publish tool anywhere.
+    assert VOICE_TOOL_NAMES == ("update_plan", "get_run_status", "request_orchestration")
+    assert len(VOICE_TOOLS) == 3
 
 
 def test_voice_tool_surface_has_no_send_or_publish_tool() -> None:
@@ -62,7 +65,9 @@ def test_voice_instructions_inject_active_docs_but_keep_two_tools(monkeypatch) -
     assert "Ladies First Brand & Campaign Playbook" in instr
     assert "cannot send or publish" in instr
     cfg = build_session_config(instructions=instr)
-    assert [t["name"] for t in cfg["tools"]] == ["update_plan", "request_orchestration"]
+    assert [t["name"] for t in cfg["tools"]] == [
+        "update_plan", "get_run_status", "request_orchestration",
+    ]
 
 
 def test_voice_instructions_honest_when_no_docs(monkeypatch) -> None:
@@ -77,7 +82,9 @@ def test_voice_instructions_honest_when_no_docs(monkeypatch) -> None:
 
 def test_minted_session_declares_only_the_two_tools() -> None:
     cfg = build_session_config()
-    assert [t["name"] for t in cfg["tools"]] == ["update_plan", "request_orchestration"]
+    assert [t["name"] for t in cfg["tools"]] == [
+        "update_plan", "get_run_status", "request_orchestration",
+    ]
     # input transcription enabled so the server receives the go-phrase utterance
     assert cfg["audio"]["input"]["transcription"]["model"]
 
