@@ -315,6 +315,10 @@ def process_video_upload(
         "framesExtracted": len(frames),
         "framesAnalyzed": sum(1 for _, a in analyses if a.get("status") == "ok"),
         "vlmStatus": vlm["status"],
+        # Top-level summary for the console ack — without it a fully analyzed
+        # video acked as a bare "Uploaded." (a real operator saw this and
+        # concluded video analysis was broken).
+        "vlmSummary": vlm.get("summary") or None,
         "artist": artist_name or None,
         "artistSlug": slug or None,
         "assetId": asset_id,
