@@ -3648,6 +3648,57 @@ async def steer_run(
     )
 
 
+@studio_agent.tool(requires_approval=True)
+async def schedule_draft(
+    ctx: RunContext[StudioDeps], action_id: str, when: str, live: bool = False
+) -> str:
+    """SCHEDULE one pending Review-Queue draft for a future publish time (RFC3339,
+    e.g. 2026-07-11T09:00:00Z). ``requires_approval=True`` — the operator confirms
+    before anything is recorded, because a schedule IS an approval with a
+    timestamp. Publishing happens through the same gated approve path (TEST-MODE
+    gate + redirect still apply); ``live=True`` only requests a non-redirect send
+    at publish time and still cannot pass the tenant gate."""
+    from studio.scheduler import schedule_action
+
+    try:
+        out = await asyncio.to_thread(
+            schedule_action, action_id.strip(), when.strip(),
+            live=bool(live), dsn=ctx.deps.dsn,
+        )
+    except ValueError as exc:
+        return f"Could not schedule: {exc}"
+    return (
+        f"Draft {out['actionId']} ({out.get('channel')}, to {out.get('target')}) is "
+        f"scheduled for {out['scheduledFor']} ({'LIVE' if out['live'] else 'safe redirect'}). "
+        "The scheduler publishes it through the gated approve path at that time."
+    )
+
+
+@studio_agent.tool
+async def campaign_intelligence_brief(ctx: RunContext[StudioDeps]) -> str:
+    """EXECUTIVE BRIEF: best past campaigns (real delivery numbers), the objection
+    landscape from real analyst reads, artist library depth, competitor leaders,
+    and evidence-backed recommendations for what to run next. Use this to answer
+    'what should we run next and why' — every line is aggregated from real rows."""
+    from studio.intelligence import campaign_intelligence
+
+    out = await asyncio.to_thread(
+        campaign_intelligence, ctx.deps.tenant_id, dsn=ctx.deps.dsn
+    )
+    lines = ["EXECUTIVE BRIEF (all numbers from real rows):"]
+    for c in out["bestCampaigns"][:3]:
+        lines.append(
+            f"- campaign {c['campaign_name']!r} ({c.get('artist_name')}): "
+            f"{c.get('delivered_count')}/{c.get('recipient_count')} delivered, "
+            f"CTA \"{c.get('cta')}\""
+        )
+    for o in out["objections"][:4]:
+        lines.append(f"- objection {o['objection']!r}: {o['leads']} lead(s)")
+    for r in out["recommendations"]:
+        lines.append(f"- RECOMMEND: {r['recommend']} — WHY: {r['why']}")
+    return "\n".join(lines)
+
+
 @studio_agent.tool
 async def fleet_status(ctx: RunContext[StudioDeps]) -> str:
     """FLEET BOARD (initech `status`): every recent run with its live activity —
@@ -5033,6 +5084,20 @@ def mount_studio_agui(app) -> None:
             }
         )
 
+    @app.get("/studio/intelligence")
+    async def studio_intelligence_route():  # noqa: ANN202
+        """The executive brain: best real campaigns, extracted patterns, artist
+        library depth, the objection landscape read from real analyst steps, the
+        queue state, competitor leaders, and rule-based recommendations — each
+        carrying its evidence. Read-only, deterministic, honest-empty sections."""
+        from fastapi.responses import JSONResponse
+
+        from studio.intelligence import campaign_intelligence
+
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        out = await asyncio.to_thread(campaign_intelligence, tenant_id, dsn=get_dsn())
+        return JSONResponse(out)
+
     @app.get("/studio/fleet")
     async def studio_fleet_route():  # noqa: ANN202
         """`initech status` for the marketing agents: one row per recent run with
@@ -5072,6 +5137,52 @@ def mount_studio_agui(app) -> None:
         app.state._supervisor_patrol_task = asyncio.create_task(
             start_patrol_loop(tenant_id, dsn=get_dsn())
         )
+
+    @app.on_event("startup")
+    async def _start_action_scheduler():  # noqa: ANN202
+        """Deferred-publish loop: operator-scheduled drafts publish at their time
+        through the REAL approve path (every gate intact). ACTION_SCHEDULER_SECONDS
+        (default 60; 0 disables)."""
+        from studio.scheduler import start_scheduler_loop
+
+        app.state._action_scheduler_task = asyncio.create_task(
+            start_scheduler_loop(dsn=get_dsn())
+        )
+
+    @app.post("/studio/campaign/action/{action_id}/schedule")
+    async def studio_action_schedule_route(action_id: str, request: Request):  # noqa: ANN202
+        """OPERATOR-INITIATED deferred publish: schedule ONE pending draft for a
+        future time. This is an approval gesture with a timestamp — the scheduler
+        publishes through approve_and_publish, so the exactly-once claim, the
+        tenant TEST-MODE gate and the allow-list/redirect all still apply. ``live``
+        must be explicitly true to request a non-redirect send at publish time."""
+        from fastapi.responses import JSONResponse
+
+        from studio.scheduler import cancel_schedule, schedule_action
+
+        try:
+            payload = json.loads(await request.body() or b"{}")
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        if payload.get("cancel") is True:
+            cleared = await asyncio.to_thread(cancel_schedule, action_id, dsn=get_dsn())
+            return JSONResponse({"ok": True, "cancelled": bool(cleared)})
+        when = str(payload.get("when") or "").strip()
+        if not when:
+            return JSONResponse(
+                {"ok": False, "error": "body needs {'when': RFC3339 timestamp}"},
+                status_code=400,
+            )
+        try:
+            out = await asyncio.to_thread(
+                schedule_action, action_id, when,
+                live=payload.get("live") is True, dsn=get_dsn(),
+            )
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True, **out})
 
     @app.post("/studio/campaign/{run_id}/send-eligible")
     async def studio_campaign_send_eligible_route(run_id: str, request: Request):  # noqa: ANN202
