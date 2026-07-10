@@ -34,7 +34,7 @@ _COLUMNS: tuple[str, ...] = (
     "threshold", "esc_kind", "esc_label", "idempotency_key", "deep_link",
     "outcome_label", "outcome_kind", "recommend", "thinking", "engagement",
     "last_error", "created_at", "updated_at", "approved_at", "sent_at",
-    "is_seeded",
+    "is_seeded", "scheduled_for", "schedule_live",
 )
 
 # Columns :func:`update_status` is allowed to set (whitelist — the **kwargs keys
@@ -43,7 +43,7 @@ _UPDATABLE: frozenset[str] = frozenset({
     "decision_id", "run_id", "worker", "target", "subject", "context", "draft",
     "autonomy", "conf", "threshold", "esc_kind", "esc_label", "deep_link",
     "outcome_label", "outcome_kind", "recommend", "last_error",
-    "approved_at", "sent_at",
+    "approved_at", "sent_at", "scheduled_for", "schedule_live",
 })
 
 
@@ -85,6 +85,11 @@ class ActionRow:
     # badges true rows as "Seeded demo data — not a live jury run" so nothing
     # fabricated can masquerade as a live action.
     is_seeded: bool = False
+    # Operator-approved deferred publish (27-action-schedule.sql): WHEN to publish
+    # and whether the operator explicitly authorized a live (non-redirect) send.
+    # The scheduler routes through approve_and_publish — every gate still applies.
+    scheduled_for: datetime | None = None
+    schedule_live: bool = False
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> "ActionRow":

@@ -52,11 +52,14 @@ from research.protected_traits import (
     trait_violations,
 )
 from studio.reason_history import (
+    OBJECTION_BLOCKED_PREREQ,
     OBJECTION_PAYMENT,
     OBJECTION_PRICE,
     OBJECTION_TIMING,
     OBJECTION_TRUST,
+    OBJECTION_TRUST_CONCERN,
     OBJECTION_UNCERTAINTY,
+    OBJECTION_WENT_QUIET,
     ReasonSignals,
     extract_signals,
 )
@@ -81,7 +84,8 @@ _CATEGORIES = frozenset(
 
 _OBJECTIONS = frozenset(
     {OBJECTION_PRICE, OBJECTION_TIMING, OBJECTION_TRUST, OBJECTION_UNCERTAINTY,
-     OBJECTION_PAYMENT, "none-found"}
+     OBJECTION_PAYMENT, OBJECTION_TRUST_CONCERN, OBJECTION_BLOCKED_PREREQ,
+     OBJECTION_WENT_QUIET, "none-found"}
 )
 _LEVELS = frozenset({"low", "moderate", "high"})
 # Buyer-readiness / Hierarchy-of-Effects stages.
@@ -328,6 +332,16 @@ def _present_has_csv(facts: dict[str, Any]) -> bool:
     return any(facts.get(k) for k in ("name", "city", "notes", "interests"))
 
 
+def _objection_to_field(o: Any) -> PsychField:
+    """An extracted objection Signal as a PsychField. A customer-quoted signal is a
+    ``stated`` read; a studio-quoted / thread-shape signal (blocked_by_prereq, went-
+    quiet) is ``inferred`` — its evidence is still a verbatim span of the real thread,
+    but it is never asserted as the customer's own words."""
+    stated = getattr(o, "source", "customer") == "customer"
+    return PsychField(value=o.value, signal=STATED if stated else INFERRED,
+                      evidence=o.evidence, evidence_source=SRC_CONVERSATION)
+
+
 def _objection_fields(signals: ReasonSignals) -> tuple[PsychField, list[PsychField]]:
     if not signals.has_conversation:
         return PsychField.insufficient("no conversation to read an objection from"), []
@@ -340,14 +354,7 @@ def _objection_fields(signals: ReasonSignals) -> tuple[PsychField, list[PsychFie
                        evidence_source=SRC_CONVERSATION),
             [],
         )
-    primary = PsychField(value=objs[0].value, signal=STATED,
-                         evidence=objs[0].evidence, evidence_source=SRC_CONVERSATION)
-    secondary = [
-        PsychField(value=o.value, signal=STATED, evidence=o.evidence,
-                   evidence_source=SRC_CONVERSATION)
-        for o in objs[1:]
-    ]
-    return primary, secondary
+    return _objection_to_field(objs[0]), [_objection_to_field(o) for o in objs[1:]]
 
 
 def _price_sensitivity(facts: dict[str, Any], signals: ReasonSignals) -> PsychField:
@@ -387,9 +394,13 @@ def _intent_strength(facts: dict[str, Any], signals: ReasonSignals) -> PsychFiel
 
 
 def _trust_level(facts: dict[str, Any], signals: ReasonSignals) -> PsychField:
-    trust_obj = next((o for o in signals.objections if o.value == OBJECTION_TRUST), None)
+    # A trust breach from a bad prior experience (trust_concern) reads low exactly like
+    # a first-timer trust objection — both are the customer's own evidenced words.
+    trust_obj = next((o for o in signals.objections
+                      if o.value in (OBJECTION_TRUST, OBJECTION_TRUST_CONCERN)), None)
     if trust_obj is not None:
-        return PsychField(value="low", signal=STATED, evidence=trust_obj.evidence,
+        sig = STATED if getattr(trust_obj, "source", "customer") == "customer" else INFERRED
+        return PsychField(value="low", signal=sig, evidence=trust_obj.evidence,
                           evidence_source=SRC_CONVERSATION)
     if (facts.get("tattoo_history") or []):
         style = (facts["tattoo_history"][0] or {}).get("style")
@@ -436,8 +447,11 @@ def _emotional_tone(signals: ReasonSignals) -> PsychField:
         return PsychField.insufficient("no conversation to read tone from")
     # Read the strongest tone cue from the customer's own words (ABSA opinion span).
     joined_last = signals.last_customer_message or ""
-    # Scan all customer evidence spans we captured for a positive/hesitant marker.
-    spans = [o.evidence for o in signals.objections] + [s.evidence for s in signals.styles]
+    # Scan the CUSTOMER-quoted evidence spans only — a studio-quoted span (a prereq or
+    # an unanswered ask) is never evidence for the customer's emotion.
+    spans = [o.evidence for o in signals.objections
+             if getattr(o, "source", "customer") == "customer"]
+    spans += [s.evidence for s in signals.styles]
     spans.append(joined_last)
     for span in spans:
         low = (span or "").lower()
@@ -472,11 +486,7 @@ def _deterministic_profile(
         trust_level=_trust_level(facts, signals),
         readiness_stage=_readiness_stage(category, primary_obj, signals),
         emotional_tone=_emotional_tone(signals),
-        decision_blockers=[
-            PsychField(value=o.value, signal=STATED, evidence=o.evidence,
-                       evidence_source=SRC_CONVERSATION)
-            for o in signals.objections
-        ],
+        decision_blockers=[_objection_to_field(o) for o in signals.objections],
         had_conversation=signals.has_conversation,
     )
     return profile
@@ -496,6 +506,15 @@ _ANGLE_BY_OBJECTION = {
     OBJECTION_TRUST: "share healed portfolio work + first-timer / hygiene reassurance",
     OBJECTION_PAYMENT: "offer a deposit or payment-split path",
     OBJECTION_UNCERTAINTY: "a no-pressure consult to help them decide",
+    OBJECTION_TRUST_CONCERN: (
+        "acknowledge the past experience (without restating it) with a direct-artist "
+        "commitment, a no-reschedule guarantee, and a manager point of contact — "
+        "never a hard sell"),
+    OBJECTION_BLOCKED_PREREQ: (
+        "help with the prerequisite first (e.g. laser removal guidance) — a next-step "
+        "note, explicitly not a discount pitch"),
+    OBJECTION_WENT_QUIET: (
+        "a low-pressure pick-up-where-we-left-off at the exact step the thread stopped"),
 }
 
 
@@ -710,8 +729,14 @@ def _build_psych_cell():
         "lead's real CRM facts and their prior conversation, decide WHERE this customer "
         "sits across the given psychological dimensions. Use the buyer-readiness ladder "
         "(awareness/knowledge/liking/preference/conviction/purchase) for readiness_stage "
-        "and the objection taxonomy (price/timing/trust/uncertainty/payment/none-found) "
-        "for objections.\n\n"
+        "and the objection taxonomy (price/timing/trust/uncertainty/payment/"
+        "trust_concern/blocked_by_prereq/went_quiet_mid_booking/none-found) for "
+        "objections. trust_concern = a bad prior experience with US (reschedules, "
+        "refund/dispute language, 'no longer confident'). blocked_by_prereq = a concrete "
+        "prerequisite stops the booking (laser removal, healing, a consult first) — "
+        "quote the thread line stating it. went_quiet_mid_booking = they were actively "
+        "booking and stopped responding at a concrete step — quote that exact "
+        "unanswered ask.\n\n"
         "HARD RULES (a fabrication is a critical failure):\n"
         "- For EVERY dimension set signal to 'stated' ONLY if the customer's own words "
         "evidence it, and put that VERBATIM quote in 'evidence' with evidence_source="

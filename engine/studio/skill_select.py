@@ -103,6 +103,29 @@ _PLAYS: dict[str, _Play] = {
         tone="helpful, unhurried",
         aligned_pack="marketing_playbook",
     ),
+    "trust-repair": _Play(
+        skill_id="trust-repair",
+        guidance=("Acknowledge a bad prior experience with us without restating its painful "
+                  "details; commit the artist directly, guarantee no reschedules on our end, "
+                  "and give a manager point of contact. Never a hard sell, never a promo."),
+        tone="accountable, sincere, zero-pressure",
+        aligned_pack="marketing_playbook",
+    ),
+    "prereq-help": _Play(
+        skill_id="prereq-help",
+        guidance=("Help with the concrete prerequisite that blocks the booking (laser "
+                  "removal, healing, a consult) — a genuinely useful next-step note, "
+                  "explicitly not a discount pitch."),
+        tone="helpful, practical, no-pressure",
+        aligned_pack="marketing_playbook",
+    ),
+    "resume-booking": _Play(
+        skill_id="resume-booking",
+        guidance=("Pick the booking back up at the exact step the thread stopped, "
+                  "low-pressure — make continuing effortless, never guilt the silence."),
+        tone="easygoing, familiar, low-pressure",
+        aligned_pack="growth_marketing_patterns",
+    ),
     "re-engagement": _Play(
         skill_id="re-engagement",
         guidance=("Reconnect with a quiet/lapsed past customer as a genuine human follow-up — "
@@ -148,6 +171,9 @@ _OBJECTION_TO_PLAY: dict[str, str] = {
     "timing": "timing-nudge",
     "trust": "trust-building",
     "uncertainty": "decision-support",
+    "trust_concern": "trust-repair",
+    "blocked_by_prereq": "prereq-help",
+    "went_quiet_mid_booking": "resume-booking",
 }
 
 

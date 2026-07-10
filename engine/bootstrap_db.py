@@ -41,9 +41,11 @@ def main() -> int:
     from actions import audit as actions_audit
     from actions import store as actions_store
     from research import sources_store
+    from studio import appointment_import
     from studio import artifacts as studio_artifacts
     from studio import blueprint_store, campaign_plan_store, campaign_spec_store
-    from studio import campaign_examples_store, conversations, documents, durable_run
+    from studio import campaign_examples_store, competitor_intel, conversations
+    from studio import documents, durable_run
     from tenants import store as tenants_store
 
     step("actions.store", lambda: actions_store.ensure_schema(dsn))
@@ -52,11 +54,13 @@ def main() -> int:
     step("studio.artifacts", lambda: studio_artifacts.ensure_schema(dsn))
     step("studio.documents", lambda: documents.ensure_schema(dsn))
     step("studio.conversations", lambda: conversations.ensure_schema(dsn))
+    step("studio.appointment_import (appointments)", lambda: appointment_import.ensure_schema(dsn))
     step("studio.durable_run", lambda: durable_run.ensure_schema(dsn))
     step("studio.blueprint_store", lambda: blueprint_store.setup(dsn))
     step("studio.campaign_plan_store", lambda: campaign_plan_store.setup(dsn))
     step("studio.campaign_spec_store", lambda: campaign_spec_store.setup(dsn))
     step("studio.campaign_examples_store", lambda: campaign_examples_store.ensure_schema(dsn))
+    step("studio.competitor_intel", lambda: competitor_intel.ensure_schema(dsn))
     step("tenants.store", lambda: tenants_store.ensure_schema(dsn))
 
     from studio import supervisor_control
