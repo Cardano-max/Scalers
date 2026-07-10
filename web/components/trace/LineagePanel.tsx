@@ -55,6 +55,16 @@ export function LineagePanel({ actionId }: { actionId: string }) {
   if (loading) return null; // render only once resolved (no flash), like evidence
   const lin = data ?? null;
 
+  // CONFIDENCE-WITHOUT-EVIDENCE GUARD: a draft can carry a high jury score while
+  // its entire lineage is unrecorded (no customer identity, no offer, no source).
+  // A bare "95%" next to an all-missing lineage is confidence theater — say so,
+  // right where the operator is looking.
+  const ungrounded =
+    lin !== null &&
+    !lin.sourceFile &&
+    !lin.customer.name && !lin.customer.email && !lin.customer.phone &&
+    !lin.artist && !lin.offer;
+
   return (
     <section
       aria-label="Draft lineage"
@@ -68,6 +78,24 @@ export function LineagePanel({ actionId }: { actionId: string }) {
       }}
     >
       <div style={{ fontSize: 12.5, fontWeight: 700 }}>Lineage — where this draft came from</div>
+      {ungrounded ? (
+        <div
+          role="alert"
+          style={{
+            fontSize: 12,
+            lineHeight: 1.45,
+            color: '#7A3B00',
+            background: '#FFF3E0',
+            border: '1px solid #E8B87A',
+            borderRadius: 6,
+            padding: '7px 10px',
+          }}
+        >
+          This draft has <strong>no recorded evidence</strong> — no customer identity,
+          offer, or source on file. Treat any confidence score as unverified and use
+          your own judgment before approving.
+        </div>
+      ) : null}
       {lin === null ? (
         <Missing why="no lineage recorded for this draft" />
       ) : (

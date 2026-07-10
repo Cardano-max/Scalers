@@ -9,12 +9,47 @@
  * last recorded activity when one is known.
  */
 import { useConsole } from '@/state/console-store';
+import { useData } from '@/lib/data/DataProvider';
 import { useFleet, activeFleetRows } from '@/lib/studio/useFleet';
 import { clockTime } from './console-bits';
 
 export function StatusStrip({ reviewCount }: { reviewCount: number }) {
   const { navigate } = useConsole();
+  const { tenantId } = useData();
   const fleet = useFleet();
+
+  // TENANT MISMATCH GUARD: an engine started without STUDIO_TENANT_ID serves
+  // the 'demo' tenant — every studio surface (artists, artifacts, drafts)
+  // reads empty while the client's data sits under another tenant. That state
+  // must be impossible to miss, so it replaces the whole strip.
+  if (
+    fleet.engineTenantId !== null &&
+    tenantId &&
+    fleet.engineTenantId !== tenantId
+  ) {
+    return (
+      <div
+        role="alert"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          width: '100%',
+          fontFamily: 'var(--font-mono)',
+          fontSize: 11,
+          color: '#7A3B00',
+          background: '#FFF3E0',
+          borderBottom: '1px solid #E8B87A',
+          padding: '5px 24px',
+        }}
+      >
+        <span aria-hidden style={{ flex: '0 0 auto' }}>⚠</span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {`This console shows '${tenantId}' but the engine is serving '${fleet.engineTenantId}' — data will look empty. Restart the engine with STUDIO_TENANT_ID=${tenantId} (the run-local script does this).`}
+        </span>
+      </div>
+    );
+  }
 
   const active = activeFleetRows(fleet.rows);
   const nAgents = active.length;

@@ -29,11 +29,16 @@ export interface FleetState {
   error: boolean;
   /** ms epoch of the last successful fetch — null before the first one lands. */
   fetchedAt: number | null;
+  /** The tenant the ENGINE is actually serving (from the fleet payload). The
+   * console compares this against its own tenant and warns on mismatch — an
+   * engine started without STUDIO_TENANT_ID silently serves 'demo' and every
+   * studio surface reads empty while the client's data sits elsewhere. */
+  engineTenantId: string | null;
 }
 
 const POLL_MS = 15000;
 
-let state: FleetState = { rows: [], error: false, fetchedAt: null };
+let state: FleetState = { rows: [], error: false, fetchedAt: null, engineTenantId: null };
 const subscribers = new Set<() => void>();
 let timer: ReturnType<typeof setInterval> | null = null;
 let inflight = false;
@@ -48,8 +53,13 @@ async function load(): Promise<void> {
   try {
     const res = await fetch('/studio/fleet');
     if (!res.ok) throw new Error(String(res.status));
-    const d = (await res.json()) as { fleet?: FleetRow[] };
-    state = { rows: Array.isArray(d.fleet) ? d.fleet : [], error: false, fetchedAt: Date.now() };
+    const d = (await res.json()) as { fleet?: FleetRow[]; tenantId?: string };
+    state = {
+      rows: Array.isArray(d.fleet) ? d.fleet : [],
+      error: false,
+      fetchedAt: Date.now(),
+      engineTenantId: typeof d.tenantId === 'string' && d.tenantId ? d.tenantId : null,
+    };
   } catch {
     state = { ...state, error: true };
   } finally {
