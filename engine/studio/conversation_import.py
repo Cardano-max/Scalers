@@ -105,6 +105,18 @@ def ingest_conversations_csv(
         if speaker == "customer" and text.strip().lower().rstrip(".!") in _OPT_OUT_WORDS:
             g["opted_out"] = True
 
+    # Identity resolution BEFORE upsert: the transcript's phone may already
+    # belong to a customer on file with their REAL email (e.g. from the
+    # appointment-history import). The conversation must land on THAT customer,
+    # never a parallel identity — so a placeholder/absent email is replaced by
+    # the canonical email on file. A real email in the CSV is operator truth
+    # and is kept.
+    for g in groups.values():
+        if g["phone"] and (not g["email"] or _is_placeholder_email(g["email"])):
+            canonical = _email_for_phone(tenant_id, g["phone"], g["name"], dsn=dsn)
+            if canonical:
+                g["email"] = canonical
+
     # Customers first (ids key the conversation rows). Reuses the customer-CSV
     # upsert so ids/dedupe behave exactly like every other lead import.
     lead_rows = []
@@ -161,6 +173,34 @@ def _connect(dsn: str | None):
         "ENGINE_DATABASE_URL", "postgresql://scalers:scalers@localhost:5432/scalers"
     )
     return psycopg.connect(conninfo, autocommit=True)
+
+
+def _is_placeholder_email(email: str) -> bool:
+    """Reserved-TLD emails (.test/.invalid/.example) are demo placeholders,
+    never a real identity — they must not shadow a customer already on file."""
+    tld = (email or "").rsplit(".", 1)[-1].lower()
+    return tld in {"test", "invalid", "example"}
+
+
+def _email_for_phone(
+    tenant_id: str, phone: str, name: str = "", *, dsn: str | None = None
+) -> str:
+    """Canonical REAL email for a phone already on file ('' when none). Test-TLD
+    rows are excluded — a placeholder can never be the canonical identity. A
+    shared phone (couples booking together) is disambiguated by name match, so
+    the thread lands on the person the export names, not just the oldest row."""
+    try:
+        with _connect(dsn) as conn:
+            row = conn.execute(
+                "SELECT email FROM customers WHERE tenant_id=%s AND phone=%s "
+                "AND coalesce(email,'') <> '' AND email NOT ILIKE '%%.test' "
+                "AND email NOT ILIKE '%%.invalid' AND email NOT ILIKE '%%.example' "
+                "ORDER BY (lower(name) = lower(%s)) DESC, created_at LIMIT 1",
+                (tenant_id, phone, name or ""),
+            ).fetchone()
+        return row[0] if row else ""
+    except Exception:
+        return ""
 
 
 def _backfill_phone(
