@@ -154,6 +154,94 @@ async def test_stage_publish_is_approval_gated_and_does_not_fire() -> None:
     assert after == before
 
 
+@pytest.mark.anyio
+async def test_run_campaign_launches_async_and_persists_final_host_turn(monkeypatch) -> None:
+    """Truth-gap fix 3 (chat run-launch dead air): ``run_campaign`` must NOT execute
+    the whole multi-agent spine synchronously inside the SSE turn. It LAUNCHES the run
+    in the background (the same registry path POST /studio/run uses) and returns
+    IMMEDIATELY with the real run id + 'launched' + where to watch — while the spine
+    is still executing. When the run finishes, its honest summary is persisted to
+    ``studio_chat_turns`` as a host turn."""
+    import asyncio as _asyncio
+    import threading
+
+    from pydantic_ai.messages import ToolReturnPart
+
+    from studio import agui as agui_mod
+
+    sid = _sid()
+    started = threading.Event()
+    release = threading.Event()
+    seen: dict = {}
+
+    def fake_exec(plan, session_id, tenant_id, dsn, run_id=None):
+        # Stands in for the real spine: parks until the test releases it, so the
+        # ONLY way the tool can return quickly is by genuinely not waiting on it.
+        seen["run_id"] = run_id
+        started.set()
+        release.wait(timeout=10)
+        return {
+            "archetype_id": "stub_arch",
+            "run_id": run_id,
+            "campaign_id": "camp_stub",
+            "n_queued": 1,
+            "n_pending": 1,
+            "channels": ["email"],
+            "runs_row": False,
+            "run_status": "completed",
+            "failure_summary": [],
+            "agent_runs": [],
+        }
+
+    monkeypatch.setattr(agui_mod, "_execute_campaign_sync", fake_exec)
+
+    tool_result: dict = {}
+
+    def model_fn(messages, info: AgentInfo) -> ModelResponse:
+        for m in messages:
+            for p in getattr(m, "parts", []):
+                if isinstance(p, ToolReturnPart) and p.tool_name == "run_campaign":
+                    tool_result["text"] = str(p.content)
+        if "text" not in tool_result:
+            return ModelResponse(parts=[ToolCallPart(tool_name="run_campaign", args={})])
+        return ModelResponse(parts=[TextPart("Run launched — watch the Agency tab.")])
+
+    deps = StudioDeps(state=CampaignPlan(goal="fill May"), session_id=sid)
+    result = await studio_agent.run("run the campaign", model=FunctionModel(model_fn), deps=deps)
+    assert isinstance(result.output, str)
+
+    # The tool returned while the spine was STILL executing (parked on `release`) —
+    # the launch is genuinely asynchronous, no dead air.
+    assert started.wait(2), "the background run never started"
+    assert not release.is_set()
+    assert "text" in tool_result, "the host never received the tool's launch summary"
+    run_id = seen.get("run_id")
+    assert run_id and run_id in tool_result["text"]
+    assert '"status": "launched"' in tool_result["text"]
+    assert "Agency tab" in tool_result["text"]
+
+    # The launch registered on the SAME registry GET /studio/run/{id} polls.
+    registry = agui_mod._background_app().state._studio_runs
+    assert registry[run_id]["status"] == "running"
+
+    # Let the spine finish: the registry flips to the run's REAL terminal status and
+    # the run's honest summary lands as a persisted host turn (studio_chat_turns).
+    release.set()
+    for _ in range(200):
+        if registry[run_id]["status"] != "running":
+            break
+        await _asyncio.sleep(0.05)
+    assert registry[run_id]["status"] == "completed"
+    for _ in range(100):  # the host turn is logged via to_thread right after
+        hist = PostgresChatStore(get_dsn()).history(sid)
+        if any(t.role == "host" and "stub_arch" in t.text for t in hist):
+            break
+        await _asyncio.sleep(0.05)
+    assert any(
+        t.role == "host" and "stub_arch" in t.text and run_id in t.text for t in hist
+    ), "the run's final host summary turn was not persisted to studio_chat_turns"
+
+
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"

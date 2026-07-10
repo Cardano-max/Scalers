@@ -87,6 +87,31 @@ _OBJECTIONS = frozenset(
      OBJECTION_PAYMENT, OBJECTION_TRUST_CONCERN, OBJECTION_BLOCKED_PREREQ,
      OBJECTION_WENT_QUIET, "none-found"}
 )
+
+# Objection FAMILIES — derived from the existing taxonomy groups: reason_history's
+# canonical sales-objection taxonomy pairs price/budget with payment (money), and
+# trust/risk with the trust_concern breach (customer_research routes both to the
+# same trust handling; its offer logic treats price+payment as one money family).
+# Used by the S2 misclassification guard in :func:`_merge_llm`: when the
+# deterministic floor found a STATED objection, the LLM overlay may refine WITHIN
+# the same family (payment -> price, trust -> trust_concern, …) or add secondaries,
+# but may NOT flip the primary to a DIFFERENT family unless it cites
+# customer-quoted (not studio-quoted) evidence for the new family.
+_OBJECTION_FAMILY: dict[str, str] = {
+    OBJECTION_PRICE: "money", OBJECTION_PAYMENT: "money",
+    OBJECTION_TRUST: "trust", OBJECTION_TRUST_CONCERN: "trust",
+    OBJECTION_TIMING: "timing",
+    OBJECTION_UNCERTAINTY: "uncertainty",
+    OBJECTION_BLOCKED_PREREQ: "prerequisite",
+    OBJECTION_WENT_QUIET: "went-quiet",
+}
+
+
+def objection_family(value: str | None) -> str:
+    """The taxonomy family one objection value belongs to (an unknown value is its
+    own family, so it can never silently equal another's)."""
+    v = (value or "").strip().lower()
+    return _OBJECTION_FAMILY.get(v, v)
 _LEVELS = frozenset({"low", "moderate", "high"})
 # Buyer-readiness / Hierarchy-of-Effects stages.
 _STAGES = frozenset(
@@ -665,10 +690,23 @@ def _clamp(field: PsychField, allowed: frozenset[str]) -> PsychField:
     return field
 
 
-def _merge_llm(base: PsychProfile, llm: "PsychLLMOut") -> PsychProfile:
+def _merge_llm(
+    base: PsychProfile, llm: "PsychLLMOut", customer_corpus: str = ""
+) -> PsychProfile:
     """Overlay an LLM read onto the deterministic floor field-by-field, but ONLY where the
     LLM produced a grounded, in-vocabulary read; otherwise the deterministic field stands.
-    (Validation of evidence-vs-corpus happens afterwards in :func:`_finalize`.)"""
+    (Validation of evidence-vs-corpus happens afterwards in :func:`_finalize`.)
+
+    S2 MISCLASSIFICATION GUARD (the Oscar Diaz regression): when the deterministic
+    floor found a STATED primary objection (the customer's own words), the LLM may
+    refine it WITHIN the same taxonomy family (payment -> price, trust ->
+    trust_concern, …) or add secondaries — but it may NOT flip the primary to a
+    DIFFERENT family on merely on-vocabulary evidence: the flip is accepted only when
+    the LLM's evidence span is CUSTOMER-quoted (it literally appears in
+    ``customer_corpus``, the normalized text of the customer's own turns — a
+    studio-quoted line can never re-diagnose the customer's stated objection). A
+    refused flip keeps the deterministic primary; the LLM's proposal survives as a
+    secondary (still subject to the corpus gate in :func:`_finalize`)."""
     def pick(base_field: PsychField, llm_field: PsychField | None, allowed: frozenset[str]) -> PsychField:
         if llm_field is None:
             return base_field
@@ -677,8 +715,27 @@ def _merge_llm(base: PsychProfile, llm: "PsychLLMOut") -> PsychProfile:
             return base_field
         return clamped
 
+    det_primary = base.primary_objection  # the deterministic floor's read (pre-overlay)
     base.umbrella_category = pick(base.umbrella_category, llm.umbrella_category, _CATEGORIES)
     base.primary_objection = pick(base.primary_objection, llm.primary_objection, _OBJECTIONS)
+    if (
+        det_primary.signal == STATED
+        and det_primary.value
+        and base.primary_objection is not det_primary
+        and objection_family(base.primary_objection.value)
+        != objection_family(det_primary.value)
+    ):
+        proposed = base.primary_objection
+        ev = _norm(proposed.evidence)
+        customer_quoted = bool(ev) and ev in (customer_corpus or "")
+        if not customer_quoted:
+            # Refuse the cross-family flip; keep the customer's stated objection as
+            # primary and demote the proposal to a secondary (never silently lost).
+            if proposed.value and proposed.value not in [
+                x.value for x in base.secondary_objections
+            ] + [det_primary.value]:
+                base.secondary_objections.append(proposed)
+            base.primary_objection = det_primary
     base.intent_strength = pick(base.intent_strength, llm.intent_strength, _LEVELS)
     base.urgency = pick(base.urgency, llm.urgency, _LEVELS)
     base.price_sensitivity = pick(base.price_sensitivity, llm.price_sensitivity, _LEVELS)
@@ -890,6 +947,17 @@ def analyze_customer(
     corpus = _build_corpus(facts, signals, social, turns)
     present = _present_sources(facts, signals, social)
 
+    # CUSTOMER-only corpus (S2 guard): the normalized text of the customer's OWN
+    # turns — the only evidence that can justify the LLM flipping a STATED primary
+    # objection to a different taxonomy family (a studio-quoted line never can).
+    from studio.conversations import SPEAKER_CUSTOMER, normalize_turns
+
+    customer_corpus = _norm(
+        "\n".join(
+            t["text"] for t in normalize_turns(turns) if t["speaker"] == SPEAKER_CUSTOMER
+        )
+    )
+
     profile = _deterministic_profile(facts, signals, social)
     profile.trait_filtered.extend(trait_drops)
 
@@ -898,7 +966,7 @@ def analyze_customer(
         try:
             cell = _build_psych_cell()
             out = cell.run_sync(_build_psych_prompt(facts, turns, social))
-            profile = _merge_llm(profile, out)
+            profile = _merge_llm(profile, out, customer_corpus)
         except Exception:
             # Any cell/model failure: the deterministic floor stands (honest, grounded).
             profile.source = "deterministic"

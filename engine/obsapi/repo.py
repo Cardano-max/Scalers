@@ -662,6 +662,34 @@ def _build_run(conn: Any, row: dict[str, Any]) -> Run:
     # points at the same trace id mirror_run emits under the v3/v4 SDK.
     trace_url: str | None = observability.trace_url(row["run_id"])
 
+    # HONEST duration + counts (truth-gap fix). Studio runs write their runs row ONCE
+    # at completion (created_at ≈ updated_at), so the row pair alone fabricates a
+    # "0.0s" duration; the run's own agent_runs span is the real signal there. The
+    # same query yields the truthful STEP count (steps_total) — what the old
+    # "N staged" label actually showed — and a separate actions count yields the
+    # REAL drafts_staged. Missing tables degrade to None (honest unknown), never 0.
+    steps_total: int | None = None
+    first_step_at = last_step_at = None
+    try:
+        ar = conn.execute(
+            "SELECT count(*) AS n, min(created_at) AS first_at, max(created_at) AS last_at "
+            "FROM agent_runs WHERE run_id=%s",
+            (row["run_id"],),
+        ).fetchone()
+        if ar:
+            steps_total = int(ar["n"])
+            first_step_at, last_step_at = ar.get("first_at"), ar.get("last_at")
+    except Exception:
+        steps_total = None
+    drafts_staged: int | None = None
+    try:
+        dr = conn.execute(
+            "SELECT count(*) AS n FROM actions WHERE run_id=%s", (row["run_id"],)
+        ).fetchone()
+        drafts_staged = int(dr["n"]) if dr else None
+    except Exception:
+        drafts_staged = None
+
     return Run(
         id=row["run_id"],
         tenant_id=row["tenant_id"],
@@ -669,9 +697,13 @@ def _build_run(conn: Any, row: dict[str, Any]) -> Run:
         trigger=mappers.run_trigger(row.get("trigger")),
         status=mappers.run_status(row.get("status")),
         started_at=mappers.iso(row.get("created_at")),
-        duration=mappers.duration(row.get("created_at"), row.get("updated_at")),
+        duration=mappers.run_duration(
+            row.get("created_at"), row.get("updated_at"), first_step_at, last_step_at
+        ),
         auto_count=row.get("auto_count") or 0,
         review_count=row.get("review_count") or 0,
+        steps_total=steps_total,
+        drafts_staged=drafts_staged,
         retries=row.get("retries") or 0,
         idempotency_key=row["run_id"],
         channels=channels,

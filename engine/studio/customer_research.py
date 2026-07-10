@@ -965,6 +965,7 @@ def _offer_prompt_block(offer: Any, objection: str) -> list[str]:
 def _build_email_prompt(
     facts: dict[str, Any], *, goal: str, research: list[dict[str, Any]],
     angle: dict[str, Any], offer: Any = None, profile: Any = None,
+    artist_voice: str | None = None,
 ) -> str:
     """Assemble the copywriter run prompt. It exposes the lead's REAL grounded facts
     (name / city / CSV note / first-party interests + past work from our records /
@@ -1204,6 +1205,22 @@ def _build_email_prompt(
           if facts.get("sms_opt_in") is False else []),
         "- Everything you say about YOURSELF (the sender) must come from the brand "
         "voice's approved claims above — nothing else.",
+        # SIGN-OFF IDENTITY GATE (truth-gap fix: a draft signed 'Cheers, Keebs' for a
+        # lead with no Keebs link). Signing as a named artist is allowed ONLY when the
+        # operator explicitly set the campaign artist or this lead's own record links
+        # them to that artist — otherwise the draft signs as the studio, period.
+        *([
+            f"- SIGN-OFF IDENTITY: you may write/sign this message as {artist_voice} "
+            "(this artist fronts the campaign for this recipient — an operator-set "
+            "campaign artist or the recipient's own recorded artist). Never sign as "
+            "any OTHER individual artist.",
+        ] if artist_voice else [
+            "- SIGN-OFF IDENTITY: sign as the studio (the brand voice above) ONLY. "
+            "Do NOT sign as, or write in the first-person voice of, ANY individual "
+            "artist by name — this recipient has no recorded link to a specific "
+            "artist and the operator did not set one; naming an artist as the "
+            "sender would fabricate a relationship.",
+        ]),
         # wwy.7 r8 (smoking gun): with NO prior-relationship evidence on file, the copy
         # must read as a genuine first contact — never a fabricated reunion.
         *([] if has_relationship else [
@@ -1603,9 +1620,16 @@ def build_outreach_draft(
     profile: Any = None,
     offer: Any = None,
     sender_city: str | None = None,
+    artist_voice: str | None = None,
 ) -> dict[str, Any]:
     """Build ONE personalized outreach draft for a lead — REAL copywriter-written,
     brand-voiced, and grounded only in facts the system can substantiate.
+
+    ``artist_voice`` is the SIGN-OFF IDENTITY GATE: the artist name the copy may
+    sign as / speak for — pass it ONLY when the operator explicitly set the campaign
+    artist or this lead's own record carries that artist affinity. ``None`` (the
+    default) hard-forbids signing as ANY individual artist: the copy signs as the
+    studio, so a draft can never fabricate an artist relationship the data lacks.
 
     ``profile`` (a grounded :class:`~studio.psych_profile.PsychProfile`) and ``offer`` (a
     REAL substantiated :class:`~studio.offers.Offer`, or None) drive the category/objection
@@ -1721,6 +1745,8 @@ def build_outreach_draft(
         grounding.append("personalization=inferred")
     else:
         grounding.append("personalization=grounded")
+    # Auditable sign-off identity: which sender identity the copy was ALLOWED to use.
+    grounding.append(f"sign_off=artist:{artist_voice}" if artist_voice else "sign_off=studio")
 
     subject: str | None = None
     body: str | None = None
@@ -1749,7 +1775,8 @@ def build_outreach_draft(
             copy_model = _cm if isinstance(_cm, str) else str(_cm)
             copy = cell.run_sync(
                 _build_email_prompt(facts, goal=goal, research=research, angle=angle,
-                                    offer=offer, profile=profile)
+                                    offer=offer, profile=profile,
+                                    artist_voice=artist_voice)
             )
             subject, body = copy.subject, copy.body
             if brand_voice_context:

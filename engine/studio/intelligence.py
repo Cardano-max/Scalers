@@ -104,6 +104,23 @@ def campaign_intelligence(tenant_id: str, *, dsn: str | None = None) -> dict[str
             SELECT count(*) AS n FROM lead_conversations WHERE tenant_id = %s
         """, (tenant_id,))
 
+        # How many of the conversation leads ALREADY carry an analyst-classified
+        # objection — the real per-lead linkage: the analyst step's input carries the
+        # customer_id, its run's row carries the tenant, and lead_conversations keys
+        # the same (tenant_id, customer_id). This keeps the recommendation's wording
+        # matched to the evidence: conversations ON FILE is not the same claim as
+        # objections CLASSIFIED.
+        conv_classified = _q(conn, """
+            SELECT count(DISTINCT ar.input->>'customer_id') AS n
+              FROM agent_runs ar
+              JOIN runs r ON r.run_id = ar.run_id AND r.tenant_id = %s
+             WHERE ar.role = 'analyst'
+               AND ar.output->>'primary_objection' IS NOT NULL
+               AND ar.output->>'primary_objection' NOT IN ('', 'none-found')
+               AND ar.input->>'customer_id' IN (
+                     SELECT customer_id FROM lead_conversations WHERE tenant_id = %s)
+        """, (tenant_id, tenant_id))
+
     # ── Recommendations: explicit rules, each carrying its evidence. ────────── #
     recs: list[dict[str, Any]] = []
     best = campaigns[0] if campaigns else None
@@ -131,13 +148,31 @@ def campaign_intelligence(tenant_id: str, *, dsn: str | None = None) -> dict[str
             "evidence": {"objection_counts": objections},
         })
     if conversations and int(conversations[0]["n"]) > 0:
+        # WORDING MATCHES THE EVIDENCE (truth-gap fix): the count is of conversations
+        # on file — whether they "carry real objections" is only known once the
+        # analyst has classified each lead, so say exactly which of the two we know.
+        n_conv = int(conversations[0]["n"])
+        n_classified = int(conv_classified[0]["n"]) if conv_classified else 0
+        if n_classified > 0:
+            why = (
+                f"{n_conv} verbatim conversation(s) on file; {n_classified} of those "
+                "leads already carry an analyst-classified objection"
+            )
+        else:
+            why = (
+                f"{n_conv} verbatim conversation(s) on file — run the reactivation "
+                "pass to classify each"
+            )
         recs.append({
             "recommend": (
                 "Reactivation pass over the imported conversation cohort — one strategy "
                 "per lead from their REAL thread"
             ),
-            "why": f"{conversations[0]['n']} verbatim conversation(s) on file carry real objections",
-            "evidence": {"lead_conversations": int(conversations[0]["n"])},
+            "why": why,
+            "evidence": {
+                "lead_conversations": n_conv,
+                "leads_with_classified_objection": n_classified,
+            },
         })
     if competitors:
         recs.append({

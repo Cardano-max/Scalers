@@ -138,13 +138,46 @@ def iso(value: Any) -> str:
     return str(value)
 
 
+def _fmt_secs(secs: float) -> str:
+    if secs < 60:
+        return f"{secs:.1f}s"
+    mins, rem = divmod(int(secs), 60)
+    return f"{mins}m {rem}s"
+
+
 def duration(created: Any, updated: Any) -> str | None:
     if not isinstance(created, datetime) or not isinstance(updated, datetime):
         return None
     secs = (updated - created).total_seconds()
     if secs < 0:
         return None
-    if secs < 60:
-        return f"{secs:.1f}s"
-    mins, rem = divmod(int(secs), 60)
-    return f"{mins}m {rem}s"
+    return _fmt_secs(secs)
+
+
+# A span shorter than this is indistinguishable from a single-write timestamp pair
+# (created_at ≈ updated_at), so it is NOT treated as a real measured duration.
+_MIN_REAL_SPAN_SECONDS = 1.0
+
+
+def run_duration(
+    created: Any, updated: Any, first_step: Any, last_step: Any
+) -> str | None:
+    """The HONEST run duration for the runs listing/detail.
+
+    Studio campaign runs materialize their ``runs`` row in ONE write at completion,
+    so ``created_at ≈ updated_at`` there — a "0.0s" derived from that pair is a
+    fabricated duration over 30-60s of real work. The real signal for those runs is
+    the run's own step span: ``min(created_at)..max(created_at)`` of its
+    ``agent_runs``. Preference order:
+
+      * the runs-row span, when it is meaningfully positive (a row genuinely opened
+        at start and finished at end);
+      * else the agent_runs step span, when the run has 2+ timestamped steps;
+      * else ``None`` — an honest unknown, NEVER a fake ``0.0s``.
+    """
+    for lo, hi in ((created, updated), (first_step, last_step)):
+        if isinstance(lo, datetime) and isinstance(hi, datetime):
+            secs = (hi - lo).total_seconds()
+            if secs >= _MIN_REAL_SPAN_SECONDS:
+                return _fmt_secs(secs)
+    return None

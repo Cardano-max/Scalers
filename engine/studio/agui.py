@@ -213,11 +213,13 @@ _SYSTEM = (
     "architect, copywriter, an independent critic, and an Opus jury). Do NOT "
     "invent their output yourself.\n"
     "3. When the operator asks to RUN / launch / execute / kick off / 'let's go' on "
-    "the campaign (or approves the plan to run), call `run_campaign` ONCE. It runs "
-    "the real multi-agent spine (research -> strategy -> drafts -> critique -> "
-    "jury) and produces drafts + actions staged for approval; everything is HELD "
-    "and NOTHING is sent. The operator can watch each agent's step. Do NOT invent "
-    "its output.\n"
+    "the campaign (or approves the plan to run), call `run_campaign` ONCE. It "
+    "LAUNCHES the real multi-agent spine (research -> strategy -> drafts -> "
+    "critique -> jury) in the background and returns the run id IMMEDIATELY; the "
+    "run's drafts stage HELD for approval and NOTHING is sent. Reply right away "
+    "with the run id and point the operator at the Agency tab to watch each "
+    "agent's step live — do NOT claim drafts exist yet and do NOT invent results "
+    "(the run posts its honest summary to this thread when it finishes).\n"
     "4. You HAVE a customer database and a persistent memory layer. When the "
     "operator asks you to research / look up / target customers or leads, or refers "
     "to uploaded leads, churn-risk / lapsing customers, or 'these customers', you "
@@ -2148,6 +2150,15 @@ def _execute_provided_leads_sync(
     _conf_fired: set[str] = set()
     _sup_offer_code: str | None = None
     _sup_stopped: str | None = None
+    # The leads the run ACTUALLY selected/processed (the finalized cohort) — the real
+    # facts rows the cohort-claim conformance note compares the plan's claims against.
+    _cohort_seen: list[dict[str, Any]] = []
+
+    # SIGN-OFF IDENTITY GATE (truth-gap fix: a draft signed 'Cheers, Keebs' for a lead
+    # with NO Keebs link). An artist may front a draft ONLY when the operator
+    # EXPLICITLY set plan.artist; otherwise only the lead's own recorded artist
+    # affinity (customers.artist) may — a lead with neither signs as the studio.
+    _plan_artist = (plan.artist or "").strip() or None
 
     def _consume_directives() -> None:
         nonlocal campaign_angle, draft_goal, _sup_offer_code, _sup_stopped
@@ -2203,6 +2214,8 @@ def _execute_provided_leads_sync(
             break
         cust_id = facts["customer_id"]
         _sup_processed_ids.add(cust_id)
+        if all(f.get("customer_id") != cust_id for f in _cohort_seen):
+            _cohort_seen.append(facts)
         if cust_id in _sup_skip_ids:
             skipped.append(
                 {"row": None, "lead": facts.get("name") or cust_id,
@@ -2341,6 +2354,11 @@ def _execute_provided_leads_sync(
             )
             continue
 
+        # SIGN-OFF IDENTITY: which artist (if any) may front THIS draft — the
+        # operator's explicit plan.artist, else the lead's own recorded artist
+        # affinity. Neither -> None -> the copywriter prompt hard-forbids signing
+        # as / writing in the voice of any individual artist (studio voice only).
+        _artist_voice = _plan_artist or (str(facts.get("artist") or "").strip() or None)
         try:
             draft = build_outreach_draft(
                 facts,
@@ -2352,6 +2370,7 @@ def _execute_provided_leads_sync(
                 research=research,
                 profile=profile,
                 offer=chosen_offer,
+                artist_voice=_artist_voice,
             )
         except Exception as exc:  # honest per-row skip; never a crash or a fake draft
             skipped.append(
@@ -2613,6 +2632,46 @@ def _execute_provided_leads_sync(
             except Exception:
                 pass  # ledger is best-effort; the idempotency key is the real guard
 
+    # 2a-bis) COHORT-CLAIM CONFORMANCE (truth-gap fix): the cohort is finalized —
+    # compare what the plan CLAIMS about it (requested artist / assumed objection)
+    # against the selected leads' REAL attributes (customers.artist; the analysts'
+    # classified objections where available). A divergence lands as a supervisor-
+    # visible run step AND a plan-summary note ('0 of 3 selected leads have a Keebs
+    # history; …'). It surfaces the truth; it NEVER blocks the run.
+    cohort_note: str | None = None
+    try:
+        from studio.supervisor_control import check_cohort_claim
+
+        try:
+            from studio.artists_directory import list_artists
+
+            _roster = [
+                str(a.get("name")) for a in list_artists(tenant_id, dsn=dsn) if a.get("name")
+            ]
+        except Exception:
+            _roster = []
+        _objs_by_lead = {
+            (ar.get("input") or {}).get("customer_id"):
+                (ar.get("output") or {}).get("primary_objection")
+            for ar in agent_runs
+            if ar.get("role") == "analyst"
+        }
+        _claim = check_cohort_claim(plan, _cohort_seen, _objs_by_lead, roster=_roster)
+        if _claim is not None:
+            cohort_note = f"note: {_claim['detail']} — {_claim['question']}"
+            _rec(
+                "supervisor",
+                "conformance:cohort",
+                {"rule": _claim["rule"]},
+                {
+                    "finding": _claim["detail"],
+                    "question": _claim["question"],
+                    "blocking": False,
+                },
+            )
+    except Exception:
+        cohort_note = None  # the note is additive evidence; never break a real run
+
     # 2b) PROGRESS-AWARE REPLAN (P1.5 blueprint #3, limited-commitment — NOT reflect-every-
     # step). After the loop has accumulated real evidence, ``maybe_replan`` compares the
     # analyst's MEASURED dominant objection against the blueprint's ASSUMPTION under HARD
@@ -2844,7 +2903,12 @@ def _execute_provided_leads_sync(
         "board": board.model_dump(),
         "artwork": selected_artwork,
         "artwork_note": artwork_note,
-        "step_notes": ([f"artwork: {artwork_note}"] if artwork_note else [])
+        # Cohort-claim conformance (truth-gap fix): the supervisor-visible divergence
+        # note when the selected leads don't match the plan's artist/objection claim
+        # (None = the cohort matches the claim). Also emitted below in step_notes.
+        "cohort_note": cohort_note,
+        "step_notes": ([cohort_note] if cohort_note else [])
+        + ([f"artwork: {artwork_note}"] if artwork_note else [])
         + ([
             f"artwork attached to every staged draft: asset {selected_artwork.get('assetId')}"
             + (f" ({selected_artwork.get('vlmSummary')})" if selected_artwork.get("vlmSummary") else "")
@@ -2944,6 +3008,28 @@ def _persist_campaign_spec(
         pass
 
 
+# The FastAPI app the studio is mounted on — stashed by ``mount_studio_agui`` so the
+# chat host's ``run_campaign`` tool can launch a background run on the SAME registry
+# the ``GET /studio/run/{id}`` poller reads. When no app is mounted (hermetic tests /
+# direct agent runs) a module-level stand-in keeps the registry alive in-process.
+_MOUNTED_APP: Any | None = None
+_FALLBACK_APP: Any | None = None
+
+
+def _background_app() -> Any:
+    """The app object background launches register on: the mounted app when the
+    studio is mounted, else a persistent module-level stand-in (same shape: it only
+    needs ``.state``), so the launch path is identical either way."""
+    global _FALLBACK_APP
+    if _MOUNTED_APP is not None:
+        return _MOUNTED_APP
+    if _FALLBACK_APP is None:
+        from types import SimpleNamespace
+
+        _FALLBACK_APP = SimpleNamespace(state=SimpleNamespace())
+    return _FALLBACK_APP
+
+
 async def launch_studio_run(
     app,
     dsn: str | None,
@@ -2988,7 +3074,12 @@ def start_registered_run(
     if not hasattr(app.state, "_studio_runs"):
         app.state._studio_runs = {}
     runs_registry: dict[str, dict] = app.state._studio_runs
-    runs_registry[run_id] = {"status": "running", "summary": None, "error": None}
+    # tenant_id/session_id ride on the registry entry so the supervisor fleet board can
+    # attribute an IN-FLIGHT run (agent_runs steps, no runs row yet) to its real tenant.
+    runs_registry[run_id] = {
+        "status": "running", "summary": None, "error": None,
+        "tenant_id": tenant_id, "session_id": session_id,
+    }
     try:  # let the live-state tools report this in-flight run's status (item 4)
         from studio.live_state import set_runs_registry
 
@@ -3018,6 +3109,8 @@ def start_registered_run(
                     else "; ".join(f"{f['agent']}: {f['error']}" for f in _failures)
                     or "required step failed"
                 ),
+                "tenant_id": tenant_id,
+                "session_id": session_id,
             }
             try:
                 await asyncio.to_thread(
@@ -3030,6 +3123,8 @@ def start_registered_run(
                 "status": "error",
                 "summary": None,
                 "error": f"{type(exc).__name__}: {exc}",
+                "tenant_id": tenant_id,
+                "session_id": session_id,
             }
 
     asyncio.create_task(_bg())
@@ -3037,23 +3132,42 @@ def start_registered_run(
 
 @studio_agent.tool
 async def run_campaign(ctx: RunContext[StudioDeps]) -> str:
-    """Run the REAL, traced campaign for the CURRENT plan. Call when the operator asks
-    to RUN / launch / execute / kick off the campaign (or approves the plan to run).
+    """LAUNCH the REAL, traced campaign for the CURRENT plan in the BACKGROUND and
+    return IMMEDIATELY with the run id. Call when the operator asks to RUN / launch /
+    execute / kick off the campaign (or approves the plan to run).
 
-    Classifies the plan to a registered archetype, then runs the WIRED Phase-A spine
-    (research -> strategy -> draft x N (capped) -> independent critique -> route pinned
-    to HOLD -> queue). Writes per-role ``agent_runs`` + queued ``assets`` + PENDING
-    ``actions`` and materializes a ``runs`` row whose steps are the per-agent traces
-    (watchable node-by-node in the Runs tab). NOTHING IS SENT — every output is
-    HELD/PENDING behind approve-first. Returns a short honest summary."""
-    summary = await asyncio.to_thread(
-        _execute_campaign_sync,
-        ctx.deps.state,
+    The launch reuses the SAME background path the ``POST /studio/run`` button uses
+    (:func:`start_registered_run`): the run registers on the shared registry, executes
+    the WIRED Phase-A spine off-thread (research -> strategy -> draft x N -> independent
+    critique -> route pinned to HOLD -> queue), and its per-agent steps land in
+    ``agent_runs`` incrementally — watchable live via the existing
+    ``GET /studio/run/{run_id}`` polling (the Agency tab). Drafts still land HELD /
+    PENDING behind approve-first; NOTHING IS SENT. When the run finishes, its honest
+    summary is persisted as a host turn in this thread.
+
+    This tool no longer blocks the chat stream for the whole multi-agent run (the old
+    behavior left the operator staring at dead air for minutes). Reply to the operator
+    NOW with the run id and where to watch; do NOT claim any drafts exist yet."""
+    campaign_id = f"camp_{uuid.uuid4().hex[:12]}"
+    run_id = f"team-{campaign_id}-{uuid.uuid4().hex[:12]}"
+    start_registered_run(
+        _background_app(),
+        ctx.deps.dsn,
         ctx.deps.session_id,
         ctx.deps.tenant_id,
-        ctx.deps.dsn,
+        ctx.deps.state,
+        run_id,
     )
-    return _summary_text(summary)
+    launch = {"run_id": run_id, "status": "launched", "watch": "Agency tab"}
+    return (
+        f"{json.dumps(launch)}\n"
+        f"Campaign run {run_id} is LAUNCHED and executing in the background — nothing "
+        "has been drafted or sent yet. The operator can watch each agent land live in "
+        "the Agency tab (the run view already polls this run id). Drafts will stage "
+        "HELD in the Review Queue behind approve-first, and I will post the run's "
+        "honest summary into this thread when it finishes. Tell the operator the run "
+        "id and where to watch; do not invent results."
+    )
 
 
 @studio_agent.tool
@@ -3947,6 +4061,10 @@ def mount_studio_agui(app) -> None:
     if getattr(app.state, "_studio_agui_mounted", False):
         return
     app.state._studio_agui_mounted = True
+    # Let the chat host's run_campaign tool launch background runs on THIS app's
+    # registry (the one GET /studio/run/{id} polls) instead of blocking its turn.
+    global _MOUNTED_APP
+    _MOUNTED_APP = app
 
     @app.post("/studio/agui")
     async def studio_agui_route(request: Request):  # noqa: ANN202
