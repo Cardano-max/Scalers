@@ -547,7 +547,9 @@ def enrich_post_actions(
 ) -> int:
     """Land artist + artwork + grounded hashtags/CTA on every staged POST action of
     ``run_id`` (context JSON, merged — an existing text context is preserved under
-    ``note``). Returns the number of rows updated. Best-effort; never sends."""
+    ``note``). Also lands the flat ``artwork_asset_id`` (+ ``broll_asset_id`` when
+    a real video is on file) so the social ready queue can resolve the draft's
+    media. Returns the number of rows updated. Best-effort; never sends."""
     import psycopg
 
     fields: dict[str, Any] = {}
@@ -559,6 +561,18 @@ def enrich_post_actions(
             "artifactId": artwork.get("artifactId"),
             "vlmSummary": artwork.get("vlmSummary"),
         }
+        # Flat mirror of the SAME real asset id under the stable key the social
+        # ready queue resolves (studio.social_queue) — one parse path for every
+        # draft-creation route, never a second source of truth.
+        if artwork.get("assetId"):
+            fields["artwork_asset_id"] = artwork.get("assetId")
+    # Optional b-roll reference: the newest REAL video asset on file for this
+    # artist — the same rows the brief's b-roll block cites. load_broll is
+    # honest-empty ([]) when none exist / the store is unavailable, so this key
+    # appears only when a real video row backs it.
+    broll = load_broll(tenant_id, artist, dsn=dsn)
+    if broll:
+        fields["broll_asset_id"] = broll[0]["asset_id"]
     try:
         from studio.post_campaign import voice_post_fields
 

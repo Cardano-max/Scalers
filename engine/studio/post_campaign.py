@@ -33,6 +33,7 @@ supervisor wires it into the agui run loop separately. It does NOT touch
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass, field
@@ -635,6 +636,26 @@ def _context_blob(pick: ArtworkPick | None) -> str:
     return f"Artwork: {pick.image_ref} (asset {pick.asset_id}). Why: {pick.why}"
 
 
+def _context_payload(pick: ArtworkPick | None, broll_asset_id: str | None) -> str:
+    """The action ``context`` JSON: the readable note (:func:`_context_blob`,
+    preserved under ``note`` — the same key :func:`studio.ig_pipeline.
+    enrich_post_actions` folds legacy text into) plus the machine-readable media
+    references the social ready queue resolves: ``artwork_asset_id`` (the picked
+    piece's REAL ``assets`` row id) and the optional ``broll_asset_id`` (the
+    newest real video on file). Ids are never invented — no pick, no key."""
+    payload: dict[str, Any] = {"note": _context_blob(pick)}
+    if pick is not None:
+        payload["artwork_asset_id"] = pick.asset_id
+        payload["artwork"] = {
+            "assetId": pick.asset_id,
+            "styles": list(pick.styles),
+            "motifs": list(pick.motifs),
+        }
+    if broll_asset_id:
+        payload["broll_asset_id"] = broll_asset_id
+    return json.dumps(payload, ensure_ascii=False)
+
+
 def draft_studio_posts(
     *,
     tenant_id: str = _DEFAULT_TENANT,
@@ -666,6 +687,13 @@ def draft_studio_posts(
     voice = resolve_voice(tenant_id)
     run_id = f"studio-post:{tenant_id}:{slug}:{theme_key}"
 
+    # Optional b-roll reference for the ready queue: the newest REAL video asset
+    # on file for this artist (honest-empty [] when none / store unavailable).
+    from studio.ig_pipeline import load_broll
+
+    broll = load_broll(tenant_id, artist_name, dsn=resolved_dsn)
+    broll_asset_id = broll[0]["asset_id"] if broll else None
+
     drafts: list[dict[str, Any]] = []
     for platform in platforms:
         cap = compose_caption(
@@ -687,7 +715,7 @@ def draft_studio_posts(
             worker="studio_post_campaign",
             target=None,
             draft=draft_text,
-            context=_context_blob(pick),
+            context=_context_payload(pick, broll_asset_id),
             conf=None,
             threshold=None,
             esc_kind="approval_required",

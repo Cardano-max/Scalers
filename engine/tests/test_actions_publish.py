@@ -203,14 +203,50 @@ def test_facebook_success_path_marks_published(patched_store):
 
 
 def test_instagram_post_without_image_fails_honestly(patched_store, monkeypatch):
-    # IG is wired to the real connector now. A post with no public image source
-    # fails HONESTLY with a clear blocker (no network touched), never a fake send.
+    # With operator Meta credentials present (the ready-queue credential gate
+    # passes), a post with no public image source still fails HONESTLY with a
+    # clear blocker (no network touched), never a fake send.
     monkeypatch.delenv("DEMO_IG_IMAGE_URL", raising=False)
+    monkeypatch.setenv("META_PAGE_TOKEN", "tok_unit_test")
+    monkeypatch.setenv("META_IG_USER_ID", "17840000000000000")
     patched_store(_pending(channel="instagram", type="post", id="act_ig"))
     out = approve_and_publish("act_ig")
     assert out.status == "failed"
     assert "jpeg" in out.last_error.lower() or "image" in out.last_error.lower()
     assert out.outcome_kind != "success"
+
+
+def test_instagram_post_without_meta_credentials_refuses_fail_closed(patched_store, monkeypatch):
+    # Social ready queue: no operator Meta credentials → the approve REFUSES
+    # BEFORE the exactly-once claim. The draft stays PENDING (waiting in the
+    # ready queue) with the honest reason on last_error — never sent, never
+    # failed-silent, no connector ever built.
+    for key in ("META_PAGE_TOKEN", "META_IG_USER_ID", "META_PAGE_ID"):
+        monkeypatch.delenv(key, raising=False)
+    store = patched_store(_pending(channel="instagram", type="post", id="act_ig_nocred"))
+    with pytest.raises(publish.MetaCredentialsMissingError) as ei:
+        approve_and_publish("act_ig_nocred")
+    assert "META_PAGE_TOKEN" in str(ei.value) and "META_IG_USER_ID" in str(ei.value)
+    row = store.rows["act_ig_nocred"]
+    assert row.status == "pending"  # not claimed — re-approvable once creds arrive
+    assert "Meta credentials not configured" in (row.last_error or "")
+
+
+def test_ig_alias_channel_hits_the_meta_gate_not_unknown_channel(patched_store, monkeypatch):
+    # REAL campaign rows carry channel 'ig' (planner vocabulary). The alias must
+    # fold into the instagram gate: no credentials → fail-closed refusal with the
+    # instagram env keys named, row stays pending. Without the fold, 'ig' would
+    # fall through to "unknown channel" and be marked failed — a silent loss of
+    # a complete, waiting post package.
+    for key in ("META_PAGE_TOKEN", "META_IG_USER_ID", "META_PAGE_ID"):
+        monkeypatch.delenv(key, raising=False)
+    store = patched_store(_pending(channel="ig", type="post", id="act_ig_alias"))
+    with pytest.raises(publish.MetaCredentialsMissingError) as ei:
+        approve_and_publish("act_ig_alias")
+    assert "META_IG_USER_ID" in str(ei.value)
+    row = store.rows["act_ig_alias"]
+    assert row.status == "pending"
+    assert "unknown channel" not in (row.last_error or "")
 
 
 def test_instagram_comment_reply_sent_via_connector(patched_store):

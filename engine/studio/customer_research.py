@@ -1055,6 +1055,17 @@ def _build_email_prompt(
     else:
         research_lines = "- (none — no verified research available for this studio)"
 
+    # Evidence-cited PUBLIC-WEB ENRICHMENT (operator-initiated lookup, stored as a
+    # customer memory): surfaced clearly labeled WITH its URLs so the draft can
+    # cite real public facts (their business, their public creative interests)
+    # instead of guesses. Honest-empty ([]) when the lead has no enrichment memory.
+    try:
+        from studio.lead_enrichment import enrichment_prompt_lines
+
+        enrichment_block = enrichment_prompt_lines(facts)
+    except Exception:
+        enrichment_block = []
+
     # Prior-relationship evidence: real history on file (tattoos / lifecycle / win-back
     # persona signal) or a real prior conversation (the grounded warm-lead profile).
     # This gates BOTH the goal line and the first-contact rule below.
@@ -1168,13 +1179,15 @@ def _build_email_prompt(
         "",
         f"# RESEARCH (verbatim web snippets about the {recipient_word} — cite-only context):",
         research_lines,
+        *enrichment_block,
         "",
         *angle_block,
         "",
         "# HARD GROUNDING RULES — no fabrication:",
         "- You may reference ONLY the hard facts above, the SOFT signals (marked as "
         "impressions, never as fact), the REAL offer above if one is listed, and a "
-        "research snippet ONLY when it is unmistakably about them.",
+        "research or public-web-enrichment snippet ONLY when it is unmistakably "
+        "about them.",
         f"- Do NOT invent or imply anything NOT listed above about the {recipient_word}'s "
         "style, artists, awards, reputation, clientele, discounts, or history. If a "
         "specific is missing, stay general and honest rather than guessing.",
@@ -1667,6 +1680,18 @@ def build_outreach_draft(
         grounding.append(f"last_tattoo_style={last_style}")
     if win_back:
         grounding.append("win_back_candidate=true")
+    # Evidence-cited public-web enrichment (operator-initiated, stored as a customer
+    # memory): its source URLs join the grounding audit so the operator can verify
+    # exactly which public evidence this draft was allowed to lean on.
+    try:
+        from studio.lead_enrichment import enrichment_memory
+
+        _enr = enrichment_memory(facts)
+    except Exception:
+        _enr = None
+    if _enr is not None:
+        for _u in (_enr.get("metadata") or {}).get("urls", [])[:5]:
+            grounding.append(f"enrichment:{_u}")
 
     # --- per-lead angle: the DISTINCT basis this draft leads with (real-only) ----- #
     # Resolve research up front so the angle can prefer this lead's verified public

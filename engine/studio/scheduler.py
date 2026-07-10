@@ -111,7 +111,11 @@ def due_actions(*, dsn: str | None = None, limit: int = MAX_PUBLISH_PER_TICK) ->
 def publish_due(*, dsn: str | None = None) -> dict[str, Any]:
     """One scheduler sweep: publish every due draft through the REAL approve
     path. Per-draft isolation — one failure never blocks the rest."""
-    from actions.publish import TestModeSendBlockedError, approve_and_publish
+    from actions.publish import (
+        MetaCredentialsMissingError,
+        TestModeSendBlockedError,
+        approve_and_publish,
+    )
     from actions.store import get_action
 
     published: list[dict[str, Any]] = []
@@ -128,9 +132,11 @@ def publish_due(*, dsn: str | None = None) -> dict[str, Any]:
                 "mode": getattr(row, "mode", None),
                 "target": getattr(row, "target", None),
             })
-        except TestModeSendBlockedError as exc:
-            # Gate refused: clear the schedule so it never silently retries; the
-            # refusal reason is already on the row (publish wrote last_error).
+        except (TestModeSendBlockedError, MetaCredentialsMissingError) as exc:
+            # A pre-claim gate refused (tenant TEST MODE, or Meta credentials not
+            # configured): clear the schedule so it never silently retries; the
+            # refusal reason is already on the row (publish wrote last_error) and
+            # the draft stays PENDING in the ready queue.
             cancel_schedule(action_id, dsn=dsn)
             blocked.append({"actionId": action_id, "reason": str(exc)})
         except Exception as exc:  # noqa: BLE001 — per-draft isolation
