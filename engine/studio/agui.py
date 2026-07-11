@@ -1979,9 +1979,12 @@ def _execute_campaign_sync(
             )
             if _cgate_state == "pause":
                 try:
+                    # Leg-labeled: ig AND fb children can pause in the same launch —
+                    # two identical unlabeled questions read as a stutter.
                     _log_turn(
                         dsn, session_id, "host",
-                        str(_cgate_payload.get("question") or "Competitor pick needed."),
+                        f"[{decision.channel}] "
+                        + str(_cgate_payload.get("question") or "Competitor pick needed."),
                         None,
                     )
                 except Exception:
@@ -2032,9 +2035,12 @@ def _execute_campaign_sync(
             )
             if _gate_state == "pause":
                 try:
+                    # Leg-labeled (same rule as the competitor pause above).
                     _log_turn(
                         dsn, session_id, "host",
-                        str(_gate_payload.get("question") or "Artwork pick needed."), None,
+                        f"[{decision.channel}] "
+                        + str(_gate_payload.get("question") or "Artwork pick needed."),
+                        None,
                     )
                 except Exception:
                     pass
@@ -5261,6 +5267,8 @@ def mount_studio_agui(app) -> None:
                 "runId": info["runId"],
                 "campaignId": info["campaignId"],
                 "status": info["status"],
+                # Multi-channel fan-out: each channel's own run id (additive).
+                "children": info.get("children") or [],
             }
         )
 

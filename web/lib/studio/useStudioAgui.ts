@@ -559,12 +559,19 @@ export function useStudioAgui(
   // queued. They were stuck behind a question the operator was never shown. So: when we
   // are idle, ASK the backend which run belongs to this session, and attach to it.
   useEffect(() => {
-    if (runningCampaign || runState) return;
+    // Keep watching while idle — including AFTER a run finished: a SECOND typed
+    // launch in the same mounted session must auto-attach too (only a run that is
+    // actively being polled suppresses the probe). Same-id re-attach is skipped so
+    // a finished run never re-binds in a loop.
+    const terminal =
+      runState != null && (runState.status === 'completed' || runState.status === 'error');
+    if (runningCampaign || (runState != null && !terminal)) return;
     let cancelled = false;
+    const boundId = runState?.runId ?? null;
     const tick = async () => {
       try {
         const found = await fetchActiveRunId(aguiUrl, sessionId);
-        if (!cancelled && found) attachRun(found);
+        if (!cancelled && found && found !== boundId) attachRun(found);
       } catch {
         // transient — the next tick retries.
       }

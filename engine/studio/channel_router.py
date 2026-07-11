@@ -190,14 +190,20 @@ def route_pipeline(plan: Any) -> RouteDecision:
             )
         return RouteDecision(Pipeline.EMAIL, True, reason)
 
-    # 3. Artist/artwork ATTACHMENTS with no built channel chosen — the STANDALONE
+    # 3. Artist/artwork ATTACHMENTS with NO channel chosen at all — the STANDALONE
     #    artist/artwork pipeline still isn't a supervisor-invoked run. Artwork attach
-    #    IS built inside the two real pipelines (provided-lead email above; the IG
-    #    spine's artwork gate below reaches it when the plan names Instagram WITHOUT
-    #    artwork phrasing), so the honest not-built here points the operator at them.
-    #    A posting-only channel set skips this too — its artwork ask IS the built
-    #    artwork gate on the ig/fb spine below, never a not-built dead end.
-    if not posting_only and (
+    #    IS built inside the real pipelines (provided-lead email above; the ig/fb
+    #    spine's artwork gate below), so the honest not-built here points the
+    #    operator at them. ANY stated channel skips this rule: channels are the
+    #    operator's explicit intent, and artwork words are then an ATTRIBUTE of
+    #    that channel's run ('attach images' on an email/ig leg) — a real 3-channel
+    #    launch posted this not-built message into the thread because 'attach
+    #    images' phrasing leaked into one child's text fields.
+    stated_channels = [
+        str(c).strip() for c in (getattr(plan, "channels", None) or [])
+        if str(c or "").strip()
+    ]
+    if not stated_channels and (
         attach_artwork or _has(text, "artwork", "attachment", "attachments", "portfolio")
     ):
         return RouteDecision(

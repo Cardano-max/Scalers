@@ -76,6 +76,9 @@ export interface OrchestrateResult {
   runId?: string;
   campaignId?: string;
   status?: string;
+  /** Multi-channel fan-out: each channel's own child run id (informational — the
+   *  panel polls the PARENT runId and the engine fans the children in). */
+  children?: Array<{ channel: string; runId: string }>;
   gate?: { launch: boolean; armed: boolean; classification: string; reason: string };
 }
 

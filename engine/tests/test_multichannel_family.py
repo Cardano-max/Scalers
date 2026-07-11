@@ -191,3 +191,16 @@ def test_parent_of_and_composite_status() -> None:
     assert composite_status(["completed", "error"]) == "error"
     assert composite_status(["completed", "not_built"]) == "completed"
     assert composite_status([]) == "unknown"
+
+def test_stated_channels_never_dead_end_on_artwork_words() -> None:
+    # 'attach images' phrasing set attach_artwork=true on the shared plan and the
+    # EMAIL leg of a real 3-channel launch dead-ended in "standalone artist/artwork
+    # pipeline isn't built" while its siblings ran. Stated channels are the
+    # operator's intent — artwork words are an attribute, never a channel ask.
+    email = CampaignPlan(channels=["email"], attach_artwork=True)
+    assert route_pipeline(email).pipeline is Pipeline.EMAIL
+    assert route_pipeline(email).built is True
+    # The honest not-built survives ONLY for a channel-less artwork ask.
+    bare = CampaignPlan(goal="run a campaign for this artist with attachments")
+    decision = route_pipeline(bare)
+    assert decision.built is False and decision.pipeline is Pipeline.ARTIST_ARTWORK
