@@ -96,12 +96,21 @@ _EMAIL_OPENER_RE = re.compile(
     )""",
     re.IGNORECASE | re.VERBOSE,
 )
+#: THE MESSENGER VOICE — the deepest version of this bug, and the one a phrase-list misses.
+#: A caption is the STUDIO speaking. It is not a person relaying a message on the artist's
+#: behalf. Ban the phrase "wanted me to reach out" and the model simply writes "Keebs wanted
+#: me to share" — same voice, different words, and it shipped. So the PATTERN is banned:
+#: any "<someone> wanted/asked me to <verb>" construction, whoever is named.
+_MESSENGER_RE = re.compile(
+    r"\b(wanted|asked|told)\s+me\s+to\b|\bon\s+behalf\s+of\b|\bwanted\s+(you\s+)?to\s+(know|share|tell)\b",
+    re.IGNORECASE,
+)
 #: Message-shaped phrases anywhere in a caption — the register of a 1:1 note, not a post.
 _EMAIL_REGISTER = (
-    "wanted me to reach out",
-    "wanted to reach out",
     "reaching out",
+    "reach out to you",
     "just checking in",
+    "checking in with you",
     "wanted to follow up",
     "following up",
     "hope you're well",
@@ -109,6 +118,7 @@ _EMAIL_REGISTER = (
     "hope this finds you",
     "let me know if you",
     "thought of you",
+    "as promised",
 )
 
 
@@ -139,6 +149,19 @@ def social_post_voice(platform: Platform) -> FieldValidator:
                     f"a {platform.value} caption is a PUBLIC post, not a message: it opens "
                     f"with an email-style greeting ({first_line[:40]!r}). Open with a hook "
                     "about what is IN the picture — no salutation, no addressee.",
+                )
+            )
+        # The MESSENGER voice, anywhere in the caption. A caption is the studio speaking —
+        # not someone relaying a message on the artist's behalf ("Keebs wanted me to share…").
+        m = _MESSENGER_RE.search(caption)
+        if m:
+            issues.append(
+                ValidationIssue(
+                    "social_post_voice",
+                    Severity.ERROR,
+                    f"{m.group(0)!r} — the caption is written as if RELAYING a message on "
+                    "the artist's behalf. A post is the studio speaking in its own voice, "
+                    "not an intermediary passing something along.",
                 )
             )
         low = caption.lower()

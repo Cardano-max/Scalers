@@ -2636,6 +2636,31 @@ def _execute_provided_leads_sync(
     # Picked-leads and CSV paths pin the quota to the operator's explicit rows and
     # never substitute; only the DB-cohort path has a ``limit`` and may refill.
     _operator_rows = bool(requested_ids or picked_handles)
+
+    # A NAMED COHORT IS CLOSED. NEVER SUBSTITUTE A PERSON THE OPERATOR DID NOT CHOOSE.
+    #
+    # The refill below exists for the loose case — "send 10 personalized emails to my
+    # churn-risk customers" — where the operator asked for a COUNT from a cohort they
+    # described but did not enumerate, and topping the list up to 10 is what they meant.
+    #
+    # It was catastrophically wrong for the case that actually shipped. The operator said
+    # "win back three Keebs customers from the imported conversation threads, use their real
+    # conversations", the host chose Amanda, Lauren and Todd — and all three were then
+    # skipped (two already had a pending draft, one tripped the fake-personalization guard).
+    # The executor, still owing three drafts, walked on down the customer table and wrote
+    # personalized win-back emails to Katie, Filiberto and Jazmyne: three people the operator
+    # had never selected, never seen, and would have emailed on approval. The run log even
+    # says it out loud — "Researching Katie Hailey (4 of 3)". A count is a CAP on the
+    # operator's cohort, not a quota to be filled from strangers.
+    #
+    # So the cohort is CLOSED whenever the operator specified WHO: named leads, uploaded
+    # rows, or "use their imported conversations". A skip is then reported honestly in the
+    # ledger and the run stages fewer drafts — which is the correct, auditable outcome.
+    _closed_cohort = bool(
+        _operator_rows
+        or (getattr(plan, "leads", None) or [])
+        or getattr(plan, "use_conversation_history", None) is True
+    )
     _quota = (
         min(int(expected), effective_cap) if _operator_rows
         else min(limit, effective_cap)
@@ -2647,8 +2672,10 @@ def _execute_provided_leads_sync(
         nonlocal _refilled
         for _f in leads:
             yield _f
-        if _operator_rows:
-            return  # operator-provided rows only — no substitution
+        if _closed_cohort:
+            # The operator chose these people. If some were skipped, the run stages fewer
+            # drafts and the skip ledger says why. It does NOT go and find someone else.
+            return
         while len(pending) < _quota and _refilled < _refill_cap:
             _batch = contactable_leads(
                 tenant_id,
@@ -2668,6 +2695,18 @@ def _execute_provided_leads_sync(
                     return
                 picked.add(_f["customer_id"])
                 _refilled += 1
+                # SUBSTITUTION IS NEVER SILENT. Even on the loose cohort, a person the
+                # operator did not pick must arrive on the ledger as a substitution, with
+                # their name — so "3 drafts" can never quietly mean "3 strangers".
+                skipped.append({
+                    "row": None,
+                    "lead": _f.get("name") or _f.get("customer_id"),
+                    "reason": (
+                        "SUBSTITUTED to reach the requested count — you did not select this "
+                        "person; they were taken from the contactable customer list because "
+                        "a selected lead was skipped"
+                    ),
+                })
                 yield _f
         # SUPERVISOR REDO QUEUE: re-process leads the supervisor ordered redone —
         # only ones this run has not already handled (a staged lead's re-draft is
@@ -3189,6 +3228,43 @@ def _execute_provided_leads_sync(
             if draft["channel"] in ("gmail", "email") and selected_artwork.get("artifactId"):
                 _context_obj["attachment_artifact_id"] = selected_artwork["artifactId"]
         _context = _json.dumps(_context_obj)
+        # RE-RUNNING THE SAME CAMPAIGN IN TEST MODE MUST WORK.
+        #
+        # One pending draft per recipient is the right guard on the way to a real inbox: it
+        # is what stops the same customer being emailed twice. But in TEST MODE nothing
+        # reaches a real customer at all — and the guard then makes the system untestable.
+        # Re-run the same campaign and every lead comes back "already has a pending draft",
+        # which is exactly what let three chosen leads be skipped and three strangers
+        # substituted in their place.
+        #
+        # So in TEST MODE the earlier HELD draft for this recipient is SUPERSEDED — retired
+        # with a reason that names the run that replaced it — and the fresh draft is staged.
+        # In LIVE mode the guard stands untouched: the protection exists precisely for the
+        # case where a send can actually reach someone.
+        if _tenant_in_test_mode(tenant_id, dsn):
+            try:
+                _superseded = _supersede_pending_for(
+                    tenant_id, draft["target"], run_id=run_id, dsn=dsn
+                )
+                if _superseded:
+                    # Visible, not silent: the operator can see WHICH earlier draft this
+                    # run replaced, so a re-run never quietly rewrites their queue.
+                    _rec(
+                        "supervisor",
+                        "test_mode:supersede",
+                        {"customer_id": cust_id, "target": draft["target"]},
+                        {
+                            "replaced_action": _superseded,
+                            "lead": facts.get("name") or cust_id,
+                            "note": (
+                                "TEST MODE — replaced this recipient's earlier held draft so "
+                                "the campaign could be re-run. In LIVE mode the "
+                                "one-pending-draft-per-recipient guard stands."
+                            ),
+                        },
+                    )
+            except Exception:
+                pass  # never let the demo convenience break a real run
         _staged = record_pending_action(
             tenant_id=tenant_id,
             decision_id=None,
@@ -3873,6 +3949,55 @@ def _parent_run_id(run_id: str) -> str:
     from studio.run_children import parent_of
 
     return parent_of(run_id) or run_id
+
+
+def _tenant_in_test_mode(tenant_id: str, dsn: str | None = None) -> bool:
+    """Is this tenant's send posture TEST MODE (nothing can reach a real customer)?
+
+    Read from the tenant registry — the same row the send gate itself enforces, never a
+    client-side toggle. Fail-CLOSED: if the posture cannot be read we assume LIVE, so a
+    convenience that is only safe in test mode can never be granted by an error."""
+    try:
+        from tenants.store import get_tenant
+
+        row = get_tenant(tenant_id, dsn=dsn)
+    except Exception:
+        return False
+    if not row:
+        return False
+    return bool(row.get("test_mode", True))
+
+
+def _supersede_pending_for(
+    tenant_id: str, target: str | None, *, run_id: str, dsn: str | None = None
+) -> str | None:
+    """Retire the recipient's existing HELD draft so a fresh one can be staged. TEST MODE
+    only — the caller checks. Returns the retired action id, or None if there was none.
+
+    This is not a delete: the old row is marked ``rejected`` with a reason that names the
+    run which replaced it, so the queue's history stays readable."""
+    if not (target or "").strip():
+        return None
+    try:
+        import psycopg
+
+        with psycopg.connect(get_dsn() if dsn is None else dsn, autocommit=True) as conn:
+            row = conn.execute(
+                "SELECT id FROM actions WHERE tenant_id=%s AND target=%s AND status='pending' "
+                "ORDER BY created_at ASC LIMIT 1",
+                (tenant_id, target),
+            ).fetchone()
+            if not row or not row[0]:
+                return None
+            action_id = str(row[0])
+            conn.execute(
+                "UPDATE actions SET status='rejected', last_error=%s, updated_at=now() "
+                "WHERE id=%s",
+                (f"superseded in TEST MODE by run {run_id}", action_id),
+            )
+            return action_id
+    except Exception:
+        return None
 
 
 def leg_channel(run_id: str, parent_run_id: str) -> str | None:
