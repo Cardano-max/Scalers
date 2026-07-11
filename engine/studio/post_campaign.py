@@ -691,7 +691,9 @@ def draft_studio_posts(
     # on file for this artist (honest-empty [] when none / store unavailable).
     from studio.ig_pipeline import load_broll
 
-    broll = load_broll(tenant_id, artist_name, dsn=resolved_dsn)
+    broll = load_broll(
+        tenant_id, artist_name, theme_terms=theme_terms, dsn=resolved_dsn
+    )
     broll_asset_id = broll[0]["asset_id"] if broll else None
 
     drafts: list[dict[str, Any]] = []

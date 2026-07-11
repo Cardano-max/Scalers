@@ -368,3 +368,60 @@ def test_load_broll_is_tenant_scoped():
     finally:
         with psycopg.connect(dsn, autocommit=True) as conn:
             conn.execute("DELETE FROM assets WHERE id = %s", (vid,))
+
+
+def test_load_broll_theme_match_drops_off_theme_reel():
+    """A fine-line-botanical post must never carry an off-theme (Marvel) b-roll: with
+    a theme, load_broll surfaces only videos whose OWN subject overlaps the theme —
+    and shared TECHNIQUE ('realism') must not bridge a botanical brief to the Marvel
+    reel. Honest empty when nothing matches, so no off-theme reel is stamped."""
+    import psycopg
+
+    from studio.ig_pipeline import load_broll, _broll_theme_terms
+    from team.store import TeamStore
+
+    dsn = os.environ["ENGINE_DATABASE_URL"]
+    tenant = "t_brollth_" + uuid.uuid4().hex[:8]
+    marvel = "art_marvel_" + uuid.uuid4().hex[:8]
+    botan = "art_botan_" + uuid.uuid4().hex[:8]
+
+    TeamStore(dsn).setup()
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO assets (id, campaign_id, asset_type, content, status) "
+            "VALUES (%s, %s, 'studio_artwork', %s, 'library')",
+            (marvel, f"portfolio:{tenant}", json.dumps({
+                "artist": "Keebs", "media": "video",
+                "styles": ["black and grey realism"],
+                "motifs": ["Spider-Man mask", "Marvel forearm sleeve"],
+                "caption": "b-roll reveal reel of the Marvel sleeve",
+            })),
+        )
+        conn.execute(
+            "INSERT INTO assets (id, campaign_id, asset_type, content, status) "
+            "VALUES (%s, %s, 'studio_artwork', %s, 'library')",
+            (botan, f"portfolio:{tenant}", json.dumps({
+                "artist": "Keebs", "media": "video",
+                "styles": ["fine-line botanical"],
+                "motifs": ["Dahlia flower", "dragonfly"],
+                "caption": "slow pan over the botanical dahlia piece",
+            })),
+        )
+    try:
+        # The picked artwork is the botanical piece; its MOTIFS drive the theme.
+        artwork = {
+            "styles": ["color realism", "fine-line botanical"],
+            "motifs": ["black-eyed susans", "teal dragonfly"],
+        }
+        theme_terms = _broll_theme_terms(artwork=artwork, theme="fine-line botanical")
+        got = [b["asset_id"] for b in load_broll(tenant, "Keebs", theme_terms=theme_terms, dsn=dsn)]
+        # The botanical reel matches the theme; the Marvel reel (shares only the
+        # 'realism' technique token) is dropped.
+        assert botan in got
+        assert marvel not in got
+        # No theme at all -> newest-first, both surface (unchanged behavior).
+        untargeted = load_broll(tenant, "Keebs", dsn=dsn)
+        assert {b["asset_id"] for b in untargeted} == {marvel, botan}
+    finally:
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            conn.execute("DELETE FROM assets WHERE id = ANY(%s)", ([marvel, botan],))

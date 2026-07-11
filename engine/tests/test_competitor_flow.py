@@ -256,7 +256,9 @@ def test_pause_then_resume_state_machine():
         assert state == "pause"
         assert payload["kind"] == "competitor_pick"
         options = payload["options"]
-        assert 1 <= len(options) <= 6
+        from studio.competitor_flow import MAX_COMPETITOR_OPTIONS
+
+        assert 1 <= len(options) <= MAX_COMPETITOR_OPTIONS
         assert all(
             set(o.keys()) == {"postId", "handle", "caption", "url", "metrics",
                               "totalScore", "whyItWorked", "visualTags", "source"}
@@ -294,14 +296,16 @@ def test_pause_then_resume_state_machine():
 
 
 @_pg
-def test_scoring_order_respected_and_capped_at_six():
-    from studio.competitor_flow import top_competitor_options
+def test_scoring_order_respected_and_capped():
+    from studio.competitor_flow import MAX_COMPETITOR_OPTIONS, top_competitor_options
 
     tenant = "test_cmporder_" + uuid.uuid4().hex[:8]
     try:
-        _seed_competitor_posts(tenant, n=7)
+        # Seed MORE than the cap so the cap is actually exercised (the operator
+        # asked to SEE up to the full competitor set — MAX_COMPETITOR_OPTIONS).
+        _seed_competitor_posts(tenant, n=MAX_COMPETITOR_OPTIONS + 2)
         options = top_competitor_options(tenant, dsn=DSN)
-        assert len(options) == 6  # 7 on file, capped
+        assert len(options) == MAX_COMPETITOR_OPTIONS  # on-file > cap, capped
         scores = [o["totalScore"] for o in options]
         assert all(s is not None for s in scores)
         assert scores == sorted(scores, reverse=True)  # highest total_score first

@@ -321,13 +321,60 @@ def render_brand_patterns_block(patterns: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _broll_theme_terms(
+    *,
+    plan: Any = None,
+    artwork: dict[str, Any] | None = None,
+    theme: str | None = None,
+) -> list[str]:
+    """The SUBJECT theme for matching a b-roll to the post: the selected artwork's
+    MOTIFS (what the picture actually shows — 'black-eyed susans', 'teal dragonfly'),
+    the explicit theme, and the channel brief's image_style + goal words. It
+    DELIBERATELY EXCLUDES the artwork's technique/style tags (e.g. 'color realism'):
+    a shared technique token like 'realism' must never bridge a fine-line-botanical
+    post to a black-and-grey Marvel reel — only shared SUBJECT qualifies a b-roll.
+    Empty when nothing is themed (the b-roll then stays newest-first). Pure."""
+    terms: list[str] = []
+    if artwork:
+        terms += [str(t) for t in (artwork.get("motifs") or []) if str(t).strip()]
+    if theme:
+        terms += str(theme).split()
+    if plan is not None:
+        try:
+            from studio.competitor_flow import social_channel_plan
+
+            for ch in ("ig", "fb", "instagram", "facebook"):
+                style = str(social_channel_plan(plan, ch).get("image_style") or "").strip()
+                if style:
+                    terms += style.split()
+        except Exception:
+            pass
+        goal = str(getattr(plan, "goal", "") or "").strip()
+        if goal:
+            terms += goal.split()
+    return terms
+
+
 def load_broll(
-    tenant_id: str, artist: str | None, *, dsn: str | None = None
+    tenant_id: str,
+    artist: str | None,
+    *,
+    theme_terms: list[str] | None = None,
+    dsn: str | None = None,
 ) -> list[dict[str, Any]]:
     """REAL b-roll on file: the artist's VIDEO library assets (media='video').
-    Honest empty list when none."""
+    Honest empty list when none.
+
+    When ``theme_terms`` is given (the post's SUBJECT — selected-artwork motifs +
+    brief theme), the b-roll is THEME-MATCHED the same way the artwork ranker matches
+    a piece: a video is surfaced only when its own tags/description share the theme
+    (expanded through the same flora/fine-line synonym bridge), best-overlap first,
+    recency breaking ties. A themed campaign with NO matching footage gets an HONEST
+    empty list — an off-theme reel (e.g. a Marvel reveal reel on a fine-line
+    botanical post) is never stamped onto the draft nor fed into the copywriter's
+    brief. Without ``theme_terms`` the newest videos are returned unchanged."""
     try:
-        from studio.artwork_select import list_artwork  # noqa: F401  (same store)
+        from studio.artwork_select import _expand_theme, _norm_set, _overlap
         import psycopg
         from psycopg.rows import dict_row
 
@@ -343,12 +390,38 @@ def load_broll(
                 "ORDER BY created_at DESC LIMIT 5",
                 (f"portfolio:{tenant_id}", artist, f"%{artist}%" if artist else None),
             ).fetchall()
-        return [
-            {"asset_id": r["id"],
-             "caption": (r["content"] or {}).get("caption") or "",
-             "summary": (r["content"] or {}).get("vlm_summary") or ""}
-            for r in rows
-        ]
+        cands: list[dict[str, Any]] = []
+        for r in rows:
+            content = r["content"] or {}
+            cands.append(
+                {
+                    "asset_id": r["id"],
+                    "caption": content.get("caption") or "",
+                    "summary": content.get("vlm_summary") or "",
+                    # The video's OWN tags + description — matched against the theme.
+                    "_hay": [
+                        *(content.get("styles") or []),
+                        *(content.get("motifs") or []),
+                        content.get("caption") or "",
+                        content.get("vlm_summary") or "",
+                    ],
+                }
+            )
+        theme_cmp = _expand_theme(_norm_set(theme_terms)) if theme_terms else set()
+        if theme_cmp:
+            scored: list[dict[str, Any]] = []
+            for c in cands:
+                hits = _overlap(
+                    [str(h) for h in c["_hay"] if str(h).strip()], theme_cmp
+                )
+                if hits:
+                    c["_hits"] = len(hits)
+                    scored.append(c)
+            # Stable sort: candidates already arrive newest-first, so an equal
+            # theme-hit count keeps recency as the tiebreak.
+            scored.sort(key=lambda c: -c["_hits"])
+            cands = scored
+        return [{k: v for k, v in c.items() if not k.startswith("_")} for c in cands]
     except Exception:
         return []
 
@@ -471,8 +544,15 @@ def build_ig_brief_block(
         )
 
     # Proven brand voice + b-roll from the REAL stores; a visible crew step too.
+    # The b-roll is theme-matched to the campaign SUBJECT (brief + picked artwork
+    # motifs) so an off-theme reel never pollutes the copywriter's brief.
     patterns = load_brand_patterns(tenant_id, artist, dsn=dsn)
-    broll = load_broll(tenant_id, artist, dsn=dsn)
+    broll = load_broll(
+        tenant_id,
+        artist,
+        theme_terms=_broll_theme_terms(plan=plan, artwork=artwork),
+        dsn=dsn,
+    )
     if run_id:
         _record_crew_step(
             dsn, run_id, campaign_id,
@@ -609,11 +689,17 @@ def enrich_post_actions(
             "whyItWorked": competitor.get("whyItWorked") or competitor.get("why_it_worked"),
             "metrics": competitor.get("metrics") or {},
         }
-    # Optional b-roll reference: the newest REAL video asset on file for this
-    # artist — the same rows the brief's b-roll block cites. load_broll is
-    # honest-empty ([]) when none exist / the store is unavailable, so this key
-    # appears only when a real video row backs it.
-    broll = load_broll(tenant_id, artist, dsn=dsn)
+    # Optional b-roll reference: a REAL video asset on file for this artist,
+    # THEME-MATCHED to the post's subject (the picked artwork's motifs) — the same
+    # rows the brief's b-roll block cites. load_broll is honest-empty ([]) when none
+    # exist OR none match the theme, so an off-theme reel (a Marvel reveal on a
+    # botanical post) is never stamped onto the staged post.
+    broll = load_broll(
+        tenant_id,
+        artist,
+        theme_terms=_broll_theme_terms(artwork=artwork, theme=theme),
+        dsn=dsn,
+    )
     if broll:
         fields["broll_asset_id"] = broll[0]["asset_id"]
     try:

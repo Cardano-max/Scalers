@@ -52,8 +52,10 @@ _DEFAULT_DSN = "postgresql://scalers:scalers@localhost:5432/scalers"
 # on an empty table; never fabricate posts or metrics).
 NO_COMPETITOR_NOTE = "no competitor posts on file — upload the competitor export"
 
-# How many top-scored posts pause #1 surfaces at most.
-MAX_COMPETITOR_OPTIONS = 6
+# How many top-scored posts pause #1 surfaces at most. The operator asked to SEE
+# the full competitor set they scored (a real request: "10 competitors nikale, unko
+# score kiya, relevant kaun") — so surface up to 10, brief-relevance-ranked.
+MAX_COMPETITOR_OPTIONS = 10
 
 _SELECTIONS_SQL = (
     Path(__file__).resolve().parents[2] / "infra" / "initdb" / "28-competitor-selections.sql"
@@ -124,6 +126,7 @@ def top_competitor_options(
     *,
     artist: str | None = None,
     k: int = MAX_COMPETITOR_OPTIONS,
+    theme_terms: list[str] | None = None,
     dsn: str | None = None,
 ) -> list[dict[str, Any]]:
     """The TOP ``k`` scored competitor posts for this tenant, best-first
@@ -131,13 +134,15 @@ def top_competitor_options(
     unscorable rows last), each carrying the operator-facing evidence:
     ``[{postId, handle, caption, url, metrics, totalScore, whyItWorked,
     visualTags, source}]`` (``source`` says where the row came from —
-    ``'upload'`` or ``'discovery'``). The caption is VERBATIM here because the
-    OPERATOR reviews the real post to pick a pattern — the drafter never sees
-    it un-molded. ``[]`` when no competitor posts are on file (the caller
-    skips honestly)."""
+    ``'upload'`` or ``'discovery'``). When ``theme_terms`` is given (the campaign
+    brief), the ranking is brief-relevance-first — a botanical campaign surfaces
+    botanical competitors over an incidentally high-engagement off-theme one. The
+    caption is VERBATIM here because the OPERATOR reviews the real post to pick a
+    pattern — the drafter never sees it un-molded. ``[]`` when no competitor posts
+    are on file (the caller skips honestly)."""
     from studio.competitor_intel import score_posts
 
-    scored = score_posts(tenant_id, artist=artist, dsn=dsn)
+    scored = score_posts(tenant_id, artist=artist, theme_terms=theme_terms, dsn=dsn)
     options: list[dict[str, Any]] = []
     for p in scored[: max(1, k)]:
         options.append(
@@ -296,6 +301,36 @@ def selection_request_payload(row: dict[str, Any]) -> dict[str, Any]:
 _DISCOVERY_LOCK = threading.Lock()
 
 
+def _campaign_theme_terms(plan: Any) -> list[str]:
+    """The campaign brief's theme terms for competitor RELEVANCE ranking — the ig/fb
+    channel image_style + goal words, folded through the same seam the artwork gate
+    uses. Empty when the plan named no theme (scoring then stays engagement-first).
+    Pure."""
+    if plan is None:
+        return []
+    terms: list[str] = []
+    for ch in ("ig", "fb", "instagram", "facebook"):
+        cfg = social_channel_plan(plan, ch)
+        style = str(cfg.get("image_style") or "").strip()
+        if style:
+            terms.extend(style.split())
+    for attr in ("goal", "campaign_type"):
+        v = str(getattr(plan, attr, "") or "").strip()
+        if v:
+            terms.extend(v.split())
+    # De-dupe, keep order, bound.
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in terms:
+        key = t.strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(t.strip())
+        if len(out) >= 16:
+            break
+    return out
+
+
 def competitor_gate(
     run_id: str,
     tenant_id: str,
@@ -342,7 +377,13 @@ def competitor_gate(
     if sel and sel.get("status") == "awaiting":
         return "pause", selection_request_payload(sel)
 
-    options = top_competitor_options(tenant_id, artist=artist, k=k, dsn=dsn)
+    # The campaign BRIEF theme (e.g. 'fine-line botanical') drives the ranking so
+    # the competitor we surface to mold is relevant to THIS campaign, not merely to
+    # the artist's general niche. Same terms the artwork gate style-matches on.
+    _theme = _campaign_theme_terms(plan)
+    options = top_competitor_options(
+        tenant_id, artist=artist, k=k, theme_terms=_theme, dsn=dsn
+    )
     discovery_note: str | None = None
     # The caller passes the RESOLVED research flag (channel plan value, defaulted
     # from plan.deep_research for posting children); a caller that doesn't reads
@@ -362,7 +403,9 @@ def competitor_gate(
         # re-checks the table, and reuses the first child's freshly landed posts
         # instead of burning a second identical discovery pass.
         with _DISCOVERY_LOCK:
-            options = top_competitor_options(tenant_id, artist=artist, k=k, dsn=dsn)
+            options = top_competitor_options(
+                tenant_id, artist=artist, k=k, theme_terms=_theme, dsn=dsn
+            )
             if not options:
                 try:
                     from studio.competitor_discovery import run_discovery
@@ -373,7 +416,8 @@ def competitor_gate(
                     discovery_note = str(disc.get("note") or "") or None
                     if disc.get("posts"):
                         options = top_competitor_options(
-                            tenant_id, artist=artist, k=k, dsn=dsn
+                            tenant_id, artist=artist, k=k, theme_terms=_theme,
+                            dsn=dsn,
                         )
                 except Exception as exc:  # noqa: BLE001 — discovery must never wedge the run
                     discovery_note = (
