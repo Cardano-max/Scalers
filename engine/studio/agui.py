@@ -243,6 +243,64 @@ class CampaignPlan(BaseModel):
     # (before the uploaded-CSV ids and the DB cohort), so "run the full team on
     # exactly these people" is a plan state, not a lucky cohort overlap.
     leads: list[str] = Field(default_factory=list)
+    # --- multi-channel campaigns: ONE launch, PER-CHANNEL isolation ---------------- #
+    # Per-channel OVERRIDES keyed by channel id ('ig' | 'email' | 'sms'). Each value
+    # is that channel's own brief, applied over the shared top-level fields when the
+    # launch fans out into one isolated child run per channel (optional keys: goal,
+    # audience, output_count, lead_count, offer, tone). attach_images / image_style /
+    # competitor_research live ONLY here, never as top-level fields — the IG pipeline
+    # reads them from this dict. Always merged per channel (never wholesale-replaced),
+    # so editing one channel's overrides cannot clobber another's. Empty = every
+    # channel runs the shared plan as-is.
+    channel_plans: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
+# The channel_plans override keys that map onto the plan's TOP-LEVEL fields in a
+# child run's effective plan. attach_images / image_style / competitor_research are
+# deliberately NOT here — they stay only in ``channel_plans`` (the IG pipeline reads
+# them from there), never as top-level fields.
+_CHANNEL_OVERRIDE_FIELDS = ("goal", "audience", "output_count", "lead_count", "offer", "tone")
+
+
+def merge_channel_plans(
+    plan: CampaignPlan, channel_plans: dict[str, dict[str, Any]] | None
+) -> None:
+    """MERGE per-channel overrides into ``plan.channel_plans``: update each named
+    channel's dict (None values dropped), NEVER replace the whole map — an edit to
+    one channel's overrides must not erase another channel's. A non-dict entry is
+    ignored (a malformed tool argument cannot corrupt the plan)."""
+    for ch, sub in (channel_plans or {}).items():
+        if not isinstance(sub, dict):
+            continue
+        plan.channel_plans.setdefault(str(ch), {}).update(
+            {k: v for k, v in sub.items() if v is not None}
+        )
+
+
+def effective_channel_plan(plan: CampaignPlan, channel: str) -> CampaignPlan:
+    """The per-channel EFFECTIVE plan the isolated pipeline executes: a DEEP COPY of
+    ``plan`` narrowed to ``channels=[channel]``, with any override present in
+    ``plan.channel_plans[channel]`` applied onto the copy's top-level fields
+    (goal / audience / output_count / lead_count / offer / tone). The base plan is
+    NEVER mutated; a channel with no override entry gets a plain single-channel copy.
+    attach_images / image_style / competitor_research are NOT lifted — they stay only
+    in ``channel_plans`` (the IG pipeline reads them from there)."""
+    eff = plan.model_copy(deep=True)
+    eff.channels = [channel]
+    overrides = (plan.channel_plans or {}).get(channel) or {}
+    for key in _CHANNEL_OVERRIDE_FIELDS:
+        value = overrides.get(key)
+        if value is None:
+            continue
+        if key in ("output_count", "lead_count"):
+            try:
+                value = max(0, int(value))
+            except (TypeError, ValueError):
+                continue
+        else:
+            value = str(value)
+        setattr(eff, key, value)
+    return eff
 
 
 @dataclass
@@ -1222,6 +1280,7 @@ async def revise_plan(
     leads: list[str] | None = None,
     use_conversation_history: bool | None = None,
     research_depth: str | None = None,
+    channel_plans: dict[str, dict] | None = None,
 ) -> Any:
     """Apply the operator's edits to the SHARED campaign plan, persist it, and
     snap the new state back to the UI. Pass ONLY the fields that changed.
@@ -1232,7 +1291,13 @@ async def revise_plan(
     ``lead_source='provided'``, ``per_lead=True``, ``channels``, ``lead_count``/
     ``output_count`` to the operator's exact number, and ``deep_research`` /
     ``research_depth='deep'`` when asked — THEN call `run_campaign`. Without
-    these the run executes whatever stale plan the session last held."""
+    these the run executes whatever stale plan the session last held.
+
+    For a MULTI-channel campaign where a channel gets its OWN goal / audience /
+    count / offer / tone, pass ``channel_plans`` keyed by channel id ('ig' |
+    'email' | 'sms') — merged PER CHANNEL onto the existing overrides, so setting
+    one channel never erases another's. The launch then runs one isolated child
+    per channel with these overrides applied."""
     plan = ctx.deps.state
     if goal is not None:
         plan.goal = goal
@@ -1268,6 +1333,8 @@ async def revise_plan(
         plan.use_conversation_history = use_conversation_history
     if research_depth is not None:
         plan.research_depth = research_depth
+    if channel_plans is not None:
+        merge_channel_plans(plan, channel_plans)
 
     await asyncio.to_thread(_persist_plan, ctx.deps.dsn, ctx.deps.session_id, plan)
     await asyncio.to_thread(
@@ -3411,18 +3478,51 @@ async def launch_studio_run(
     except Exception:
         pass
 
-    start_registered_run(app, dsn, session_id, tenant_id, plan, run_id)
-    return {"runId": run_id, "campaignId": campaign_id, "status": "running"}
+    children = start_registered_run(app, dsn, session_id, tenant_id, plan, run_id)
+    info: dict[str, Any] = {"runId": run_id, "campaignId": campaign_id, "status": "running"}
+    if children:
+        # Multi-channel fan-out: the caller must surface EACH channel's own run id
+        # (the parent id is the launch/debounce handle, not an executing run).
+        info["children"] = [{"channel": c["channel"], "runId": c["run_id"]} for c in children]
+    return info
 
 
 def start_registered_run(
     app, dsn: str | None, session_id: str, tenant_id: str, plan: CampaignPlan, run_id: str
-) -> None:
-    """Register ``run_id`` as running and execute the campaign in the background —
-    shared by the fresh launch (:func:`launch_studio_run`) AND the artwork-selection
-    RESUME (``POST /studio/campaign/{run_id}/select-artwork``), which re-invokes the
+) -> list[dict[str, str]]:
+    """Register + execute ``plan`` in the background — shared by the fresh launch
+    (:func:`launch_studio_run`) AND the artwork-selection RESUME
+    (``POST /studio/campaign/{run_id}/select-artwork``), which re-invokes the
     executor with the SAME run id (the durable replay-skip + deterministic one-shot
-    agent-run ids make the resume idempotent). Must be called from an event loop."""
+    agent-run ids make the resume idempotent). Must be called from an event loop.
+
+    MULTI-CHANNEL ISOLATION: a plan naming MORE than one channel launches ONE CHILD
+    RUN PER CHANNEL. Each child executes :func:`effective_channel_plan` (its own
+    goal / audience / counts / offer, ``channels=[that channel]``) under run id
+    ``{run_id}-{channel}``, registered on the same registry and posting its own
+    completion summary — full per-channel pipeline isolation, same HELD posture.
+    Returns the children as ``[{"channel", "run_id"}, ...]``; a single-channel plan
+    runs under ``run_id`` itself and returns ``[]``."""
+    channels = list(dict.fromkeys(c.strip() for c in (plan.channels or []) if (c or "").strip()))
+    if len(channels) > 1:
+        children: list[dict[str, str]] = []
+        for ch in channels:
+            child_run_id = f"{run_id}-{ch}"
+            _start_one(
+                app, dsn, session_id, tenant_id, effective_channel_plan(plan, ch), child_run_id
+            )
+            children.append({"channel": ch, "run_id": child_run_id})
+        return children
+    _start_one(app, dsn, session_id, tenant_id, plan, run_id)
+    return []
+
+
+def _start_one(
+    app, dsn: str | None, session_id: str, tenant_id: str, plan: CampaignPlan, run_id: str
+) -> None:
+    """Register ONE run id as running and execute its campaign in the background —
+    the single-run body behind :func:`start_registered_run` (invoked once per channel
+    child on a multi-channel launch). Must be called from an event loop."""
     if not hasattr(app.state, "_studio_runs"):
         app.state._studio_runs = {}
     runs_registry: dict[str, dict] = app.state._studio_runs
@@ -3513,10 +3613,14 @@ async def run_campaign(ctx: RunContext[StudioDeps]) -> str:
 
     This tool no longer blocks the chat stream for the whole multi-agent run (the old
     behavior left the operator staring at dead air for minutes). Reply to the operator
-    NOW with the run id and where to watch; do NOT claim any drafts exist yet."""
+    NOW with the run id and where to watch; do NOT claim any drafts exist yet.
+
+    A plan naming MORE than one channel launches ONE ISOLATED CHILD RUN PER CHANNEL
+    (each with its own goal/audience/counts from ``channel_plans``); the JSON line then
+    carries ``children`` — tell the operator EACH channel's own run id."""
     campaign_id = f"camp_{uuid.uuid4().hex[:12]}"
     run_id = f"team-{campaign_id}-{uuid.uuid4().hex[:12]}"
-    start_registered_run(
+    children = start_registered_run(
         _background_app(),
         ctx.deps.dsn,
         ctx.deps.session_id,
@@ -3524,6 +3628,19 @@ async def run_campaign(ctx: RunContext[StudioDeps]) -> str:
         ctx.deps.state,
         run_id,
     )
+    if children:
+        launch = {"run_id": run_id, "children": children, "status": "launched",
+                  "watch": "Agency tab"}
+        per_channel = ", ".join(f"{c['channel']}: {c['run_id']}" for c in children)
+        return (
+            f"{json.dumps(launch)}\n"
+            f"Multi-channel campaign LAUNCHED as {len(children)} ISOLATED child runs — one "
+            f"per channel, each with its OWN goal, audience, pipeline, agents and drafts: "
+            f"{per_channel}. Nothing has been drafted or sent yet. Tell the operator EACH "
+            "channel's run id — every channel is watched and reviewed separately in the "
+            "Agency tab, and each child posts its own honest summary to this thread when "
+            "it finishes. Drafts stage HELD behind approve-first; do not invent results."
+        )
     launch = {"run_id": run_id, "status": "launched", "watch": "Agency tab"}
     return (
         f"{json.dumps(launch)}\n"

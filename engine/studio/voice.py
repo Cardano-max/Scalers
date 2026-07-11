@@ -45,6 +45,7 @@ from studio.agui import (
     _load_plan,
     _persist_plan,
     launch_studio_run,
+    merge_channel_plans,
 )
 
 # --------------------------------------------------------------------------- #
@@ -146,6 +147,22 @@ VOICE_TOOLS: list[dict[str, Any]] = [
                 "use_conversation_history": {
                     "type": "boolean",
                     "description": "Read each lead's imported conversation thread for the psych analysis.",
+                },
+                "channel_plans": {
+                    "type": "object",
+                    "description": (
+                        "Per-channel OVERRIDES for a MULTI-channel campaign, keyed by "
+                        "channel id ('ig' | 'email' | 'sms' — the same ids used in "
+                        "channels). When the operator gives a channel its OWN answer "
+                        "('for email the goal is winback, 5 drafts; for Instagram push "
+                        "the flash sale'), store that channel's goal / audience / "
+                        "output_count / lead_count / offer / tone (and attach_images / "
+                        "image_style / competitor_research for Instagram) HERE as "
+                        "{channel: {field: value}} — do NOT overwrite the shared "
+                        "top-level fields with one channel's answer. Channels merge one "
+                        "at a time: sending one channel never erases another's."
+                    ),
+                    "additionalProperties": {"type": "object"},
                 },
             },
             "additionalProperties": False,
@@ -765,6 +782,7 @@ def mount_studio_voice(app) -> None:
             "offer", "artist", "tone", "campaign_type",
             "lead_count", "output_count", "deep_research", "research_depth",
             "per_lead", "lead_source", "leads", "use_conversation_history",
+            "channel_plans",
         )
         fields = payload.get("fields")
         if not isinstance(fields, dict):
@@ -779,6 +797,13 @@ def mount_studio_voice(app) -> None:
         for key in _PLAN_FIELDS:
             if key in fields and fields[key] is not None:
                 value = fields[key]
+                if key == "channel_plans":
+                    # MERGE per channel (same rule as revise_plan): one channel's
+                    # spoken answer must never wholesale-replace the map — that
+                    # would erase every other channel's overrides.
+                    if isinstance(value, dict):
+                        merge_channel_plans(plan, value)
+                    continue
                 if key in ("lead_count", "output_count"):
                     try:
                         value = max(0, int(value))
@@ -871,18 +896,24 @@ def mount_studio_voice(app) -> None:
             app, dsn, session_id, tenant_id, plan,
             trigger_note=f"[voice GO] {transcript}".strip(),
         )
+        # The debounce stores the PARENT id: a repeat GO within the window dedupes
+        # the WHOLE launch set (never a second fan-out of per-channel children).
         _VOICE_LAUNCHES[session_id] = (now, info["runId"], info["campaignId"])
-        return JSONResponse(
-            {
-                "ok": True,
-                "launched": True,
-                "runId": info["runId"],
-                "campaignId": info["campaignId"],
-                "status": info["status"],
-                "gate": gate,
-                "liveState": live,
-            }
-        )
+        resp: dict[str, Any] = {
+            "ok": True,
+            "launched": True,
+            "runId": info["runId"],
+            "campaignId": info["campaignId"],
+            "status": info["status"],
+            "gate": gate,
+            "liveState": live,
+        }
+        if info.get("children"):
+            # Multi-channel launch: one ISOLATED child run per channel. The voice
+            # host must name EACH channel's own run id — the parent id is the
+            # launch handle, not an executing run.
+            resp["children"] = info["children"]
+        return JSONResponse(resp)
 
     @app.post("/studio/voice/run_status")
     async def studio_voice_run_status(request: Request):  # noqa: ANN202
