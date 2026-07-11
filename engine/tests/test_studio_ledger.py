@@ -117,7 +117,12 @@ def _wire(monkeypatch, leads):
 
 
 def _lead(cid, name, *, email=None, phone=None, ig=None, obj=None, segment=None, interest=None):
+    # email_opt_in mirrors production: operator-provided addresses carry the
+    # opt-in flag (all real imports set it), and the explicit-channel selector
+    # now honestly SKIPS a non-consented lead instead of diverting to instagram
+    # — these fixtures are about ledger reconciliation, not consent.
     return {"customer_id": cid, "name": name, "email": email, "phone": phone,
+            "email_opt_in": bool(email),
             "ig_handle": ig, "city": "Austin", "interests": [interest] if interest else [],
             "customer_type": segment, "persona_traits": {}, "tattoo_history": [],
             "memories": [], "_obj": obj}
