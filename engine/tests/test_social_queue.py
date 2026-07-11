@@ -47,24 +47,54 @@ def _no_meta_creds(monkeypatch):
 def test_context_refs_reads_enriched_json_context():
     ctx = json.dumps({
         "artist": "Maya",
-        "artwork": {"assetId": "art_nested", "artifactId": None},
+        "artwork": {"assetId": "art_nested", "artifactId": "art_img_9"},
         "artwork_asset_id": "art_flat",
         "broll_asset_id": "vid_1",
     })
-    assert _context_refs(ctx) == ("art_flat", "vid_1")
-    # Without the flat mirror, the nested artwork block still resolves.
-    nested_only = json.dumps({"artwork": {"assetId": "art_nested"}})
-    assert _context_refs(nested_only) == ("art_nested", None)
+    # (artwork_asset_id, broll_asset_id, artwork_artifact_id) — the artifact id is
+    # the render pointer the /studio/artifacts/{id}/raw route serves.
+    assert _context_refs(ctx) == ("art_flat", "vid_1", "art_img_9")
+    # Without the flat mirror, the nested artwork block still resolves both ids.
+    nested_only = json.dumps({"artwork": {"assetId": "art_nested", "artifactId": "art_img_2"}})
+    assert _context_refs(nested_only) == ("art_nested", None, "art_img_2")
 
 
 def test_context_refs_reads_legacy_text_note_and_degrades_honestly():
     legacy = "Artwork: seed://maya/peony.png (asset art_abc12). Why: tagged floral."
-    assert _context_refs(legacy) == ("art_abc12", None)
+    assert _context_refs(legacy) == ("art_abc12", None, None)
     # A JSON context that preserved the legacy note under 'note' also resolves.
-    assert _context_refs(json.dumps({"note": legacy})) == ("art_abc12", None)
+    assert _context_refs(json.dumps({"note": legacy})) == ("art_abc12", None, None)
     # Absent / reference-free context resolves nothing — never an invented id.
-    assert _context_refs(None) == (None, None)
-    assert _context_refs("No artwork on file for this artist yet.") == (None, None)
+    assert _context_refs(None) == (None, None, None)
+    assert _context_refs("No artwork on file for this artist yet.") == (None, None, None)
+
+
+def test_media_package_carries_the_image_url_for_a_real_image():
+    from studio.social_queue import _media_package
+
+    assets = {"art_1": {"styles": ["fine-line"], "motifs": ["peony"], "media": "image"}}
+    pkg = _media_package("art_1", assets, None, artifact_id="art_img_1")
+    assert pkg["found"] is True
+    assert pkg["media"] == "image"
+    assert pkg["image_url"] == "/studio/artifacts/art_img_1/raw"
+    assert pkg["tags"] == ["fine-line", "peony"]
+    # A missing artifact id yields no url, never a broken one.
+    assert _media_package("art_1", assets, None)["image_url"] is None
+
+
+def test_post_anatomy_leads_with_the_hook_and_surfaces_angle_cta_keywords():
+    from studio.social_queue import _post_anatomy
+
+    caption = "Which stem is yours?\n\nBook a full-day session.\n\nReply KEEBS."
+    ctx = {"angle": "made_for_you", "cta": "dm to start", "hashtags": ["botanical", "fineline"]}
+    a = _post_anatomy(ctx, caption)
+    assert a["hook"] == "Which stem is yours?"
+    assert a["angle"] == "made_for_you"
+    assert a["cta"] == "dm to start"
+    assert a["hashtags"] == ["botanical", "fineline"]
+    # Honest-empty when the draft carried no structured fields.
+    empty = _post_anatomy({}, "")
+    assert empty == {"hook": None, "angle": None, "cta": None, "hashtags": []}
 
 
 # ── (1) ready_posts resolves a seeded pending IG action into a package ──────────

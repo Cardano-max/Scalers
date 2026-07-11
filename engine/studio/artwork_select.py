@@ -248,24 +248,36 @@ def select_artwork(
     style_cmp = _norm_set(artist_styles) | _norm_set(theme_terms)
     theme_cmp = _norm_set(theme_terms)
 
-    scored: list[tuple[int, int, bool, int, str, ArtworkRef, list[str], list[str], str]] = []
+    scored: list[tuple[int, int, int, bool, int, str, ArtworkRef, list[str], list[str], str]] = []
     for a in artworks:
         matched_styles = _overlap(a.styles, style_cmp)
         matched_motifs = _overlap(a.motifs, theme_cmp)
         # The theme may name the piece's collection directly (e.g. theme='4th-of-july').
         matched_collection = a.collection if (_norm(a.collection) and _norm(a.collection) in theme_cmp) else ""
         coll_flag = 1 if matched_collection else 0
+        # THEME-RELEVANCE BUCKET (the fix for a real "Spider-Man under a fine-line
+        # botanical brief" pick): a piece whose OWN tags overlap the THEME terms
+        # specifically outranks a piece that only matches the artist's general
+        # style. Without this, an off-theme piece scored purely on
+        # 'black-and-grey-realism ∈ the artist's styles' and buried the one
+        # botanical piece the brief actually asked for. Only fires when a theme is
+        # given — with no theme_terms every piece is bucket 0 and the score decides
+        # exactly as before (so the collection-first + tag-score behaviour is
+        # unchanged for the untargeted case).
+        theme_hits = _overlap(a.styles, theme_cmp) or _overlap(a.motifs, theme_cmp)
+        theme_flag = 1 if (theme_cmp and (theme_hits or matched_collection)) else 0
         score = 2 * len(matched_styles) + len(matched_motifs) + (1 if a.is_best_example else 0)
         # CSV (real, first-party artwork) outranks seed (mock) on an otherwise exact tie.
         source_rank = 0 if _norm(a.source) == _norm("csv") else 1
         scored.append(
-            (coll_flag, score, a.is_best_example, source_rank, a.asset_id, a, matched_styles, matched_motifs, matched_collection)
+            (coll_flag, theme_flag, score, a.is_best_example, source_rank, a.asset_id, a, matched_styles, matched_motifs, matched_collection)
         )
 
-    # Best: collection-match first, then highest score, then best-example, then
-    # CSV-over-seed, then stable asset-id (ascending) so the choice is fully deterministic.
-    scored.sort(key=lambda t: (-t[0], -t[1], not t[2], t[3], t[4]))
-    _cf, score, _best, _src, _aid, art, matched_styles, matched_motifs, matched_collection = scored[0]
+    # Best: collection-match first, then THEME-relevant pieces, then highest score,
+    # then best-example, then CSV-over-seed, then stable asset-id (ascending) so the
+    # choice is fully deterministic.
+    scored.sort(key=lambda t: (-t[0], -t[1], -t[2], not t[3], t[4], t[5]))
+    _cf, _tf, score, _best, _src, _aid, art, matched_styles, matched_motifs, matched_collection = scored[0]
     exact = bool(matched_styles or matched_motifs or matched_collection)
     pick = ArtworkPick(
         asset_id=art.asset_id,

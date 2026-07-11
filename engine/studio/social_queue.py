@@ -59,62 +59,105 @@ def _iso(value: Any) -> str | None:
     return value.isoformat() if value is not None else None
 
 
-def _context_refs(raw: Any) -> tuple[str | None, str | None]:
-    """``(artwork_asset_id, broll_asset_id)`` referenced by an action's context.
+def _as_ctx(raw: Any) -> dict[str, Any]:
+    """The action's context as a dict — parsed JSON, or ``{}`` for a legacy text
+    note / absent context. Pure."""
+    if not raw:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return {}
+
+
+def _context_refs(raw: Any) -> tuple[str | None, str | None, str | None]:
+    """``(artwork_asset_id, broll_asset_id, artwork_artifact_id)`` referenced by an
+    action's context.
 
     Reads the enriched JSON context first (``artwork_asset_id``, then the nested
-    ``artwork.assetId``/``asset_id``; ``broll_asset_id``), and falls back to the
-    legacy text note's ``(asset …)`` marker. Absent/unparseable context degrades
-    to ``(None, None)`` — a draft that referenced nothing resolves nothing."""
+    ``artwork.assetId``/``asset_id``; ``broll_asset_id``; the nested
+    ``artwork.artifactId`` — the id the ``/studio/artifacts/{id}/raw`` route
+    serves the real image bytes from, so the review UI can render the PICTURE, not
+    a bare id string), and falls back to the legacy text note's ``(asset …)``
+    marker. Absent/unparseable context degrades to ``(None, None, None)``."""
     if not raw:
-        return None, None
-    ctx: dict[str, Any] = {}
-    if isinstance(raw, dict):
-        ctx = raw
-    else:
-        try:
-            parsed = json.loads(raw)
-            ctx = parsed if isinstance(parsed, dict) else {}
-        except (json.JSONDecodeError, TypeError, ValueError):
-            m = _LEGACY_ASSET_RE.search(str(raw))
-            return (m.group(1) if m else None), None
+        return None, None, None
+    ctx = _as_ctx(raw)
+    if not ctx:
+        m = _LEGACY_ASSET_RE.search(str(raw))
+        return (m.group(1) if m else None), None, None
 
     def _clean(v: Any) -> str | None:
         return v.strip() if isinstance(v, str) and v.strip() else None
 
+    art = ctx.get("artwork") if isinstance(ctx.get("artwork"), dict) else {}
     artwork_id = _clean(ctx.get("artwork_asset_id"))
     if artwork_id is None:
-        art = ctx.get("artwork")
-        if isinstance(art, dict):
-            artwork_id = _clean(art.get("assetId")) or _clean(art.get("asset_id"))
+        artwork_id = _clean(art.get("assetId")) or _clean(art.get("asset_id"))
     if artwork_id is None:
         m = _LEGACY_ASSET_RE.search(str(ctx.get("note") or ""))
         artwork_id = m.group(1) if m else None
-    return artwork_id, _clean(ctx.get("broll_asset_id"))
+    artifact_id = _clean(art.get("artifactId")) or _clean(ctx.get("artwork_artifact_id"))
+    return artwork_id, _clean(ctx.get("broll_asset_id")), artifact_id
+
+
+def _post_anatomy(ctx: dict[str, Any], caption: str) -> dict[str, Any]:
+    """The POST ANATOMY the review UI renders so an operator sees a real social
+    post, not a wall of text: the hook (the caption's first line), the deterministic
+    angle, the CTA, and the grounded hashtags/keywords — all straight off the
+    enriched context (``angle`` / ``cta`` / ``hashtags``). Pure; honest-empty
+    fields when the draft carried none."""
+    first_line = ""
+    for line in (caption or "").splitlines():
+        if line.strip():
+            first_line = line.strip()
+            break
+    tags = [
+        str(t).strip()
+        for t in (ctx.get("hashtags") or [])
+        if isinstance(t, str) and t.strip()
+    ]
+    return {
+        "hook": first_line or None,
+        "angle": (str(ctx.get("angle")).strip() or None) if ctx.get("angle") else None,
+        "cta": (str(ctx.get("cta")).strip() or None) if ctx.get("cta") else None,
+        "hashtags": tags,
+    }
 
 
 def _media_package(
     asset_id: str | None,
     assets: dict[str, dict[str, Any]],
     lookup_error: str | None,
+    artifact_id: str | None = None,
 ) -> dict[str, Any] | None:
     """One resolved media block, or ``None`` when the draft referenced no asset.
 
     ``found=True`` only when the referenced ``assets`` row really exists; its
-    tags/kind/caption are copied verbatim off the row's content. A reference
-    whose row is gone (or whose lookup failed) is stated so — never invented."""
+    tags/kind/caption are copied verbatim off the row's content. When an
+    ``artifact_id`` is known, ``image_url`` points at the REAL bytes
+    (``/studio/artifacts/{id}/raw``) so the review UI renders the picture the post
+    will publish — not a bare id. A reference whose row is gone (or whose lookup
+    failed) is stated so — never invented."""
     if asset_id is None:
         return None
+    image_url = (
+        f"/studio/artifacts/{artifact_id}/raw" if artifact_id else None
+    )
     if lookup_error is not None:
         return {
-            "asset_id": asset_id, "found": False, "media": None,
-            "tags": [], "caption": None, "error": lookup_error,
+            "asset_id": asset_id, "artifact_id": artifact_id, "found": False,
+            "media": None, "tags": [], "caption": None, "image_url": image_url,
+            "error": lookup_error,
         }
     content = assets.get(asset_id)
     if content is None:
         return {
-            "asset_id": asset_id, "found": False, "media": None,
-            "tags": [], "caption": None,
+            "asset_id": asset_id, "artifact_id": artifact_id, "found": False,
+            "media": None, "tags": [], "caption": None, "image_url": image_url,
             "error": f"referenced asset {asset_id} not found in the library",
         }
     tags: list[str] = []
@@ -124,12 +167,54 @@ def _media_package(
             if isinstance(t, str) and t.strip() and t.strip().lower() not in seen:
                 seen.add(t.strip().lower())
                 tags.append(t.strip())
+    media = "video" if content.get("media") == "video" else "image"
     return {
         "asset_id": asset_id,
+        "artifact_id": artifact_id,
         "found": True,
-        "media": "video" if content.get("media") == "video" else "image",
+        "media": media,
         "tags": tags,
         "caption": (content.get("caption") or "").strip() or None,
+        # Only an IMAGE renders inline; a video block still carries the url for a
+        # future poster frame but the UI treats media=='video' as a b-roll chip.
+        "image_url": image_url,
+    }
+
+
+def _mold_for_run(run_id: str | None, dsn: str | None) -> dict[str, Any] | None:
+    """The competitor pattern this run's post was MOLDED from — the operator's
+    picked reference (handle / url / why-it-worked / matched structure), read off
+    the run's ``role='molder'`` agent_run. This is what lets the review UI say
+    'shaped from @competitor (score 6.6) — structure only, never copied', turning
+    an opaque caption into an auditable, sellable artefact. ``None`` when the run
+    molded nothing (no competitor research / honest skip). Best-effort."""
+    if not run_id:
+        return None
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+
+        with psycopg.connect(_dsn(dsn), row_factory=dict_row, autocommit=True) as conn:
+            row = conn.execute(
+                "SELECT output FROM agent_runs WHERE run_id=%s AND role='molder' "
+                "ORDER BY created_at DESC LIMIT 1",
+                (run_id,),
+            ).fetchone()
+    except Exception:
+        return None
+    out = (row or {}).get("output") if row else None
+    if not isinstance(out, dict):
+        return None
+    return {
+        "handle": out.get("reference_handle"),
+        "url": out.get("reference_url"),
+        "structure": [str(p) for p in (out.get("structure") or [])],
+        "emotionalAngle": out.get("emotional_angle"),
+        "visualPattern": out.get("visual_pattern"),
+        # The always-true safety note the client should SEE — proof it's a mold,
+        # not a copy (enforced in code by copies_verbatim, surfaced here).
+        "neverCopied": out.get("never_copy")
+        or "competitor caption used as SHAPE reference only — no sentence reused",
     }
 
 
@@ -149,7 +234,9 @@ def ready_posts(tenant_id: str, *, dsn: str | None = None) -> list[dict[str, Any
         ).fetchall()
 
         refs = [_context_refs(r.get("context")) for r in rows]
-        wanted = sorted({a for pair in refs for a in pair if a})
+        # Only the two ASSET ids resolve against the library; the artifact id (3rd
+        # element) is a render pointer, not a library row.
+        wanted = sorted({a for (art, broll, _fid) in refs for a in (art, broll) if a})
         assets: dict[str, dict[str, Any]] = {}
         lookup_error: str | None = None
         if wanted:
@@ -169,8 +256,9 @@ def ready_posts(tenant_id: str, *, dsn: str | None = None) -> list[dict[str, Any
             except Exception as exc:  # noqa: BLE001 — reported per-package, never masked
                 lookup_error = f"asset lookup failed: {type(exc).__name__}: {exc}"
 
+    mold_by_run: dict[str, dict[str, Any] | None] = {}
     posts: list[dict[str, Any]] = []
-    for row, (artwork_id, broll_id) in zip(rows, refs):
+    for row, (artwork_id, broll_id, artifact_id) in zip(rows, refs):
         channel = normalize_channel(row.get("channel"))
         # Comment REPLIES are exempt from the META_* gate (they publish via the
         # engagement reply connector's own credentials — see actions.publish);
@@ -180,6 +268,10 @@ def ready_posts(tenant_id: str, *, dsn: str | None = None) -> list[dict[str, Any
             blocked_reason = None
         else:
             blocked_reason = meta_credentials_blocked_reason(channel)
+        ctx = _as_ctx(row.get("context"))
+        run_id = row.get("run_id")
+        if run_id not in mold_by_run:
+            mold_by_run[run_id] = _mold_for_run(run_id, dsn)
         posts.append(
             {
                 "action_id": row["id"],
@@ -187,12 +279,17 @@ def ready_posts(tenant_id: str, *, dsn: str | None = None) -> list[dict[str, Any
                 "type": row.get("type"),
                 "caption": row.get("draft") or "",
                 "target": row.get("target"),
-                "run_id": row.get("run_id"),
+                "run_id": run_id,
                 "created_at": _iso(row.get("created_at")),
                 "scheduled_for": _iso(row.get("scheduled_for")),
                 "schedule_live": bool(row.get("schedule_live")),
-                "artwork": _media_package(artwork_id, assets, lookup_error),
+                "artwork": _media_package(artwork_id, assets, lookup_error, artifact_id),
                 "broll": _media_package(broll_id, assets, lookup_error),
+                # The post anatomy + the competitor mold that produced it — the
+                # 'wow, this is molded from the best-performing post in our niche'
+                # story, rendered from real fields (never fabricated).
+                "anatomy": _post_anatomy(ctx, row.get("draft") or ""),
+                "mold": mold_by_run[run_id],
                 "publishable": blocked_reason is None,
                 "blocked_reason": blocked_reason,
             }
