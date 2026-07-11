@@ -32,7 +32,7 @@ describe('selectCompetitor', () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('http://engine.test/studio/campaign/run_9/select-competitor');
     expect(init.method).toBe('POST');
-    expect(JSON.parse(String(init.body))).toEqual({ optionId: 'opt_2' });
+    expect(JSON.parse(String(init.body))).toEqual({ postId: 'opt_2', optionId: 'opt_2' });
   });
 
   it('throws on a backend refusal (honest failure, no silent resume)', async () => {

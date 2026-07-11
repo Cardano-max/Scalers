@@ -170,12 +170,20 @@ export function useStudioAgui(
     const ctl = new AbortController();
     let cancelled = false;
     // Each session is its OWN conversation (Claude-style): switching sessions
-    // clears the previous session's thread/steps/voice lines before hydrating.
+    // clears the previous session's thread/steps/voice lines before hydrating —
+    // AND the previous session's bound run/poller, or the old run's busy state
+    // keeps the new session's composer disabled (a real driver hit exactly that:
+    // a stale bound run held busy=true and '+ New session' never freed typing).
     setTurns([]);
     setVoiceTurns([]);
     setSteps([]);
     messagesRef.current = [];
     lastVoiceRef.current = null;
+    if (pollRef.current) clearTimeout(pollRef.current);
+    setRunState(null);
+    setRunningCampaign(false);
+    setBusy(false);
+    setError(null);
     (async () => {
       try {
         const history = await fetchStudioHistory(graphqlUrl, sessionId, ctl.signal);
@@ -540,7 +548,10 @@ export function useStudioAgui(
     (runId: string) => {
       if (!runId || runningCampaign) return;
       setRunningCampaign(true);
-      setBusy(true);
+      // Deliberately NOT setBusy(true): busy serializes CHAT round-trips, and a
+      // watched background run can pause indefinitely on an operator pick — holding
+      // busy locked the composer for the whole run ("Type a brief…" disabled), so
+      // the operator couldn't tweak or even ask what was happening mid-run.
       setError(null);
       setRunState({ runId, status: 'running', steps: [], nPending: null, pending: [], archetype: null, error: null });
       pollRun(runId);

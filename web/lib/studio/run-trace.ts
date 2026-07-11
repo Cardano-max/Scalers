@@ -294,7 +294,15 @@ function parseCompetitorSelectionRequest(raw: unknown): CompetitorSelectionReque
         }
       }
       return {
-        id: typeof o.id === 'string' ? o.id : '',
+        // The engine's payload names it postId (competitor_flow options); accept
+        // both — requiring 'id' silently dropped EVERY option, so the competitor
+        // modal never rendered from a real payload (operators saw no popup at all).
+        id:
+          typeof o.postId === 'string' && o.postId.length > 0
+            ? o.postId
+            : typeof o.id === 'string'
+              ? o.id
+              : '',
         handle: typeof o.handle === 'string' ? o.handle : '',
         caption: typeof o.caption === 'string' ? o.caption : '',
         url: typeof o.url === 'string' && o.url.length > 0 ? o.url : null,
@@ -370,7 +378,8 @@ export async function selectCompetitor(
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ optionId }),
+      // The engine route requires postId; optionId rides along for back-compat.
+      body: JSON.stringify({ postId: optionId, optionId }),
       signal,
     },
   );

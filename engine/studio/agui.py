@@ -1953,15 +1953,18 @@ def _execute_campaign_sync(
         # Read THIS leg's own block ('ig' or 'fb') — each social channel carries its own
         # competitor_research / attach_images / image_style answers from the interview.
         _ig_cfg = social_channel_plan(plan, decision.channel)
-        # DEFAULT: 'deep research' spoken for a POSTING channel MEANS competitor /
-        # trend research (there are no leads to research on a page post). The
-        # channel plan's explicit true/false always wins; only the unset case
-        # inherits plan.deep_research — so the interview's "research competitors
-        # first" cannot be lost to a model that confirmed it aloud but never wrote
-        # the channel_plans field (a real launch lost it exactly that way).
+        # DEFAULT-ON: competitor research is the social pipeline's core value and
+        # must never depend on a model remembering to write a flag. Two real
+        # launches lost it two different ways — the voice host confirmed it aloud
+        # but never wrote channel_plans.ig.competitor_research, then the chat host
+        # launched before writing deep_research, so an inherit-from-deep_research
+        # fallback ALSO read null. Only an EXPLICIT competitor_research=false on
+        # the channel's own block skips the gate; the gate itself stays honest
+        # (posts on file → pause for the operator's pick; none → one bounded live
+        # discovery, then an honest skip note — never a pause nobody can answer).
         _want_competitor = _ig_cfg.get("competitor_research")
         if _want_competitor is None:
-            _want_competitor = bool(plan.deep_research)
+            _want_competitor = True
         if bool(_want_competitor):
             from studio.competitor_flow import (
                 awaiting_competitor_summary,
@@ -5171,17 +5174,34 @@ def mount_studio_agui(app) -> None:
             for rid, rec in (runs_registry or {}).items()
             if isinstance(rec, dict) and rec.get("session_id") == session_id
         ]
-        # A parent is any id that is not a channel-child of another id in this session.
-        parents = [
-            rid
-            for rid in candidates
-            if not any(other != rid and rid.startswith(f"{other}-") for other in candidates)
-        ]
+        # Collapse each candidate to its FAMILY PARENT by the channel suffix. On a
+        # multi-channel launch ONLY the children register (the parent id is just the
+        # launch handle), so the old not-a-prefix-of-another filter kept all three
+        # children and handed back the LAST one — the panel bound to the fb leg
+        # alone and the email/ig legs went invisible again, one layer up.
+        from studio.run_children import composite_status, parent_of
+
+        parents: list[str] = []
+        for rid in candidates:
+            family = parent_of(rid) or rid
+            if family not in parents:
+                parents.append(family)
         if parents:
-            run_id = parents[-1]  # dict preserves insertion order — newest launch last
+            run_id = parents[-1]  # insertion order preserved — newest launch last
             rec = runs_registry.get(run_id) or {}
+            status = rec.get("status")
+            if not status:
+                # A fan-out parent has no registry entry of its own — compose the
+                # honest family status from its children's entries.
+                status = composite_status(
+                    [
+                        (runs_registry.get(k) or {}).get("status")
+                        for k in candidates
+                        if (parent_of(k) or k) == run_id
+                    ]
+                )
             return JSONResponse(
-                {"ok": True, "runId": run_id, "status": rec.get("status") or "running"}
+                {"ok": True, "runId": run_id, "status": status or "running"}
             )
 
         # FALLBACK — the registry lives in memory and dies with the process. A run PAUSED
@@ -5428,9 +5448,12 @@ def mount_studio_agui(app) -> None:
                     sel = get_selection(rid, dsn=dsn)
                     if sel and sel.get("status") == "awaiting":
                         selection_request = selection_request_payload(sel)
-                        # Carry the OWNING run id so the answer routes to the right leg.
+                        # Carry the OWNING run id + leg so the answer routes to the
+                        # right leg and the modal can SAY which channel is asking.
                         if isinstance(selection_request, dict):
                             selection_request["runId"] = rid
+                            if rid.startswith(f"{run_id}-"):
+                                selection_request["channel"] = rid[len(run_id) + 1 :]
                         if status in (None, "running", "awaiting_selection"):
                             status = "awaiting_selection"
                         break
@@ -5454,6 +5477,10 @@ def mount_studio_agui(app) -> None:
                         competitor_selection_request = competitor_selection_payload(csel)
                         if isinstance(competitor_selection_request, dict):
                             competitor_selection_request["runId"] = rid
+                            if rid.startswith(f"{run_id}-"):
+                                competitor_selection_request["channel"] = (
+                                    rid[len(run_id) + 1 :]
+                                )
                         if status in (None, "running", "awaiting_selection"):
                             status = "awaiting_selection"
                         break
