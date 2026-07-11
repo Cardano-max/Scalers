@@ -178,6 +178,13 @@ class ArtworkRef:
         c = row.get("content") or {}
         if not isinstance(c, dict):
             return None
+        # A b-roll VIDEO shares the 'studio_artwork' asset type but is NOT selectable
+        # artwork — it is chosen separately (studio.ig_pipeline.load_broll). Excluding
+        # it here keeps the 'pick 1 of 4 IMAGES' pause from offering a reel the operator
+        # cannot post as a still (a black-and-grey Marvel reveal reel was surfacing as
+        # an image option on a realism brief).
+        if str(c.get("media") or "").strip().lower() == "video":
+            return None
         return cls(
             asset_id=str(row.get("id") or ""),
             artist=str(c.get("artist") or "").strip(),

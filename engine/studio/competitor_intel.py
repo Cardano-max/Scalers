@@ -281,6 +281,14 @@ def ingest_competitor_csv(
 # a component with no underlying data is None and EXCLUDED (renormalized).
 # --------------------------------------------------------------------------- #
 WEIGHTS: dict[str, float] = {
+    # THEME RELEVANCE dominates when a campaign THEME is given (e.g. 'fine-line
+    # botanical'): the competitor we mold must match the BRIEF, not merely the
+    # artist's general niche. Without it, an off-theme color-realism competitor
+    # (high engagement + matches Keebs' realism work) out-scored the actual
+    # fine-line-botanical posts the operator asked for — the pick that shapes the
+    # post looked irrelevant. None (excluded, renormalized) when no theme is given,
+    # so an untargeted scoring is byte-identical to before.
+    "theme_relevance": 0.40,   # niche+caption+visual_tags vs the CAMPAIGN theme
     "engagement_rate": 0.25,   # interactions/views — the strongest performance signal
     "comments_weight": 0.10,   # conversation volume (log scale)
     "shares_saves_weight": 0.10,  # amplification/bookmark intent (log scale)
@@ -376,6 +384,7 @@ def score_components(
     style_tags: list[str],
     library_tags: list[str],
     *,
+    theme_terms: list[str] | None = None,
     now: datetime | None = None,
 ) -> dict[str, float | None]:
     """PURE per-parameter scores (0–10 each) for one post. EVERY component whose
@@ -420,6 +429,20 @@ def score_components(
 
     provided_amp = [v for v in (shares, saves) if v is not None]
     out["shares_saves_weight"] = _log_scale(sum(provided_amp)) if provided_amp else None
+
+    # THEME RELEVANCE — the competitor vs the CAMPAIGN brief ('fine-line botanical').
+    # Scored the same way as niche/style match but against the operator's theme terms
+    # (expanded through the same flora/fine-line synonym bridge the artwork ranker uses,
+    # so 'botanical' matches a 'Dahlia'/'wildflower' caption). None (excluded) when the
+    # campaign named no theme — untargeted scoring is unchanged.
+    if theme_terms and (niche or caption or visual_tags):
+        from studio.artwork_select import _expand_theme, _norm_set
+
+        theme_cmp = _expand_theme(_norm_set(theme_terms))
+        matched = theme_cmp & _word_tokens(niche, caption, " ".join(visual_tags))
+        out["theme_relevance"] = _clamp10(2.5 * len(matched))
+    else:
+        out["theme_relevance"] = None
 
     if style_tags and (niche or caption):
         matched = _overlap(style_tags, _word_tokens(niche, caption))
@@ -501,14 +524,18 @@ def score_posts(
     tenant_id: str,
     *,
     artist: str | None = None,
+    theme_terms: list[str] | None = None,
     dsn: str | None = None,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """Score every stored competitor post for ``tenant_id`` against OUR OWN
     grounding (the artist's/library's real tags via studio.artwork_select), persist
     the breakdown (``scores`` / ``total_score`` / ``why_it_worked``), and return
-    the posts sorted best-first (unscorable rows last). Honest-empty ``[]`` when
-    no competitor data is on file."""
+    the posts sorted best-first (unscorable rows last). When ``theme_terms`` is
+    given (the campaign brief, e.g. 'fine-line botanical'), the dominant
+    ``theme_relevance`` component makes brief-relevant competitors rank first;
+    without it the scoring is unchanged. Honest-empty ``[]`` when no competitor
+    data is on file."""
     from studio.artwork_select import artist_styles, list_artwork
 
     ensure_schema(dsn)
@@ -535,7 +562,9 @@ def score_posts(
         out: list[dict[str, Any]] = []
         for r in rows:
             post = dict(r)
-            components = score_components(post, style_tags, library_tags, now=now)
+            components = score_components(
+                post, style_tags, library_tags, theme_terms=theme_terms, now=now
+            )
             total = weighted_total(components)
             why = _build_why(components, total, post)
             conn.execute(
