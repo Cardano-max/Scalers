@@ -33,6 +33,20 @@ def test_from_asset_row_ignores_non_artwork_rows():
     assert ArtworkRef.from_asset_row({"asset_type": "post", "content": {}}) is None
 
 
+def test_from_asset_row_excludes_broll_video():
+    """A b-roll VIDEO shares the studio_artwork asset type but must never surface in
+    the 'pick 1 of 4 IMAGES' picker — it is chosen separately via load_broll."""
+    row = {
+        "id": "vid1",
+        "asset_type": ARTWORK_ASSET_TYPE,
+        "content": {"artist": "Keebs", "media": "video", "motifs": ["Spider-Man"]},
+    }
+    assert ArtworkRef.from_asset_row(row) is None
+    # An image row of the same type is still valid.
+    img = {"id": "img1", "asset_type": ARTWORK_ASSET_TYPE, "content": {"artist": "Keebs", "media": "image"}}
+    assert ArtworkRef.from_asset_row(img) is not None
+
+
 def test_from_asset_row_never_fabricates_missing_fields():
     ref = ArtworkRef.from_asset_row(
         {"id": "x1", "asset_type": ARTWORK_ASSET_TYPE, "content": {"artist": "Maya"}}
