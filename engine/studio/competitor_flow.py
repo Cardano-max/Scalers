@@ -91,8 +91,22 @@ def social_channel_plan(plan: Any, channel: str) -> dict[str, Any]:
     plans = getattr(plan, "channel_plans", {}) or {}
     if not isinstance(plans, dict):
         return {}
-    block = plans.get(str(channel), {})
-    return block if isinstance(block, dict) else {}
+    # The interview writes 'ig'/'fb' on one path and 'instagram'/'facebook' on another.
+    # A block keyed one way must still be found when the leg launches under the other,
+    # or the operator's competitor_research / attach_images answers go silently missing
+    # and the post ships with no image.
+    aliases = {
+        "ig": ("ig", "instagram"),
+        "instagram": ("instagram", "ig"),
+        "fb": ("fb", "facebook"),
+        "facebook": ("facebook", "fb"),
+    }
+    key = str(channel or "").strip().lower()
+    for name in aliases.get(key, (key,)):
+        block = plans.get(name)
+        if isinstance(block, dict) and block:
+            return block
+    return {}
 
 
 def ig_channel_plan(plan: Any) -> dict[str, Any]:

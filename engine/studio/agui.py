@@ -299,17 +299,83 @@ def merge_channel_plans(
         )
 
 
+# A feed POST is a BROADCAST artefact — one image + caption for an audience — not one
+# message per customer. These are the channels whose deliverable is a post.
+_SOCIAL_POST_CHANNELS = frozenset({"ig", "instagram", "fb", "facebook"})
+
+# The interview writes 'ig'/'fb' on one path and 'instagram'/'facebook' on another, so a
+# channel_plans block keyed one way must still be found when the leg launches under the
+# other name — otherwise the operator's competitor_research / attach_images answers go
+# silently missing.
+_CHANNEL_ALIASES: dict[str, tuple[str, ...]] = {
+    "ig": ("ig", "instagram"),
+    "instagram": ("instagram", "ig"),
+    "fb": ("fb", "facebook"),
+    "facebook": ("facebook", "fb"),
+    "email": ("email", "gmail"),
+    "gmail": ("gmail", "email"),
+}
+
+# The operator's PER-LEAD answers: "use my imported conversations", "one message per
+# customer", "these three names". They describe an OUTREACH leg (email / DM). They are
+# not properties of a feed post.
+_PER_LEAD_ROUTING_FIELDS = ("per_lead", "lead_source", "use_conversation_history", "leads")
+
+
+def _norm_channel(channel: str) -> str:
+    return str(channel or "").strip().lower()
+
+
+def _channel_overrides(plan: CampaignPlan, channel: str) -> dict[str, Any]:
+    """``plan.channel_plans`` block for ``channel``, tolerant of the ig/instagram and
+    fb/facebook spellings. Honest-empty ``{}`` when the channel has no block. Pure."""
+    plans = getattr(plan, "channel_plans", None) or {}
+    if not isinstance(plans, dict):
+        return {}
+    for name in _CHANNEL_ALIASES.get(_norm_channel(channel), (channel,)):
+        block = plans.get(name)
+        if isinstance(block, dict) and block:
+            return block
+    return {}
+
+
+def _opted_into_per_lead(overrides: dict[str, Any]) -> bool:
+    """True only when THIS channel's own block explicitly asks for per-lead messages."""
+    value = overrides.get("per_lead")
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "1", "on")
+    return bool(value)
+
+
 def effective_channel_plan(plan: CampaignPlan, channel: str) -> CampaignPlan:
     """The per-channel EFFECTIVE plan the isolated pipeline executes: a DEEP COPY of
     ``plan`` narrowed to ``channels=[channel]``, with any override present in
     ``plan.channel_plans[channel]`` applied onto the copy's top-level fields
-    (goal / audience / output_count / lead_count / offer / tone). The base plan is
-    NEVER mutated; a channel with no override entry gets a plain single-channel copy.
+    (goal / audience / output_count / lead_count / offer / tone / routing). The base plan
+    is NEVER mutated; a channel with no override entry gets a plain single-channel copy.
     attach_images / image_style / competitor_research are NOT lifted — they stay only
-    in ``channel_plans`` (the IG pipeline reads them from there)."""
+    in ``channel_plans`` (the social pipeline reads them from there)."""
     eff = plan.model_copy(deep=True)
     eff.channels = [channel]
-    overrides = (plan.channel_plans or {}).get(channel) or {}
+    overrides = _channel_overrides(plan, channel)
+
+    # A POST IS NOT A DM.
+    # The base plan carries the operator's EMAIL answers — per_lead, lead_source
+    # 'provided', use_conversation_history, the three named leads. Every channel child
+    # inherited them, so the social legs took the per-lead executor: Instagram and
+    # Facebook each emitted one DM-shaped 'outreach' row PER CUSTOMER and never reached
+    # the post pipeline, where the competitor gate and the artwork gate live. The
+    # operator asked for "one reel and one post, molded from competitor research, with
+    # images attached" and got three text DMs, no image picker, no competitor picker.
+    # Per-lead on a social channel must be opted into by THAT channel, explicitly.
+    if _norm_channel(channel) in _SOCIAL_POST_CHANNELS and not _opted_into_per_lead(overrides):
+        eff.per_lead = False
+        eff.lead_source = ""
+        eff.use_conversation_history = False
+        eff.leads = []
+
     for key in _CHANNEL_OVERRIDE_FIELDS:
         value = overrides.get(key)
         if value is None:
