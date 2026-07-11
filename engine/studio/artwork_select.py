@@ -105,6 +105,47 @@ def _expand_theme(terms: set[str]) -> set[str]:
     return out
 
 
+#: Brief words that carry no selection signal — they match everything and would let a
+#: piece look "more relevant" for answering nothing. Bounded and explicit.
+_STOP_TERMS = frozenset(
+    {
+        _norm(w)
+        for w in (
+            "the", "and", "for", "with", "our", "your", "this", "that", "from", "into",
+            "post", "posts", "page", "session", "sessions", "campaign", "promote",
+            "showcase", "about", "book", "booking", "work", "keebs", "tattoo", "tattoos",
+        )
+    }
+)
+
+
+def _brief_coverage(art: "ArtworkRef", theme_terms: list[str] | None) -> int:
+    """How many DISTINCT terms of the operator's brief this piece actually answers.
+
+    This is the relevance metric, and it deliberately is NOT "how many of my tags matched".
+    Counting matched tags rewards a heavily-tagged piece for satisfying ONE brief word many
+    times: under "dragon blackwork" the Spider-Man video carries six tags containing
+    'blackwork' and beat the dragon piece, which answers both halves of the brief. A piece
+    that satisfies two of the operator's words is the better answer than one that satisfies
+    a single word six times.
+
+    Each term is matched through its own synonym set, so "botanical" is answered by a piece
+    tagged "Dahlia flower". Stopwords are ignored — they match everything and mean nothing.
+    Pure."""
+    covered = 0
+    for term in _norm_set(theme_terms):
+        if term in _STOP_TERMS or len(term) < 3:
+            continue
+        syns = {term} | {_norm(s) for s in _TERM_EXPANSIONS.get(term, ())}
+        if (
+            _overlap(art.styles, syns)
+            or _overlap(art.motifs, syns)
+            or (_norm(art.collection) and _norm(art.collection) in syns)
+        ):
+            covered += 1
+    return covered
+
+
 # --------------------------------------------------------------------------- #
 # Normalized domain models.
 # --------------------------------------------------------------------------- #
@@ -293,7 +334,7 @@ def select_artwork(
     style_cmp = _norm_set(artist_styles) | theme_cmp
 
     scored: list[
-        tuple[int, int, int, bool, int, str, ArtworkRef, list[str], list[str], str]
+        tuple[int, int, int, int, bool, int, str, ArtworkRef, list[str], list[str], str]
     ] = []
     for a in artworks:
         matched_styles = _overlap(a.styles, style_cmp)
@@ -313,23 +354,38 @@ def select_artwork(
         # is a primary sort key ABOVE raw tag score; score only breaks ties within an equal
         # level of theme relevance.
         #
-        # It is a COUNT, not a flag: several pieces can be on-theme, and the MOST on-theme
-        # one should lead. Under a botanical brief the Dahlia/Sunflowers/Wildflowers piece
-        # (many floral tags) must outrank a piece that merely happens to include one rose.
+        # It measures HOW MUCH OF THE BRIEF a piece answers — the number of DISTINCT brief
+        # terms it covers — not how many of its tags happen to match. Counting matched TAGS
+        # rewards verbosity all over again: under "dragon blackwork" the Spider-Man video
+        # carries six tags containing the word blackwork and scored 6, while the actual
+        # dragon piece — which answers BOTH halves of the brief, dragon AND blackwork —
+        # scored 2 and lost. A piece that satisfies two of the operator's words is a better
+        # answer than a piece that satisfies one of them six times over.
         # With no theme terms this is 0 for every piece and the old ordering is unchanged.
-        theme_hits = len(_overlap(a.styles, theme_cmp)) + len(matched_motifs)
+        theme_hits = _brief_coverage(a, theme_terms)
         if matched_collection:
             theme_hits += 1
+        # DEPTH breaks a coverage tie, before generic tag score gets a vote.
+        # Coverage alone cannot separate two pieces that answer the same brief words:
+        # "botanical" and "floral" share one synonym set, so a piece carrying a single rose
+        # covers exactly what a piece carrying dahlias, sunflowers, wildflowers and foliage
+        # covers. On that tie the generic tag score took over and the one-rose piece won a
+        # botanical brief. Depth counts how MANY of the piece's own tags are on-theme, so
+        # the piece that is more thoroughly about the brief leads.
+        theme_depth = len(_overlap(a.styles, theme_cmp)) + len(matched_motifs)
         # CSV (real, first-party artwork) outranks seed (mock) on an otherwise exact tie.
         source_rank = 0 if _norm(a.source) == _norm("csv") else 1
         scored.append(
-            (coll_flag, theme_hits, score, a.is_best_example, source_rank, a.asset_id, a, matched_styles, matched_motifs, matched_collection)
+            (coll_flag, theme_hits, theme_depth, score, a.is_best_example, source_rank, a.asset_id, a, matched_styles, matched_motifs, matched_collection)
         )
 
-    # Best: collection-match first, then THEME RELEVANCE, then highest tag score, then
-    # best-example, then CSV-over-seed, then stable asset-id — fully deterministic.
-    scored.sort(key=lambda t: (-t[0], -t[1], -t[2], not t[3], t[4], t[5]))
-    _cf, _th, score, _best, _src, _aid, art, matched_styles, matched_motifs, matched_collection = scored[0]
+    # Best: collection-match, then BRIEF COVERAGE (how many of the operator's words this
+    # piece answers), then ON-THEME DEPTH (how thoroughly it answers them), then the
+    # generic tag score, then best-example, CSV-over-seed, and a stable asset-id — fully
+    # deterministic, and relevance to the brief always outranks how heavily a piece is
+    # tagged.
+    scored.sort(key=lambda t: (-t[0], -t[1], -t[2], -t[3], not t[4], t[5], t[6]))
+    _cf, _th, _td, score, _best, _src, _aid, art, matched_styles, matched_motifs, matched_collection = scored[0]
     exact = bool(matched_styles or matched_motifs or matched_collection)
     pick = ArtworkPick(
         asset_id=art.asset_id,
