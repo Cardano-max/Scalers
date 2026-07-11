@@ -364,7 +364,32 @@ def approve_and_publish(
     # to protect. The gate stays fully in force for every REAL channel — proven by
     # test_publish_demo_channel (gmail to a blocked recipient still raises while the
     # demo channel to the same recipient delivers to the sandbox).
-    if channel not in SANDBOX_CHANNELS:
+    # A PUBLIC POST HAS NO RECIPIENT — so a RECIPIENT allowlist is the wrong gate for it.
+    #
+    # The test-mode gate exists to protect the CLIENT'S CUSTOMERS: it refuses any send whose
+    # recipient the operator has not explicitly allowlisted. An Instagram/Facebook post has
+    # no recipient at all (``target`` is NULL) — it goes to the studio's OWN public account
+    # and reaches none of the client's people. Run it through the recipient allowlist and it
+    # can never match, so the post was UNPUBLISHABLE FOREVER: the operator could approve it,
+    # switch to Live, and still be refused, with a reason about recipients that made no
+    # sense for a post.
+    #
+    # Publishing to the studio's real feed is still a real, irreversible side effect, so it
+    # is not un-gated — it is gated on the RIGHT thing: the operator's explicit Live
+    # authorization. Test mode (the default) keeps refusing it, and the refusal now says
+    # something true. Nothing publishes by accident; it takes an approve AND a deliberate
+    # switch to Live.
+    _is_public_post = (action.type or "").lower() == "post" and not (action.target or "").strip()
+    if channel not in SANDBOX_CHANNELS and _is_public_post:
+        if not live:
+            reason = (
+                "TEST MODE — this publishes to the studio's real public "
+                f"{channel} account and reaches no individual customer. Switch to Live to "
+                "authorize it; nothing is sent while Test (safe) is on."
+            )
+            update_status(action.id, action.status, dsn=dsn, last_error=reason)
+            raise TestModeSendBlockedError(reason)
+    elif channel not in SANDBOX_CHANNELS:
         from tenants.store import check_send_allowed
 
         allowed, reason = check_send_allowed(action.tenant_id, action.target, dsn=dsn)

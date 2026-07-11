@@ -84,6 +84,79 @@ def caption_length(platform: Platform) -> FieldValidator:
     return FieldValidator("caption_length", _fn)
 
 
+#: Openers and phrases that belong in an EMAIL, never in a public social caption.
+#: A caption is read by a stranger scrolling a feed — not by a person who was written to.
+#: The channel-style prompt already SAYS "never open with an email-style greeting" and the
+#: model still shipped `Hey! Keebs has been diving deep into botanical pieces lately.` on a
+#: live Instagram post: a prompt is advice, and advice loses. This is the gate.
+_EMAIL_OPENER_RE = re.compile(
+    r"""^\s*(
+        (hey|hi|hello|greetings|dear)\b            # Hey! / Hi there / Hey Amanda / Dear …
+      | (good\s+(morning|afternoon|evening))\b
+    )""",
+    re.IGNORECASE | re.VERBOSE,
+)
+#: Message-shaped phrases anywhere in a caption — the register of a 1:1 note, not a post.
+_EMAIL_REGISTER = (
+    "wanted me to reach out",
+    "wanted to reach out",
+    "reaching out",
+    "just checking in",
+    "wanted to follow up",
+    "following up",
+    "hope you're well",
+    "hope you are well",
+    "hope this finds you",
+    "let me know if you",
+    "thought of you",
+)
+
+
+def social_post_voice(platform: Platform) -> FieldValidator:
+    """HARD: a public POST must not be written like a message.
+
+    An Instagram caption and a Facebook page post are read by strangers in a feed. They
+    have no salutation, no addressee and no sign-off — the first line is a hook that earns
+    the scroll-stop, not a greeting. A real run shipped an IG caption opening
+    ``"Hey! Keebs has been diving deep into botanical pieces lately."`` while the very same
+    prompt instructed the model never to do that: a prompt is advice, and the model is free
+    to ignore it. This validator is not advice — an ERROR here fails the draft and the cell
+    regenerates, so an email-shaped caption cannot reach the operator.
+
+    Only applies to POSTING platforms; email/SMS drafting is untouched."""
+    if platform.value not in ("instagram", "facebook", "ig", "fb", "reels", "tiktok"):
+        return FieldValidator("social_post_voice", lambda _v: [])
+
+    def _fn(value):
+        caption = _txt(value, "caption")
+        issues: list[ValidationIssue] = []
+        first_line = next((ln for ln in caption.splitlines() if ln.strip()), "")
+        if _EMAIL_OPENER_RE.match(first_line):
+            issues.append(
+                ValidationIssue(
+                    "social_post_voice",
+                    Severity.ERROR,
+                    f"a {platform.value} caption is a PUBLIC post, not a message: it opens "
+                    f"with an email-style greeting ({first_line[:40]!r}). Open with a hook "
+                    "about what is IN the picture — no salutation, no addressee.",
+                )
+            )
+        low = caption.lower()
+        for phrase in _EMAIL_REGISTER:
+            if phrase in low:
+                issues.append(
+                    ValidationIssue(
+                        "social_post_voice",
+                        Severity.ERROR,
+                        f"{phrase!r} is 1:1 message register, not caption register — a "
+                        "caption speaks to a feed, not to one person who was written to.",
+                    )
+                )
+        return issues
+
+    return FieldValidator("social_post_voice", _fn)
+
+
 def ban_lexicon(ban: tuple[str, ...]) -> FieldValidator:
     """HARD: any per-tenant banned phrase (VoiceDimensions.vocabulary.ban) in the
     caption / CTA / hashtags blocks the draft (ADR Decision 4 banned_phrase gate)."""
@@ -255,6 +328,7 @@ def draft_validators(
             no_placeholder("caption"),
             no_placeholder("call_to_action"),
             caption_length(platform),
+            social_post_voice(platform),  # a POST is not a message — hard, not advisory
             ai_flagger("caption", config),  # AF-01..08 (incl. BANNED_SLOP)
             ai_flagger("call_to_action", config),
             ban_lexicon(tuple(vocab.ban)),  # per-tenant hard bans

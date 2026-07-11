@@ -349,19 +349,38 @@ _ALIAS: dict[str, str] = {
 #: NEITHER is an email: posting channels must never open like a message — a real
 #: fb child staged 'Hey <name>'-shaped drafts the critic flagged as off-voice.
 #: Channels without an entry keep the unchanged base prompt.
+#: WHO IS WRITING. Without this the drafter defaults to a polite email register and ships
+#: captions like "Hey! Keebs has been diving deep into botanical pieces lately." — nobody
+#: on Instagram writes that. A caption is read by a stranger mid-scroll who owes you
+#: nothing: the first line either stops the thumb or the post is dead. The register is a
+#: tattoo artist talking about the piece in front of them, not a studio sending a notice.
+_SOCIAL_PERSONA = (
+    "You are the studio's social media lead — you write captions that stop the scroll and "
+    "get saved and shared. You are NOT writing an email, a newsletter or an announcement.\n"
+    "Non-negotiable:\n"
+    "- The FIRST LINE is a hook about what is ACTUALLY IN THE PICTURE — a detail, a "
+    "tension, a claim worth arguing with. It is not a greeting and not a topic sentence.\n"
+    "- NEVER open with 'Hey', 'Hi', 'Hello', or any greeting. NEVER address one person. "
+    "No 'reaching out', no 'just checking in', no 'wanted to follow up', no sign-off. "
+    "A post has no addressee.\n"
+    "- Write about THIS piece specifically. Name what is in it. A caption that could sit "
+    "under any other tattoo is a failed caption.\n"
+    "- Short lines. Line breaks. No paragraph walls, no corporate throat-clearing "
+    "('We're excited to', 'Whether you're looking for').\n"
+    "- One clear call to action at the end, in the studio's voice."
+)
+
 _CHANNEL_STYLE: dict[str, str] = {
     "fb": (
-        "Channel style — Facebook Page post: write in the studio's page-post voice "
-        "(conversational, speaking as the studio to its page followers). This is a "
-        "PUBLIC POST, not a message: never open with an email-style greeting "
-        "('Hey <name>', 'Hi there'), never address one named person, no sign-off. "
-        "Longer copy than an Instagram caption is fine; skip hashtag walls and end "
-        "with one clear call to action."
+        _SOCIAL_PERSONA + "\n"
+        "Channel — Facebook page post: same rules, but you may run slightly longer and "
+        "more conversational than an Instagram caption. Fewer hashtags. Speak as the "
+        "studio to its followers; still a PUBLIC post with no addressee."
     ),
     "ig": (
-        "Channel style — Instagram caption: a PUBLIC caption, not a message. Hook "
-        "in the first line, tight copy, no email-style greeting or sign-off, one "
-        "clear call to action; a few relevant hashtags at the end are fine."
+        _SOCIAL_PERSONA + "\n"
+        "Channel — Instagram caption: tight. Hook line, then a few short lines, then the "
+        "CTA. A handful of relevant hashtags at the end."
     ),
 }
 

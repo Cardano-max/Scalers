@@ -213,6 +213,22 @@ export function ReviewScreen() {
     setEditing(false);
   };
 
+  // Open a draft from the READY-QUEUE card (the big image-led post at the top of the list).
+  // The card is what the operator's eye lands on, so it has to behave like a row: select the
+  // draft and show it. It cannot just call selectRow, because `selected` is looked up inside
+  // the ACTIVE FILTER — if the operator is on "Outreach", the post is not in `filtered` and
+  // the selection would resolve to null and silently do nothing. So: if the target draft is
+  // not visible under the current filter, drop the filter first, then select and pulse it.
+  const openFromReadyQueue = (actionId: string) => {
+    const visible = filtered.some((a) => a.id === actionId);
+    const exists = (items ?? []).some((a) => a.id === actionId);
+    if (!exists) return; // not loaded (e.g. already approved) — never select a phantom row
+    if (!visible) setFilter('ALL');
+    setSelectedId(actionId);
+    setEditing(false);
+    triggerArrival(actionId);
+  };
+
   const removeAndAdvance = (id: string) => {
     const idx = filtered.findIndex((a) => a.id === id);
     const remaining = filtered.filter((a) => a.id !== id);
@@ -314,7 +330,7 @@ export function ReviewScreen() {
           {/* Social Ready Queue — every pending IG/FB post package, complete and
               waiting at the Meta publish gate (honest blocked_reason while the
               operator's credentials are missing). Renders nothing when empty. */}
-          <ReadyQueueBoard />
+          <ReadyQueueBoard onOpen={openFromReadyQueue} />
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {FILTERS.map((f) => {
               const active = filter === f.id;

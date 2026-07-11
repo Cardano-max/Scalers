@@ -114,7 +114,7 @@ function Chip({ label, value }: { label: string; value: string }) {
  * (structure only, never copied). Polls GET /studio/social/ready every 15s;
  * honest-empty (renders nothing) when no post is pending. While Meta credentials
  * are missing, each card shows the engine's exact blocked_reason. */
-export function ReadyQueueBoard() {
+export function ReadyQueueBoard({ onOpen }: { onOpen?: (actionId: string) => void } = {}) {
   const [posts, setPosts] = useState<ReadyPost[]>([]);
   const [error, setError] = useState(false);
 
@@ -154,9 +154,20 @@ export function ReadyQueueBoard() {
           {posts.length} post{posts.length === 1 ? '' : 's'} waiting
         </span>
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* BOUNDED. This panel sits ABOVE the draft list in the same column, so any height it
+          takes it takes from the list. Unbounded, two posts hid five Gmail drafts entirely.
+          It scrolls within its own box now — the list below is always reachable. */}
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+          maxHeight: 190,
+          overflowY: 'auto',
+        }}
+      >
         {posts.map((p) => (
-          <PostCard key={p.action_id} post={p} />
+          <PostCard key={p.action_id} post={p} onOpen={onOpen} />
         ))}
       </div>
       {blockedReasons.length > 0 ? (
@@ -188,155 +199,132 @@ export function ReadyQueueBoard() {
 
 /** One post rendered as a real feed card: image + hook-led caption + anatomy +
  *  the competitor mold. Everything is a live field — nothing is invented. */
-function PostCard({ post: p }: { post: ReadyPost }) {
+function PostCard({ post: p, onOpen }: { post: ReadyPost; onOpen?: (actionId: string) => void }) {
   const [imgFailed, setImgFailed] = useState(false);
   const { hook, body } = splitHook(p.caption);
   const a = p.anatomy;
   const badge = CHANNEL_BADGE[p.channel] ?? '#6B675F';
   const showImage = p.artwork?.found && p.artwork.media === 'image' && p.artwork.image_url && !imgFailed;
 
+  // THE CARD MUST OPEN ITS DRAFT.
+  // This is the biggest, most image-rich thing in the review queue — the operator's eye goes
+  // straight to it and they click it to inspect the post. It was an inert <article>: nothing
+  // happened, and the detail pane sat on "No action selected — pick a row", so the post read
+  // as un-openable. The draft it belongs to was one scroll further down the list the whole
+  // time. Clicking the card now selects that exact draft (switching the filter if the post is
+  // hidden behind the current one) and opens the full review panel.
+  const open = onOpen ? () => onOpen(p.action_id) : undefined;
+
   return (
     <article
+      onClick={open}
+      onKeyDown={
+        open
+          ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                open();
+              }
+            }
+          : undefined
+      }
+      role={open ? 'button' : undefined}
+      tabIndex={open ? 0 : undefined}
+      aria-label={open ? `Open the ${p.channel} post draft for review` : undefined}
+      title={open ? 'Open this post for review' : undefined}
       style={{
         border: '1px solid var(--border, #E5E1D8)',
         borderRadius: 10,
         overflow: 'hidden',
         background: 'var(--surface, #FFFFFF)',
+        cursor: open ? 'pointer' : undefined,
       }}
     >
-      <div style={{ display: 'flex', gap: 12, padding: 10 }}>
-        {/* The real image — the post's actual media, served from the library. */}
-        <div style={{ flex: '0 0 116px', width: 116 }}>
+      {/* COMPACT CARD — a summary, not the whole post.
+          This panel used to render each post's full caption, its angle/CTA chips, all six
+          hashtags and the competitor-mold block. Two posts were enough to push the ACTUAL
+          draft list — the five Gmail drafts — clean off the bottom of the screen: the
+          operator saw "7 drafts waiting", scrolled, and found only the two posts. The full
+          post now lives in the detail panel (which this card opens), so the card only has
+          to be recognisable: thumbnail, channel, one line. */}
+      <div style={{ display: 'flex', gap: 10, padding: 9, alignItems: 'center' }}>
+        <div style={{ flex: '0 0 52px', width: 52 }}>
           {showImage ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={p.artwork!.image_url as string}
               alt={p.artwork?.caption ?? 'post artwork'}
               onError={() => setImgFailed(true)}
-              style={{ width: 116, height: 116, objectFit: 'cover', borderRadius: 8, display: 'block', background: '#F0EEE8' }}
+              style={{ width: 52, height: 52, objectFit: 'cover', borderRadius: 6, display: 'block', background: '#F0EEE8' }}
             />
           ) : (
             <div
               style={{
-                width: 116,
-                height: 116,
-                borderRadius: 8,
+                width: 52,
+                height: 52,
+                borderRadius: 6,
                 background: '#F0EEE8',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 textAlign: 'center',
-                fontSize: 10,
+                fontSize: 8.5,
                 fontFamily: MONO,
                 color: '#A8A299',
-                padding: 8,
+                padding: 4,
+                lineHeight: 1.2,
               }}
             >
-              {p.artwork && !p.artwork.found
-                ? 'artwork no longer in library — pick a new one'
-                : p.broll?.found
-                  ? 'video post (b-roll)'
-                  : 'no image attached'}
+              {p.artwork && !p.artwork.found ? 'no artwork' : p.broll?.found ? 'video' : 'no image'}
             </div>
           )}
         </div>
 
-        {/* Caption + anatomy. */}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', paddingBottom: 6 }}>
+          <div style={{ display: 'flex', gap: 7, alignItems: 'center', paddingBottom: 3 }}>
             <span
               style={{
-                fontSize: 10,
+                fontSize: 9.5,
                 fontFamily: MONO,
                 fontWeight: 600,
                 color: '#fff',
                 background: badge,
                 borderRadius: 4,
-                padding: '1px 6px',
+                padding: '1px 5px',
                 letterSpacing: '0.5px',
               }}
             >
               {p.channel.toUpperCase()}
             </span>
+            {p.mold?.handle ? (
+              <span style={{ fontSize: 9.5, fontFamily: MONO, color: '#0F8A82' }}>
+                molded from @{p.mold.handle}
+              </span>
+            ) : null}
             {p.scheduled_for ? (
-              <span
-                style={{
-                  fontSize: 10,
-                  fontFamily: MONO,
-                  color: '#B45309',
-                  border: '1px solid #B45309',
-                  borderRadius: 999,
-                  padding: '0 7px',
-                }}
-              >
+              <span style={{ fontSize: 9.5, fontFamily: MONO, color: '#B45309' }}>
                 scheduled {scheduleLabel(p.scheduled_for)}
                 {p.schedule_live ? ' · LIVE' : ''}
               </span>
             ) : null}
           </div>
-
-          {hook ? (
-            <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text, #38342C)', lineHeight: 1.35 }}>
-              {hook}
-            </div>
-          ) : null}
-          {body ? (
-            <div style={{ fontSize: 12, color: 'var(--muted, #6B675F)', lineHeight: 1.45, marginTop: 3, whiteSpace: 'pre-wrap' }}>
-              {body}
-            </div>
-          ) : null}
-
-          {/* Post anatomy — the pieces a marketer names: angle · CTA · keywords. */}
-          {a && (a.angle || a.cta || a.hashtags.length > 0) ? (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-              {a.angle ? <Chip label="angle" value={a.angle.replace(/_/g, ' ')} /> : null}
-              {a.cta ? <Chip label="CTA" value={a.cta} /> : null}
-              {a.hashtags.slice(0, 6).map((h) => (
-                <span
-                  key={h}
-                  style={{
-                    fontSize: 10.5,
-                    fontFamily: MONO,
-                    color: '#7A5AF8',
-                    background: 'rgba(122,90,248,0.08)',
-                    borderRadius: 999,
-                    padding: '1px 8px',
-                  }}
-                >
-                  #{h}
-                </span>
-              ))}
-            </div>
-          ) : null}
+          <div
+            style={{
+              fontSize: 12.5,
+              fontWeight: 600,
+              color: 'var(--text, #38342C)',
+              lineHeight: 1.3,
+              overflow: 'hidden',
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+            }}
+          >
+            {hook || body || 'post draft'}
+          </div>
         </div>
       </div>
 
-      {/* The competitor mold — the story that makes a client say 'wow'. */}
-      {p.mold && p.mold.handle ? (
-        <div
-          style={{
-            borderTop: '1px dashed var(--border, #E5E1D8)',
-            padding: '7px 10px',
-            fontSize: 10.5,
-            fontFamily: MONO,
-            color: '#6B675F',
-            background: 'rgba(15,138,130,0.05)',
-          }}
-        >
-          <span style={{ color: '#0F8A82', fontWeight: 600 }}>molded from </span>
-          {p.mold.url ? (
-            <a href={p.mold.url} target="_blank" rel="noreferrer" style={{ color: '#0F8A82' }}>
-              @{p.mold.handle}
-            </a>
-          ) : (
-            <span style={{ color: '#0F8A82' }}>@{p.mold.handle}</span>
-          )}
-          {p.mold.structure.length > 0 ? (
-            <span> · structure {p.mold.structure.join(' → ')}</span>
-          ) : null}
-          <span style={{ color: '#A8A299' }}> · shape only, never copied</span>
-        </div>
-      ) : null}
     </article>
   );
 }

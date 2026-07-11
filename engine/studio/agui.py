@@ -6583,6 +6583,120 @@ def mount_studio_agui(app) -> None:
             return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
         return JSONResponse(out)
 
+    @app.post("/studio/run/{run_id}/stop")
+    async def studio_run_stop_route(run_id: str):  # noqa: ANN202
+        """STOP a run and EVERY leg of it — the operator's brake.
+
+        ``/steer`` already carries an ``abort`` directive, but it only lands at the next
+        safe boundary: a leg that is genuinely stuck (a hung provider call, a leg whose
+        parent died) never reaches one, so the console keeps reporting "2 agents working"
+        forever with no way to clear it. This issues the abort to the parent AND each
+        channel child, and then marks any leg still registered as running as aborted, so
+        the fleet reflects reality instead of a ghost.
+
+        It only ever NARROWS: nothing here can send, publish, or lift a gate."""
+        from fastapi.responses import JSONResponse
+
+        dsn = get_dsn()
+        family = [run_id, *child_run_ids(run_id, dsn, runs_registry)]
+        aborted: list[str] = []
+        for rid in family:
+            try:
+                from studio.supervisor_control import issue_directive
+
+                await asyncio.to_thread(
+                    issue_directive, rid, kind="abort",
+                    note="stopped by the operator from the console", dsn=dsn,
+                )
+            except Exception:
+                pass  # a directive-store hiccup must not stop us clearing the ghost below
+            rec = runs_registry.get(rid)
+            if isinstance(rec, dict) and rec.get("status") == "running":
+                rec["status"] = "aborted"
+                rec["error"] = "stopped by the operator"
+                aborted.append(rid)
+        return JSONResponse({"ok": True, "runId": run_id, "legs": family, "stopped": aborted})
+
+    @app.get("/studio/tenant/send-mode")
+    async def studio_send_mode_get():  # noqa: ANN202
+        """The tenant's REAL server-side send posture — what the engine will actually do,
+        not what a toggle in the browser claims. ``testMode`` true means every send whose
+        recipient is not on ``allowlist`` is refused at the DB boundary."""
+        from fastapi.responses import JSONResponse
+
+        from tenants.store import get_tenant
+
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        try:
+            row = await asyncio.to_thread(get_tenant, tenant_id, dsn=get_dsn())
+        except Exception as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse(
+            {
+                "ok": True,
+                "tenantId": tenant_id,
+                "testMode": bool((row or {}).get("test_mode", True)),
+                "allowlist": list((row or {}).get("test_send_allowlist") or []),
+            }
+        )
+
+    @app.post("/studio/tenant/send-mode")
+    async def studio_send_mode_set(request: Request):  # noqa: ANN202
+        """OPERATOR-ONLY: change the tenant's send posture.
+
+        Two moves, and no others:
+          * ``allow``: add a recipient to the test-send allowlist. TEST MODE stays ON — the
+            engine will send to THIS address for real and still refuse every other one.
+            This is how you demo a real send without exposing the client's whole list.
+          * ``testMode``: false takes the tenant OUT of test mode entirely. Sends then reach
+            real recipients. It requires ``confirm: "GO LIVE"`` typed exactly, because there
+            is no undo on a delivered email.
+
+        Nothing here sends anything. It only changes what a LATER, separately-approved send
+        is permitted to do — the approve-first gate, the exactly-once claim and the consent
+        checks all still stand in front of every actual delivery."""
+        from fastapi.responses import JSONResponse
+
+        from tenants.store import set_tenant_send_mode
+
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        try:
+            payload = json.loads(await request.body() or b"{}")
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        allow = (payload.get("allow") or "").strip()
+        test_mode = payload.get("testMode")
+        confirm = (payload.get("confirm") or "").strip()
+
+        if test_mode is False and confirm != "GO LIVE":
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "leaving TEST MODE sends to real customers and cannot be "
+                             "undone — re-send with confirm: \"GO LIVE\" to proceed",
+                },
+                status_code=400,
+            )
+        if not allow and test_mode is None:
+            return JSONResponse(
+                {"ok": False, "error": "nothing to change: pass `allow` or `testMode`"},
+                status_code=400,
+            )
+        try:
+            out = await asyncio.to_thread(
+                set_tenant_send_mode,
+                tenant_id,
+                allow=allow or None,
+                test_mode=test_mode if isinstance(test_mode, bool) else None,
+                dsn=get_dsn(),
+            )
+        except Exception as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse({"ok": True, "tenantId": tenant_id, **out})
+
     @app.post("/studio/send-eligible")
     async def studio_send_all_eligible_route(request: Request):  # noqa: ANN202
         """THE one-button send: every eligible/safe PENDING draft of the ACTIVE TENANT

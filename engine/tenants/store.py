@@ -91,6 +91,46 @@ def upsert_tenant(
     return get_tenant(tenant_id, dsn=dsn)  # type: ignore[return-value]
 
 
+def set_tenant_send_mode(
+    tenant_id: str,
+    *,
+    allow: str | None = None,
+    test_mode: bool | None = None,
+    dsn: str | None = None,
+) -> dict[str, Any]:
+    """The operator's two send-posture moves. Additive and explicit — never a bulk reset.
+
+    ``allow`` APPENDS one recipient to the test-send allowlist (idempotent; the rest of the
+    list is preserved). TEST MODE stays on, so the engine will really send to that one
+    address and still refuse every other — which is how you prove a real delivery without
+    putting the client's whole customer list at risk.
+
+    ``test_mode=False`` takes the tenant out of test mode entirely. Callers are expected to
+    have demanded an explicit confirmation first; this function does not send anything, and
+    approve-first, the exactly-once claim and the per-customer consent checks all still
+    stand in front of every actual delivery.
+
+    Returns the tenant's REAL persisted posture afterwards — never an echo of the request."""
+    ensure_schema(dsn)
+    row = get_tenant(tenant_id, dsn=dsn) or {}
+    current = list(row.get("test_send_allowlist") or [])
+    if allow:
+        target = allow.strip()
+        if target and target.lower() not in {a.strip().lower() for a in current}:
+            current.append(target)
+    out = upsert_tenant(
+        tenant_id,
+        str(row.get("name") or tenant_id),
+        test_mode=test_mode,
+        allowlist=current if allow else None,
+        dsn=dsn,
+    )
+    return {
+        "testMode": bool(out.get("test_mode", True)),
+        "allowlist": list(out.get("test_send_allowlist") or []),
+    }
+
+
 def _legacy_passthrough_allowlist() -> frozenset[str]:
     """Tenants explicitly allowed to legacy-passthrough with NO registry row,
     from ``TEST_MODE_LEGACY_PASSTHROUGH`` (comma-separated). Everything NOT on
