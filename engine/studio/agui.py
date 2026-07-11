@@ -1804,8 +1804,12 @@ def _execute_campaign_sync(
     ig_artwork_note: str | None = None
     ig_competitor_pick: dict[str, Any] | None = None
     ig_competitor_note: str | None = None
-    if decision.pipeline is Pipeline.INSTAGRAM:
-        # An IG post needs a run id UP FRONT (for the artwork pause + the channel-crew
+    # SOCIAL LEGS (Instagram AND Facebook) share the two operator gates. A Facebook page
+    # post is the same artefact as an IG post — a real image with a caption — so it gets
+    # the same competitor mold + top-4 artwork pick. Facebook used to be excluded here,
+    # which is exactly why an 'fb' leg emitted email-shaped body text with no image.
+    if decision.pipeline in (Pipeline.INSTAGRAM, Pipeline.FACEBOOK):
+        # A social post needs a run id UP FRONT (for the artwork pause + the channel-crew
         # trace rows) — mint one in the same camp/team format the launcher uses.
         if not run_id:
             campaign_id = f"camp_{uuid.uuid4().hex[:12]}"
@@ -1818,9 +1822,11 @@ def _execute_campaign_sync(
         # empty competitor table NEVER pauses: honest 'skip' with a visible step
         # note, and the run continues the normal IG path — posts and metrics are
         # never fabricated.
-        from studio.competitor_flow import ig_channel_plan
+        from studio.competitor_flow import social_channel_plan
 
-        _ig_cfg = ig_channel_plan(plan)
+        # Read THIS leg's own block ('ig' or 'fb') — each social channel carries its own
+        # competitor_research / attach_images / image_style answers from the interview.
+        _ig_cfg = social_channel_plan(plan, decision.channel)
         if bool(_ig_cfg.get("competitor_research")):
             from studio.competitor_flow import (
                 awaiting_competitor_summary,
@@ -1941,7 +1947,12 @@ def _execute_campaign_sync(
     )
     summary["routed_channel"] = decision.channel
     summary["pipeline_built"] = True
-    if decision.pipeline is Pipeline.INSTAGRAM:
+    # BOTH social legs land their picked artwork + competitor mold on the staged post.
+    # enrich_post_actions() keys on type='post' (not channel), so a Facebook page post
+    # gets the SAME real artwork_asset_id the IG post does — which is what turns an
+    # fb draft from a wall of email text into an image-with-caption the publisher can
+    # actually send to /{page_id}/photos.
+    if decision.pipeline in (Pipeline.INSTAGRAM, Pipeline.FACEBOOK):
         summary["artwork"] = ig_artwork
         summary["artwork_note"] = ig_artwork_note
         if ig_artwork_note:

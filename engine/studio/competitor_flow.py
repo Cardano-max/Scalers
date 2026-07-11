@@ -79,16 +79,26 @@ def ensure_schema(dsn: str | None = None) -> None:
 # --------------------------------------------------------------------------- #
 # The plan contract seam (another builder owns the field; code against it).
 # --------------------------------------------------------------------------- #
-def ig_channel_plan(plan: Any) -> dict[str, Any]:
-    """The plan's Instagram channel plan (``plan.channel_plans["ig"]``) — keys:
-    ``competitor_research`` (bool), ``attach_images`` (bool), ``image_style``
-    (str). Honest-empty ``{}`` until the plan contract lands or when unset, so
-    every existing plan keeps today's behavior. Pure."""
+def social_channel_plan(plan: Any, channel: str) -> dict[str, Any]:
+    """The plan's block for a SOCIAL channel (``plan.channel_plans[channel]``) — keys:
+    ``competitor_research`` (bool), ``attach_images`` (bool), ``image_style`` (str).
+
+    A Facebook page post is the SAME artefact as an Instagram post — an image with a
+    caption — so both legs read their own block through one accessor. Facebook used to
+    be excluded from the competitor + artwork gates entirely, which is why an 'fb'
+    campaign emitted email-shaped body text with no image attached. Honest-empty ``{}``
+    when unset, so an untouched plan keeps today's behavior. Pure."""
     plans = getattr(plan, "channel_plans", {}) or {}
     if not isinstance(plans, dict):
         return {}
-    ig = plans.get("ig", {})
-    return ig if isinstance(ig, dict) else {}
+    block = plans.get(str(channel), {})
+    return block if isinstance(block, dict) else {}
+
+
+def ig_channel_plan(plan: Any) -> dict[str, Any]:
+    """The plan's Instagram channel plan (``plan.channel_plans["ig"]``). Thin alias of
+    :func:`social_channel_plan` kept for existing callers. Pure."""
+    return social_channel_plan(plan, "ig")
 
 
 # --------------------------------------------------------------------------- #
