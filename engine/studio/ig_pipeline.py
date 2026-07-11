@@ -424,6 +424,7 @@ def build_ig_brief_block(
     campaign_id: str | None = None,
     artwork: dict[str, Any] | None = None,
     artwork_note: str | None = None,
+    competitor_pick: dict[str, Any] | None = None,
     dsn: str | None = None,
 ) -> str:
     """Assemble the IG-specific grounded brief block AND record the channel crew's
@@ -488,29 +489,47 @@ def build_ig_brief_block(
     # recorded (no competitor read contributed to this brief). When a pattern
     # exists, the crew step carries the full score breakdown so the live panel
     # shows the reasoning; model is 'db+cell' only when the clamped LLM read ran.
+    #
+    # When the OPERATOR PICKED a post (the competitor selection pause answered),
+    # THAT post is the reference: the MOLD step runs here — after the research
+    # crew steps, recorded as the run's one role='molder' agent_run — and its
+    # brand-adapted direction REPLACES the auto best_pattern block (one pattern
+    # per brief, the operator's, never both).
     competitor_block = ""
-    try:
-        from studio.competitor_intel import best_pattern, render_competitor_pattern_block
+    if competitor_pick is not None:
+        try:
+            from studio.competitor_flow import mold_competitor_pattern, render_molded_block
 
-        competitor = best_pattern(tenant_id, artist=artist, dsn=dsn)
-        competitor_block = render_competitor_pattern_block(competitor)
-        if run_id and competitor:
-            _record_crew_step(
-                dsn, run_id, campaign_id,
-                "competitor_intel",
-                "db+cell" if competitor.get("llm_refined") else "db",
-                {"artist": artist, "tenant_id": tenant_id},
-                {"handle": competitor.get("handle"),
-                 "url": competitor.get("url"),
-                 "total_score": competitor.get("total_score"),
-                 "scores": competitor.get("scores"),
-                 "hook_line": competitor.get("hook_line"),
-                 "emotional_angle": competitor.get("emotional_angle"),
-                 "why_it_worked": competitor.get("why_it_worked"),
-                 "llm_refined": bool(competitor.get("llm_refined"))},
+            mold = mold_competitor_pattern(
+                tenant_id, plan, competitor_pick,
+                run_id=run_id, campaign_id=campaign_id, dsn=dsn,
             )
-    except Exception:
-        competitor_block = ""  # grounding never breaks the run; block simply absent
+            competitor_block = render_molded_block(mold, competitor_pick)
+        except Exception:
+            competitor_block = ""  # grounding never breaks the run
+    else:
+        try:
+            from studio.competitor_intel import best_pattern, render_competitor_pattern_block
+
+            competitor = best_pattern(tenant_id, artist=artist, dsn=dsn)
+            competitor_block = render_competitor_pattern_block(competitor)
+            if run_id and competitor:
+                _record_crew_step(
+                    dsn, run_id, campaign_id,
+                    "competitor_intel",
+                    "db+cell" if competitor.get("llm_refined") else "db",
+                    {"artist": artist, "tenant_id": tenant_id},
+                    {"handle": competitor.get("handle"),
+                     "url": competitor.get("url"),
+                     "total_score": competitor.get("total_score"),
+                     "scores": competitor.get("scores"),
+                     "hook_line": competitor.get("hook_line"),
+                     "emotional_angle": competitor.get("emotional_angle"),
+                     "why_it_worked": competitor.get("why_it_worked"),
+                     "llm_refined": bool(competitor.get("llm_refined"))},
+                )
+        except Exception:
+            competitor_block = ""  # grounding never breaks the run; block simply absent
 
     parts = [
         render_artist_memory_block(mem),

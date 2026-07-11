@@ -1754,6 +1754,8 @@ def _execute_campaign_sync(
     brief = _brief_from_plan(plan)
     ig_artwork: dict[str, Any] | None = None
     ig_artwork_note: str | None = None
+    ig_competitor_pick: dict[str, Any] | None = None
+    ig_competitor_note: str | None = None
     if decision.pipeline is Pipeline.INSTAGRAM:
         # An IG post needs a run id UP FRONT (for the artwork pause + the channel-crew
         # trace rows) — mint one in the same camp/team format the launcher uses.
@@ -1761,44 +1763,105 @@ def _execute_campaign_sync(
             campaign_id = f"camp_{uuid.uuid4().hex[:12]}"
             run_id = f"team-{campaign_id}-{uuid.uuid4().hex[:12]}"
 
-        # ARTWORK GATE (item 3): every IG run attaches real artwork when the library
-        # has it — surface the top picks and PAUSE for the operator's choice BEFORE
-        # any drafting. An empty library proceeds with the honest note, never a pause.
+        # COMPETITOR-INTELLIGENCE GATE (pause #1) — when the ig channel plan turns
+        # competitor research on: score the operator-uploaded competitor posts and
+        # PAUSE for the operator's pattern pick BEFORE molding/drafting (the artwork
+        # gate below then style-matches OUR portfolio to the chosen pattern). An
+        # empty competitor table NEVER pauses: honest 'skip' with a visible step
+        # note, and the run continues the normal IG path — posts and metrics are
+        # never fabricated.
+        from studio.competitor_flow import ig_channel_plan
+
+        _ig_cfg = ig_channel_plan(plan)
+        if bool(_ig_cfg.get("competitor_research")):
+            from studio.competitor_flow import (
+                awaiting_competitor_summary,
+                competitor_gate,
+            )
+
+            _cgate_state, _cgate_payload = competitor_gate(
+                run_id,
+                tenant_id,
+                session_id,
+                plan,
+                artist=(plan.artist or "").strip() or None,
+                dsn=dsn,
+            )
+            if _cgate_state == "pause":
+                try:
+                    _log_turn(
+                        dsn, session_id, "host",
+                        str(_cgate_payload.get("question") or "Competitor pick needed."),
+                        None,
+                    )
+                except Exception:
+                    pass
+                return awaiting_competitor_summary(
+                    run_id, _campaign_id_from_run_id(run_id), _cgate_payload,
+                    channel=decision.channel,
+                )
+            if _cgate_state == "continue":
+                ig_competitor_pick = _cgate_payload
+            else:  # "skip" — honest note; the normal IG path continues
+                ig_competitor_note = str(_cgate_payload)
+
+        # ARTWORK GATE (item 3, pause #2): every IG run attaches real artwork when
+        # the library has it — surface the top picks and PAUSE for the operator's
+        # choice BEFORE any drafting. An empty library proceeds with the honest
+        # note, never a pause. When the operator picked a competitor pattern, the
+        # TOP-4 is style-matched to it: theme terms = the chosen post's visual_tags
+        # merged with the plan's image_style (OUR OWN portfolio, matched looks).
+        # An explicit attach_images=false on the ig channel plan skips this pause.
         from studio.artwork_flow import (
             artwork_gate,
             awaiting_selection_summary,
             theme_terms_from_plan,
         )
 
-        _gate_state, _gate_payload = artwork_gate(
-            run_id,
-            tenant_id,
-            session_id,
-            plan,
-            artist=(plan.artist or "").strip() or None,
-            theme_terms=theme_terms_from_plan(plan),
-            dsn=dsn,
-        )
-        if _gate_state == "pause":
-            try:
-                _log_turn(
-                    dsn, session_id, "host",
-                    str(_gate_payload.get("question") or "Artwork pick needed."), None,
-                )
-            except Exception:
-                pass
-            return awaiting_selection_summary(
-                run_id, _campaign_id_from_run_id(run_id), _gate_payload,
-                channel=decision.channel,
+        _theme_terms = theme_terms_from_plan(plan)
+        if ig_competitor_pick:
+            from studio.competitor_flow import competitor_theme_terms
+
+            _theme_terms = competitor_theme_terms(
+                ig_competitor_pick, _ig_cfg.get("image_style")
+            ) or _theme_terms
+        if _ig_cfg.get("attach_images") is False:
+            ig_artwork_note = (
+                "image attach disabled by the ig channel plan "
+                "(attach_images=false) — caption-only draft"
             )
-        if _gate_state == "selected":
-            ig_artwork = _gate_payload
         else:
-            ig_artwork_note = str(_gate_payload)
+            _gate_state, _gate_payload = artwork_gate(
+                run_id,
+                tenant_id,
+                session_id,
+                plan,
+                artist=(plan.artist or "").strip() or None,
+                theme_terms=_theme_terms,
+                dsn=dsn,
+            )
+            if _gate_state == "pause":
+                try:
+                    _log_turn(
+                        dsn, session_id, "host",
+                        str(_gate_payload.get("question") or "Artwork pick needed."), None,
+                    )
+                except Exception:
+                    pass
+                return awaiting_selection_summary(
+                    run_id, _campaign_id_from_run_id(run_id), _gate_payload,
+                    channel=decision.channel,
+                )
+            if _gate_state == "selected":
+                ig_artwork = _gate_payload
+            else:
+                ig_artwork_note = str(_gate_payload)
 
         # IG PIPELINE DEPTH (item 6): ground the brief in the artist's REAL memory
         # (profile + past campaigns + artwork tags) and live trend research, recorded
-        # as channel-specific agent_runs so the IG crew is visibly different.
+        # as channel-specific agent_runs so the IG crew is visibly different. The
+        # operator-picked competitor pattern (if any) is MOLDED here — one
+        # role='molder' step, brand voice only, never a copied sentence.
         try:
             from studio.ig_pipeline import build_ig_brief_block
 
@@ -1809,6 +1872,7 @@ def _execute_campaign_sync(
                 campaign_id=_campaign_id_from_run_id(run_id),
                 artwork=ig_artwork,
                 artwork_note=ig_artwork_note,
+                competitor_pick=ig_competitor_pick,
                 dsn=dsn,
             )
         except Exception:
@@ -1834,6 +1898,18 @@ def _execute_campaign_sync(
         summary["artwork_note"] = ig_artwork_note
         if ig_artwork_note:
             summary.setdefault("step_notes", []).append(f"artwork: {ig_artwork_note}")
+        # Competitor-intel visibility: an honest skip lands as a step note (the
+        # operator sees WHY no pattern was molded); a pick lands its reference so
+        # the summary traces which real post the molder worked from.
+        if ig_competitor_note:
+            summary.setdefault("step_notes", []).append(
+                f"competitor intel: {ig_competitor_note}"
+            )
+        if ig_competitor_pick:
+            summary["competitor_pick"] = {
+                "postId": ig_competitor_pick.get("postId"),
+                "handle": ig_competitor_pick.get("handle"),
+            }
         # Post-staging: land artist + artwork + hashtags/cta on every post action's
         # context so the review UI / evidence shows them (item 6c). Best-effort.
         try:
@@ -4809,6 +4885,25 @@ def mount_studio_agui(app) -> None:
                         status = "awaiting_selection"
             except Exception:
                 selection_request = None
+            # Mid-run COMPETITOR pause (pause #1) — same durable-row contract as
+            # the artwork pause: non-null while the run awaits the operator's
+            # pattern pick, restart-safe, answered by select-competitor.
+            competitor_selection_request = None
+            try:
+                from studio.competitor_flow import (
+                    get_selection as get_competitor_selection,
+                )
+                from studio.competitor_flow import (
+                    selection_request_payload as competitor_selection_payload,
+                )
+
+                csel = get_competitor_selection(run_id, dsn=dsn)
+                if csel and csel.get("status") == "awaiting":
+                    competitor_selection_request = competitor_selection_payload(csel)
+                    if status in (None, "running", "awaiting_selection"):
+                        status = "awaiting_selection"
+            except Exception:
+                competitor_selection_request = None
             if status is None:
                 status = (
                     "completed"
@@ -4886,6 +4981,10 @@ def mount_studio_agui(app) -> None:
                 # Mid-run artwork pause (item 3): non-null while the run awaits the
                 # operator's pick — {"kind":"artwork","question":...,"options":[...]}.
                 "selectionRequest": selection_request,
+                # Mid-run competitor pause (pause #1): non-null while the run awaits
+                # the operator's pattern pick —
+                # {"kind":"competitor_pick","question":...,"options":[...]}.
+                "competitorSelectionRequest": competitor_selection_request,
                 # Real campaign state for the voice supervisor (draft #1, counts, agents).
                 "state": voice_state,
                 "voiceBriefing": voice_briefing,
@@ -4970,6 +5069,96 @@ def mount_studio_agui(app) -> None:
                 "status": "running",
                 "note": "Artwork recorded; the run resumed with your pick. Everything "
                 "stays HELD for approval — nothing is sent.",
+            }
+        )
+
+    @app.post("/studio/campaign/{run_id}/select-competitor")
+    async def studio_select_competitor_route(run_id: str, request: Request):  # noqa: ANN202
+        """Answer a run's competitor selection pause (pause #1). Body
+        ``{"postId": ...}``.
+
+        Records the pick DURABLY (competitor_selections → 'selected', the chosen
+        option snapshotted in ``choice``) and RESUMES the run by re-invoking the
+        executor with the same run id — the durable replay-skip + deterministic
+        one-shot agent-run ids make the resume idempotent (nothing re-drafted,
+        nothing double-staged, nothing sent). The chosen post is a MOLD reference
+        only — its shape, never its words. 400 for a pick outside the surfaced
+        options; 404 when the run has no pending selection."""
+        from fastapi.responses import JSONResponse
+
+        from studio.competitor_flow import get_selection, record_choice
+
+        dsn = get_dsn()
+        try:
+            payload = json.loads(await request.body() or b"{}")
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        post_id = (payload.get("postId") or payload.get("post_id") or "").strip()
+        if not post_id:
+            return JSONResponse({"ok": False, "error": "missing postId"}, status_code=400)
+
+        sel = await asyncio.to_thread(lambda: get_selection(run_id, dsn=dsn))
+        if sel is None or sel.get("status") != "awaiting":
+            return JSONResponse(
+                {"ok": False, "error": "no pending competitor selection for this run"},
+                status_code=404,
+            )
+        options = {str(o.get("postId")) for o in (sel.get("options") or [])}
+        if post_id not in options:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": f"postId {post_id!r} is not one of the surfaced options",
+                    "options": sorted(options),
+                },
+                status_code=400,
+            )
+        recorded = await asyncio.to_thread(
+            lambda: record_choice(run_id, post_id, dsn=dsn)
+        )
+        if not recorded:
+            return JSONResponse(
+                {"ok": False, "error": "selection was already recorded"}, status_code=409
+            )
+
+        # RESUME: re-invoke the executor with the plan snapshot the pause captured
+        # (falls back to the session's current plan when no snapshot persisted).
+        session_id = sel.get("session_id") or "studio-default"
+        tenant_id = sel.get("tenant_id") or os.environ.get("STUDIO_TENANT_ID", "demo")
+        plan_snapshot = sel.get("plan")
+        if isinstance(plan_snapshot, dict) and plan_snapshot:
+            try:
+                plan = CampaignPlan.model_validate(plan_snapshot)
+            except Exception:
+                plan = _load_plan(session_id, dsn)
+        else:
+            plan = await asyncio.to_thread(_load_plan, session_id, dsn)
+        # BRIDGE until the plan contract lands: CampaignPlan does not declare
+        # ``channel_plans`` yet (another builder owns that field), so
+        # model_validate drops it from the snapshot — re-attach it so the resumed
+        # run still reads the ig channel plan (competitor_research /
+        # attach_images / image_style). A no-op once the field exists.
+        if (
+            isinstance(plan_snapshot, dict)
+            and isinstance(plan_snapshot.get("channel_plans"), dict)
+            and getattr(plan, "channel_plans", None) is None
+        ):
+            try:
+                object.__setattr__(plan, "channel_plans", plan_snapshot["channel_plans"])
+            except Exception:
+                pass
+        start_registered_run(app, dsn, session_id, tenant_id, plan, run_id)
+        return JSONResponse(
+            {
+                "ok": True,
+                "runId": run_id,
+                "postId": post_id,
+                "status": "running",
+                "note": "Competitor pattern recorded; the run resumed and will MOLD "
+                "its shape to our brand (never copy). Everything stays HELD for "
+                "approval — nothing is sent.",
             }
         )
 
