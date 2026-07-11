@@ -104,12 +104,43 @@ def _context_refs(raw: Any) -> tuple[str | None, str | None, str | None]:
     return artwork_id, _clean(ctx.get("broll_asset_id")), artifact_id
 
 
+#: Imperative call-to-action cues — a caption sentence carrying one IS the post's
+#: real CTA. Single words match on a word boundary; the phrases match as substrings.
+_CTA_RE = re.compile(
+    r"\b(text|dm|message|book|call|visit|tap|reply|click|reserve|schedule|email"
+    r"|swipe|shop|register)\b|link in bio|sign up|learn more|reach out"
+    r"|get in touch|come in|book now",
+    re.IGNORECASE,
+)
+
+
+def _caption_cta(caption: str) -> str | None:
+    """The caption's OWN call-to-action — the LAST sentence that issues one — so the
+    anatomy CTA chip matches the post that will actually publish, not a generic
+    angle-template CTA. The copywriter writes the real offer CTA ('Text KEEBS for
+    available dates'); the grounded ctx CTA is a deterministic template keyed on the
+    angle ('dm to start your design'), and the two used to disagree on the card.
+    None when the caption issues no detectable CTA (the caller then falls back to the
+    grounded ctx CTA). Pure."""
+    sentences = [
+        s.strip()
+        for s in re.split(r"(?<=[.!?])\s+|\n+", caption or "")
+        if s.strip()
+    ]
+    for s in reversed(sentences):
+        if _CTA_RE.search(s):
+            return s
+    return None
+
+
 def _post_anatomy(ctx: dict[str, Any], caption: str) -> dict[str, Any]:
     """The POST ANATOMY the review UI renders so an operator sees a real social
     post, not a wall of text: the hook (the caption's first line), the deterministic
-    angle, the CTA, and the grounded hashtags/keywords — all straight off the
-    enriched context (``angle`` / ``cta`` / ``hashtags``). Pure; honest-empty
-    fields when the draft carried none."""
+    angle, the CTA, and the grounded hashtags/keywords. The hook and CTA are read off
+    the CAPTION itself (the text that publishes) so the chips can never contradict the
+    post; the angle/hashtags come off the enriched context. The grounded ctx CTA is
+    the fallback when the caption issues no detectable call-to-action. Pure;
+    honest-empty fields when neither the caption nor the draft carried one."""
     first_line = ""
     for line in (caption or "").splitlines():
         if line.strip():
@@ -120,10 +151,12 @@ def _post_anatomy(ctx: dict[str, Any], caption: str) -> dict[str, Any]:
         for t in (ctx.get("hashtags") or [])
         if isinstance(t, str) and t.strip()
     ]
+    ctx_cta = (str(ctx.get("cta")).strip() or None) if ctx.get("cta") else None
     return {
         "hook": first_line or None,
         "angle": (str(ctx.get("angle")).strip() or None) if ctx.get("angle") else None,
-        "cta": (str(ctx.get("cta")).strip() or None) if ctx.get("cta") else None,
+        # The caption's real CTA wins; the grounded template CTA is the fallback.
+        "cta": _caption_cta(caption) or ctx_cta,
         "hashtags": tags,
     }
 

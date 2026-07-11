@@ -90,8 +90,16 @@ def test_post_anatomy_leads_with_the_hook_and_surfaces_angle_cta_keywords():
     a = _post_anatomy(ctx, caption)
     assert a["hook"] == "Which stem is yours?"
     assert a["angle"] == "made_for_you"
-    assert a["cta"] == "dm to start"
+    # The CTA chip reflects the caption's OWN call-to-action (the text that
+    # publishes), not the generic angle-template ctx CTA — the two must never
+    # contradict on the card.
+    assert a["cta"] == "Reply KEEBS."
     assert a["hashtags"] == ["botanical", "fineline"]
+    # When the caption issues no detectable CTA, the grounded ctx CTA is the fallback.
+    fallback = _post_anatomy(
+        {"cta": "dm to start"}, "Which stem is yours?\n\nA quiet botanical study."
+    )
+    assert fallback["cta"] == "dm to start"
     # Honest-empty when the draft carried no structured fields.
     empty = _post_anatomy({}, "")
     assert empty == {"hook": None, "angle": None, "cta": None, "hashtags": []}
