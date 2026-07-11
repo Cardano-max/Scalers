@@ -262,7 +262,26 @@ class CampaignPlan(BaseModel):
 # child run's effective plan. attach_images / image_style / competitor_research are
 # deliberately NOT here — they stay only in ``channel_plans`` (the IG pipeline reads
 # them from there), never as top-level fields.
-_CHANNEL_OVERRIDE_FIELDS = ("goal", "audience", "output_count", "lead_count", "offer", "tone")
+#
+# ROUTING FIELDS (per_lead / lead_source / use_conversation_history / deep_research)
+# MUST be lifted too: :func:`_use_provided_leads` reads them from the TOP LEVEL to pick
+# the per-lead executor (researcher -> analyst -> one grounded draft per real customer)
+# over the generic broadcast archetype. A real operator answered the EMAIL block with
+# "use their real conversations, one message per lead, deep research on" — those landed
+# in channel_plans['email'] and were then DROPPED building the child, so the child ran
+# the template blast with ZERO researcher and ZERO analyst steps and produced nameless
+# generic copy. Lifting them is what makes a multi-channel email leg behave exactly like
+# a single-channel one.
+_CHANNEL_OVERRIDE_STR_FIELDS = (
+    "goal", "audience", "offer", "tone", "lead_source", "research_depth",
+)
+_CHANNEL_OVERRIDE_INT_FIELDS = ("output_count", "lead_count")
+_CHANNEL_OVERRIDE_BOOL_FIELDS = (
+    "per_lead", "use_conversation_history", "deep_research", "personalize", "attach_artwork",
+)
+_CHANNEL_OVERRIDE_FIELDS = (
+    _CHANNEL_OVERRIDE_STR_FIELDS + _CHANNEL_OVERRIDE_INT_FIELDS + _CHANNEL_OVERRIDE_BOOL_FIELDS
+)
 
 
 def merge_channel_plans(
@@ -295,11 +314,27 @@ def effective_channel_plan(plan: CampaignPlan, channel: str) -> CampaignPlan:
         value = overrides.get(key)
         if value is None:
             continue
-        if key in ("output_count", "lead_count"):
+        if key in _CHANNEL_OVERRIDE_INT_FIELDS:
             try:
                 value = max(0, int(value))
             except (TypeError, ValueError):
                 continue
+        elif key in _CHANNEL_OVERRIDE_BOOL_FIELDS:
+            # A routing flag is a REAL bool. Never str() it — ``str(False)`` is the
+            # truthy string "False", which would silently arm the per-lead executor
+            # on a channel that explicitly turned it off.
+            if isinstance(value, bool):
+                pass
+            elif isinstance(value, str):
+                token = value.strip().lower()
+                if token in ("true", "yes", "1", "on"):
+                    value = True
+                elif token in ("false", "no", "0", "off"):
+                    value = False
+                else:
+                    continue  # unparseable — leave the base plan's value alone
+            else:
+                value = bool(value)
         else:
             value = str(value)
         setattr(eff, key, value)
@@ -3588,6 +3623,54 @@ async def launch_studio_run(
     return info
 
 
+def child_run_ids(
+    run_id: str, dsn: str | None = None, registry: dict | None = None
+) -> list[str]:
+    """The per-channel children of a multi-channel parent (``{run_id}-{channel}``).
+
+    A parent run id is ONLY A CONTAINER: every agent step, every staged draft and every
+    operator pause is written under a CHILD id. So anything handed the parent — the
+    ``GET /studio/run/{id}`` poller, the select-artwork / select-competitor answerers,
+    the voice host's run-status tool — MUST fan out to the children, or a perfectly
+    healthy run reads as "0 agents landed, nothing staged" and a pause NEVER reaches
+    the operator (a real operator watched Instagram sit frozen on an unasked question).
+
+    Union of the in-memory registry (children appear the instant they launch, before any
+    row exists) and the durable tables (so it still resolves after an engine restart).
+    Returns [] for a single-channel run — that run owns its own rows."""
+    prefix = f"{run_id}-"
+    found: set[str] = set()
+    for key in registry or {}:
+        if isinstance(key, str) and key.startswith(prefix):
+            found.add(key)
+    if dsn:
+        try:
+            import psycopg
+
+            with psycopg.connect(dsn, autocommit=True) as conn:
+                for table in (
+                    "agent_runs",
+                    "runs",
+                    "actions",
+                    "competitor_selections",
+                    "artwork_selections",
+                ):
+                    try:
+                        rows = conn.execute(
+                            f"SELECT DISTINCT run_id FROM {table} WHERE run_id LIKE %s",  # noqa: S608
+                            (prefix + "%",),
+                        ).fetchall()
+                    except Exception:
+                        continue  # table absent on an older schema — never fatal
+                    for row in rows:
+                        rid = row[0] if row else None
+                        if rid:
+                            found.add(str(rid))
+        except Exception:
+            pass
+    return sorted(found)
+
+
 def start_registered_run(
     app, dsn: str | None, session_id: str, tenant_id: str, plan: CampaignPlan, run_id: str
 ) -> list[dict[str, str]]:
@@ -4874,7 +4957,34 @@ def mount_studio_agui(app) -> None:
         from fastapi.responses import JSONResponse
 
         dsn = get_dsn()
+        # MULTI-CHANNEL FAN-IN: a parent run id owns NO rows — its per-channel children
+        # do. Poll the whole FAMILY (parent + children) so a multi-channel launch streams
+        # its agents, reports its drafts and RAISES ITS PAUSES exactly like a single-channel
+        # one. Without this the panel shows "0 agents landed" over a perfectly good run and
+        # the competitor/artwork question never reaches the operator.
+        kids = child_run_ids(run_id, dsn, runs_registry)
+        rids = [run_id, *kids]
         reg = runs_registry.get(run_id)
+        if kids:
+            # The parent's own registry entry is a stub (it only spawns children and
+            # returns), so it would read 'completed' the instant the fan-out finished.
+            # Derive the honest aggregate from the CHILDREN instead.
+            child_regs = [r for r in (runs_registry.get(k) for k in kids) if r]
+            if child_regs:
+                statuses = [(r.get("status") or "") for r in child_regs]
+                if any(s == "running" for s in statuses):
+                    agg = "running"
+                elif any(s == "awaiting_selection" for s in statuses):
+                    agg = "awaiting_selection"
+                elif statuses and all(s in ("completed", "not_built") for s in statuses):
+                    agg = "completed"
+                else:
+                    agg = next((s for s in statuses if s not in ("completed", "not_built")), "running")
+                reg = {
+                    "status": agg,
+                    "summary": next((r.get("summary") for r in child_regs if r.get("summary")), None),
+                    "error": next((r.get("error") for r in child_regs if r.get("error")), None),
+                }
 
         def _load() -> dict:
             import psycopg
@@ -4886,12 +4996,15 @@ def mount_studio_agui(app) -> None:
             pending_actions: list[dict] = []
             with psycopg.connect(dsn, autocommit=True, row_factory=dict_row) as c:
                 rows = c.execute(
-                    "SELECT role, model, input, output, created_at FROM agent_runs "
-                    "WHERE run_id=%s ORDER BY created_at",
-                    (run_id,),
+                    "SELECT run_id, role, model, input, output, created_at FROM agent_runs "
+                    "WHERE run_id = ANY(%s) ORDER BY created_at",
+                    (rids,),
                 ).fetchall()
                 for i, ar in enumerate(rows):
                     ca = ar.get("created_at")
+                    # On a multi-channel run each step belongs to a channel child — tag it
+                    # so the panel can say WHICH leg an agent ran on. Empty for single-channel.
+                    rid_of_step = str(ar.get("run_id") or "")
                     steps.append(
                         {
                             "seq": i,
@@ -4899,18 +5012,33 @@ def mount_studio_agui(app) -> None:
                             "model": ar.get("model"),
                             "input": ar.get("input"),
                             "output": ar.get("output"),
+                            "channel": (
+                                rid_of_step[len(run_id) + 1 :]
+                                if rid_of_step.startswith(f"{run_id}-")
+                                else None
+                            ),
                             "createdAt": ca.isoformat() if hasattr(ca, "isoformat") else str(ca),
                         }
                     )
                 try:
-                    row = c.execute("SELECT status FROM runs WHERE run_id=%s", (run_id,)).fetchone()
-                    runs_status = str(row["status"]).lower() if row else None
+                    srows = c.execute(
+                        "SELECT status FROM runs WHERE run_id = ANY(%s)", (rids,)
+                    ).fetchall()
+                    stats = [str(r["status"]).lower() for r in srows if r and r.get("status")]
+                    # The family is only 'completed' when EVERY leg is. One still-running
+                    # (or paused) child keeps the whole run honestly in-flight.
+                    if not stats:
+                        runs_status = None
+                    elif all(s in ("completed", "success") for s in stats):
+                        runs_status = "completed"
+                    else:
+                        runs_status = next(s for s in stats if s not in ("completed", "success"))
                 except Exception:
                     runs_status = None
                 try:
                     pr = c.execute(
-                        "SELECT count(*) n FROM actions WHERE run_id=%s AND status='pending'",
-                        (run_id,),
+                        "SELECT count(*) n FROM actions WHERE run_id = ANY(%s) AND status='pending'",
+                        (rids,),
                     ).fetchone()
                     n_pending = pr["n"] if pr else None
                 except Exception:
@@ -4922,8 +5050,9 @@ def mount_studio_agui(app) -> None:
                 try:
                     pend = c.execute(
                         "SELECT id, channel, target, subject, draft, idempotency_key, status "
-                        "FROM actions WHERE run_id=%s AND status='pending' ORDER BY created_at",
-                        (run_id,),
+                        "FROM actions WHERE run_id = ANY(%s) AND status='pending' "
+                        "ORDER BY created_at",
+                        (rids,),
                     ).fetchall()
                     for ar in pend:
                         draft_txt = ar.get("draft") or ""
@@ -4956,11 +5085,18 @@ def mount_studio_agui(app) -> None:
             try:
                 from studio.artwork_flow import get_selection, selection_request_payload
 
-                sel = get_selection(run_id, dsn=dsn)
-                if sel and sel.get("status") == "awaiting":
-                    selection_request = selection_request_payload(sel)
-                    if status in (None, "running", "awaiting_selection"):
-                        status = "awaiting_selection"
+                # Scan the whole FAMILY: on a multi-channel run the pause belongs to a
+                # channel child, and the operator's UI only ever knows the parent id.
+                for rid in rids:
+                    sel = get_selection(rid, dsn=dsn)
+                    if sel and sel.get("status") == "awaiting":
+                        selection_request = selection_request_payload(sel)
+                        # Carry the OWNING run id so the answer routes to the right leg.
+                        if isinstance(selection_request, dict):
+                            selection_request["runId"] = rid
+                        if status in (None, "running", "awaiting_selection"):
+                            status = "awaiting_selection"
+                        break
             except Exception:
                 selection_request = None
             # Mid-run COMPETITOR pause (pause #1) — same durable-row contract as
@@ -4975,11 +5111,15 @@ def mount_studio_agui(app) -> None:
                     selection_request_payload as competitor_selection_payload,
                 )
 
-                csel = get_competitor_selection(run_id, dsn=dsn)
-                if csel and csel.get("status") == "awaiting":
-                    competitor_selection_request = competitor_selection_payload(csel)
-                    if status in (None, "running", "awaiting_selection"):
-                        status = "awaiting_selection"
+                for rid in rids:
+                    csel = get_competitor_selection(rid, dsn=dsn)
+                    if csel and csel.get("status") == "awaiting":
+                        competitor_selection_request = competitor_selection_payload(csel)
+                        if isinstance(competitor_selection_request, dict):
+                            competitor_selection_request["runId"] = rid
+                        if status in (None, "running", "awaiting_selection"):
+                            status = "awaiting_selection"
+                        break
             except Exception:
                 competitor_selection_request = None
             if status is None:
@@ -5096,12 +5236,25 @@ def mount_studio_agui(app) -> None:
         if not asset_id:
             return JSONResponse({"ok": False, "error": "missing assetId"}, status_code=400)
 
-        sel = await asyncio.to_thread(lambda: get_selection(run_id, dsn=dsn))
-        if sel is None or sel.get("status") != "awaiting":
+        # MULTI-CHANNEL: same fan-out as select-competitor — the console knows only the
+        # PARENT id, the artwork pause lives on the channel child. Answer the leg that asked.
+        def _resolve_awaiting_artwork(rid: str) -> tuple[str, dict | None]:
+            found = get_selection(rid, dsn=dsn)
+            if found and found.get("status") == "awaiting":
+                return rid, found
+            for kid in child_run_ids(rid, dsn, getattr(app.state, "_studio_runs", {})):
+                found = get_selection(kid, dsn=dsn)
+                if found and found.get("status") == "awaiting":
+                    return kid, found
+            return rid, None
+
+        target_run_id, sel = await asyncio.to_thread(lambda: _resolve_awaiting_artwork(run_id))
+        if sel is None:
             return JSONResponse(
                 {"ok": False, "error": "no pending artwork selection for this run"},
                 status_code=404,
             )
+        run_id = target_run_id  # record + resume target the real channel leg
         options = {str(o.get("assetId")) for o in (sel.get("options") or [])}
         if asset_id not in options:
             return JSONResponse(
@@ -5177,8 +5330,23 @@ def mount_studio_agui(app) -> None:
         if not post_id:
             return JSONResponse({"ok": False, "error": "missing postId"}, status_code=400)
 
-        sel = await asyncio.to_thread(lambda: get_selection(run_id, dsn=dsn))
-        if sel is None or sel.get("status") != "awaiting":
+        # MULTI-CHANNEL: the operator's console only ever knows the PARENT run id, but on
+        # a multi-channel launch the pause belongs to a channel CHILD ('...-ig'). Resolve
+        # the parent to whichever child is actually awaiting, so the answer reaches the leg
+        # that asked the question. Without this the operator's pick 404s and Instagram
+        # stays frozen forever on a question it already asked.
+        def _resolve_awaiting(rid: str) -> tuple[str, dict | None]:
+            found = get_selection(rid, dsn=dsn)
+            if found and found.get("status") == "awaiting":
+                return rid, found
+            for kid in child_run_ids(rid, dsn, getattr(app.state, "_studio_runs", {})):
+                found = get_selection(kid, dsn=dsn)
+                if found and found.get("status") == "awaiting":
+                    return kid, found
+            return rid, None
+
+        target_run_id, sel = await asyncio.to_thread(lambda: _resolve_awaiting(run_id))
+        if sel is None:
             return JSONResponse(
                 {"ok": False, "error": "no pending competitor selection for this run"},
                 status_code=404,
@@ -5193,6 +5361,7 @@ def mount_studio_agui(app) -> None:
                 },
                 status_code=400,
             )
+        run_id = target_run_id  # every downstream step (record, resume) targets the real leg
         recorded = await asyncio.to_thread(
             lambda: record_choice(run_id, post_id, dsn=dsn)
         )
