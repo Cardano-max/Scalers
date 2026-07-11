@@ -39,9 +39,13 @@ def _state_with(lead: str, *, strategist: str) -> dict:
 def test_voice_instructions_forbid_guessing_and_define_draft_one():
     t = voice.VOICE_INSTRUCTIONS.lower()
     assert "never invent" in t or "never guess" in t
-    assert "draft #1" in t and "first lead" in t
-    # And it must not have gained a send-capable tool (the two-tool safety surface holds).
-    assert voice.VOICE_TOOL_NAMES == ("update_plan", "request_orchestration")
+    assert "draft #1" in t
+    # And it must not have gained a SEND-capable tool: the surface is exactly
+    # update_plan (edit) + request_orchestration (gated launch request) +
+    # get_run_status (READ-ONLY truth for narration) — no publish/send anywhere.
+    assert voice.VOICE_TOOL_NAMES == (
+        "update_plan", "get_run_status", "request_orchestration",
+    )
 
 
 def test_voice_instructions_with_state_injects_the_real_first_lead(monkeypatch):

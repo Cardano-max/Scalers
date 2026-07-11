@@ -24,8 +24,27 @@ describe('voice tool router', () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  it('exposes exactly the two routable tools (no publish/send)', () => {
-    expect(ROUTABLE_TOOLS).toEqual(['update_plan', 'request_orchestration']);
+  it('exposes exactly the routable tools (no publish/send)', () => {
+    // Two write-shaped (plan edit + gated launch request) + one READ-ONLY
+    // (get_run_status) — still no publish/send handler anywhere in the browser.
+    expect(ROUTABLE_TOOLS).toEqual(['update_plan', 'request_orchestration', 'get_run_status']);
+  });
+
+  it('routes get_run_status to the read-only run-state route', async () => {
+    fetchMock.mockReturnValueOnce(
+      mockJson({ ok: true, runId: 'team-camp_x', drafts: { drafts: [] } }),
+    );
+    const out = await routeToolCall('get_run_status', '{}', {
+      aguiUrl: AGUI,
+      sessionId: 'sess1',
+      latestTranscript: () => '',
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/studio/voice/run_status',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(out.ok).toBe(true);
+    expect(out.runId).toBe('team-camp_x');
   });
 
   it('studioBase strips the trailing /agui', () => {

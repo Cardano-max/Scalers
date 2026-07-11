@@ -132,9 +132,17 @@ def record_pending_action(
     run_id: str | None = None,
     dsn: str | None = None,
     is_seeded: bool = False,
-) -> str:
+    with_created: bool = False,
+) -> str | tuple[str, bool]:
     """Insert a PENDING action and return its id. Idempotent on ``idempotency_key``:
     a duplicate insert returns the existing row's id (so re-seeding never dupes).
+    Pass ``with_created=True`` to get ``(id, created)`` instead — ``created`` is
+    False when a UNIQUE guard absorbed the insert (same idempotency key, or the
+    one-pending-draft-per-recipient guard) and the id belongs to the EXISTING
+    row. Callers that reconcile an output ledger need this: a silently reused
+    row otherwise reads as an unexplained shortfall (a real operator saw
+    '24 unaccounted' after older runs had filled the queue for the same
+    recipients).
 
     ``is_seeded`` PERSISTS whether this row is demo/seed data (Slice-5 honesty
     gate). The live decision path (contentrun / engagement) leaves it False; only
@@ -166,7 +174,7 @@ def record_pending_action(
             ),
         ).fetchone()
         if row is not None:
-            return row["id"]
+            return (row["id"], True) if with_created else row["id"]
         # A UNIQUE conflict: the logical action already exists — return its id so the
         # caller's count stays honest and nothing is re-fired. Prefer the idempotency_key
         # match (same run replay); fall back to the already-pending recipient row (a
@@ -180,7 +188,8 @@ def record_pending_action(
                 "AND target = %s AND status = 'pending' ORDER BY created_at LIMIT 1",
                 (tenant_id, worker, target),
             ).fetchone()
-        return existing["id"] if existing else action_id
+        reused_id = existing["id"] if existing else action_id
+        return (reused_id, False) if with_created else reused_id
 
 
 def list_actions(tenant_id: str, status: str | None = None, dsn: str | None = None) -> list[ActionRow]:

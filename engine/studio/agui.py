@@ -2804,7 +2804,7 @@ def _execute_provided_leads_sync(
             if draft["channel"] in ("gmail", "email") and selected_artwork.get("artifactId"):
                 _context_obj["attachment_artifact_id"] = selected_artwork["artifactId"]
         _context = _json.dumps(_context_obj)
-        action_id = record_pending_action(
+        _staged = record_pending_action(
             tenant_id=tenant_id,
             decision_id=None,
             type="outreach",
@@ -2821,7 +2821,41 @@ def _execute_provided_leads_sync(
             idempotency_key=f"{run_id}:{cust_id}",
             run_id=run_id,
             dsn=dsn,
+            with_created=True,
         )
+        # Tolerate seam fakes that predate with_created (a bare id == created).
+        action_id, _created = (
+            _staged if isinstance(_staged, tuple) else (_staged, True)
+        )
+        if not _created:
+            # The one-pending-draft-per-recipient guard absorbed this insert: the
+            # recipient already has a HELD draft (usually staged by an earlier run
+            # in the same session). Count it in the ledger — a silent reuse read as
+            # "N unaccounted" on the reconciliation panel (a real operator hit 24).
+            skipped.append({
+                "row": None,
+                "lead": facts.get("name") or cust_id,
+                "reason": (
+                    f"already has a pending draft in the Review Queue "
+                    f"(action {action_id}, staged by an earlier run) — not duplicated"
+                ),
+            })
+            if _durable is not None:
+                try:
+                    _durable.step(
+                        _step_key,
+                        lambda conn, _aid=action_id, _cid=cust_id: {
+                            "action_id": _aid,
+                            "customer_id": _cid,
+                            "staged": False,
+                            "reused_existing": True,
+                        },
+                    )
+                except Exception:
+                    pass
+            if _breaker_tripped:
+                break
+            continue
         pending.append(action_id)
         try:
             store.write(
