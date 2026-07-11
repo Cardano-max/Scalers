@@ -49,8 +49,14 @@ def _dsn(dsn: str | None = None) -> str:
 
 
 def _portfolio_campaign_id(tenant_id: str) -> str:
-    """The ``assets.campaign_id`` bucket that holds one tenant's portfolio."""
-    return f"portfolio:{tenant_id}"
+    """The ``assets.campaign_id`` bucket that holds one tenant's portfolio.
+
+    The tenant is STRIPPED. A trailing space (cmd.exe's `set VAR=x && …` captures the
+    space before the `&&`) makes this key miss by one character, the portfolio reads back
+    empty, the artwork gate honestly reports "no artwork in the library", and the run
+    ships an Instagram post with no image — no error, anywhere. Whitespace must never be
+    the difference between a post having a picture and not."""
+    return f"portfolio:{(tenant_id or '').strip()}"
 
 
 def _norm(term: str) -> str:

@@ -27,6 +27,7 @@ import { ReadyQueueBoard } from './studio/ReadyQueueBoard';
 import { useTraceArrival } from '@/lib/useTraceArrival';
 import { LineageChips } from './trace/LineageChips';
 import { LineagePanel } from './trace/LineagePanel';
+import { PostPreview, parsePostContext, hasPostEvidence } from './trace/PostPreview';
 import { ConfidenceEvidence } from './trace/ConfidenceEvidence';
 import { EvidenceProvenance } from './trace/EvidenceProvenance';
 // --- ju1.5: server-driven TEST-MODE state (banner chip + send-disable) ---
@@ -756,9 +757,22 @@ function DetailPane({
         />
       ) : null}
 
+      {/* A SOCIAL POST IS NOT AN OUTREACH MESSAGE — show it as a post.
+          The image, the caption, the hook/angle/CTA, the grounded hashtags, and the
+          competitor the operator picked to mold. Without this the operator was asked to
+          approve an Instagram post they could not see: the artwork was attached to the
+          row and rendered nowhere. Returns null for a draft that carries no post
+          evidence, so outreach drafts are untouched. */}
+      <PostPreview context={action.context} caption={action.draft} channel={action.channel} />
+
       {/* ju1.5: full draft lineage — source CSV / customer / artist / studio /
-          example memory / offer / CTA / channel, honest-missing per field. */}
-      <LineagePanel actionId={action.id} />
+          example memory / offer / CTA / channel, honest-missing per field.
+          `hasOwnEvidence` stops the outreach-shaped "no recorded evidence" alarm from
+          firing at a post, which HAS evidence — just not a customer or a source CSV. */}
+      <LineagePanel
+        actionId={action.id}
+        hasOwnEvidence={hasPostEvidence(parsePostContext(action.context))}
+      />
 
       <AutonomyCard action={action} />
 

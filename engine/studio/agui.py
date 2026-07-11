@@ -2127,6 +2127,9 @@ def _execute_campaign_sync(
                 tenant_id,
                 artist=(plan.artist or "").strip() or None,
                 artwork=ig_artwork,
+                # The competitor the OPERATOR chose, carried onto the staged draft so the
+                # pick is verifiable at review time instead of taken on trust.
+                competitor=ig_competitor_pick,
                 dsn=dsn,
             )
             if enriched:

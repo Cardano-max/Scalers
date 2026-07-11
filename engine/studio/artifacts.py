@@ -30,6 +30,7 @@ An image whose visual content has not been captioned yet has an empty
 from __future__ import annotations
 
 import os
+import threading
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -68,22 +69,36 @@ def _connect(dsn: str | None = None):
 
 
 _SCHEMA_READY: set[str] = set()
+#: Serializes the FIRST apply per process. The memo below is checked and set without it
+#: only on the fast path (already applied), where a stale read is harmless.
+_SCHEMA_LOCK = threading.Lock()
 
 
 def ensure_schema(dsn: str | None = None) -> None:
     """Apply ``20-context-artifacts.sql`` (idempotent ``CREATE TABLE IF NOT EXISTS``).
 
-    Once per process per DSN: the DDL is idempotent but NOT concurrency-free —
-    parallel ``CREATE TABLE IF NOT EXISTS``/``ALTER`` from simultaneous reads
-    deadlock in Postgres (observed as intermittent 500s on artifact reads under
-    concurrent console traffic). After the first successful apply, later calls
-    are no-ops; a failure stays unrecorded so the next call retries."""
+    Once per process per DSN: the DDL is idempotent but NOT concurrency-free — parallel
+    ``CREATE TABLE IF NOT EXISTS``/``ALTER`` from simultaneous reads DEADLOCK in Postgres.
+
+    The memo alone did not prevent that, because it was checked and set WITHOUT a lock:
+    every artifact read calls this, and the console opens several at once — the artwork
+    picker renders four images, the review queue renders the post's image. On a freshly
+    started engine all of those requests arrive before any of them has finished applying
+    the DDL, so they all see an empty memo and all run it together. Postgres deadlocks on
+    the catalogs, one request wins and the rest 500 — which the operator experiences as
+    the images simply not appearing, with the run itself looking healthy.
+
+    Holding the lock across the apply makes the first caller do the work while the others
+    wait, then take the fast path. A failure stays unrecorded so the next call retries."""
     key = _dsn(dsn)
     if key in _SCHEMA_READY:
         return
-    with _connect(dsn) as conn:
-        conn.execute(_ARTIFACTS_SQL.read_text(encoding="utf-8"))
-    _SCHEMA_READY.add(key)
+    with _SCHEMA_LOCK:
+        if key in _SCHEMA_READY:  # another thread applied it while we waited
+            return
+        with _connect(dsn) as conn:
+            conn.execute(_ARTIFACTS_SQL.read_text(encoding="utf-8"))
+        _SCHEMA_READY.add(key)
 
 
 # --------------------------------------------------------------------------- #

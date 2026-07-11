@@ -39,7 +39,18 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-export function LineagePanel({ actionId }: { actionId: string }) {
+export function LineagePanel({
+  actionId,
+  hasOwnEvidence = false,
+}: {
+  actionId: string;
+  /** True when the draft carries its OWN evidence in a shape this panel does not read —
+   *  a social POST has attached artwork and a molded competitor, but no customer, no
+   *  source CSV and no offer. Without this the panel fired "no recorded evidence" at a
+   *  post whose image, hashtags and competitor mold were all on file, telling the
+   *  operator to distrust a draft that was in fact fully grounded. */
+  hasOwnEvidence?: boolean;
+}) {
   const { adapter } = useData();
   const consoleCtx = useConsoleOptional();
   const { data, loading } = useAsync<ActionLineage | null>(
@@ -60,6 +71,7 @@ export function LineagePanel({ actionId }: { actionId: string }) {
   // A bare "95%" next to an all-missing lineage is confidence theater — say so,
   // right where the operator is looking.
   const ungrounded =
+    !hasOwnEvidence &&
     lin !== null &&
     !lin.sourceFile &&
     !lin.customer.name && !lin.customer.email && !lin.customer.phone &&

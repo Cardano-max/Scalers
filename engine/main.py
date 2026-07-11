@@ -66,9 +66,27 @@ mount_console_api(app)
 async def _announce_studio_tenant() -> None:
     """One loud line at boot: which tenant /studio/* serves. An engine started
     by hand without STUDIO_TENANT_ID silently served 'demo' and every studio
-    surface read empty — this makes that state impossible to miss."""
+    surface read empty — this makes that state impossible to miss.
+
+    It also NORMALIZES the value, which is not cosmetic. `set STUDIO_TENANT_ID=skindesign
+    && uv run …` in cmd.exe captures the space before the `&&`, so the tenant becomes
+    'skindesign ' — and every lookup keyed on it (the artwork library is
+    `portfolio:{tenant}`) misses by exactly one character. The engine then ran perfectly,
+    reported no error, and staged an Instagram post with NO IMAGE, because the portfolio
+    read back empty. One stray space, a silently image-less post. Thirty-odd call sites
+    read this variable; normalizing once at the boundary is the only place it can be made
+    safe for all of them."""
     import os
 
+    raw = os.environ.get("STUDIO_TENANT_ID")
+    if raw is not None and raw != raw.strip():
+        os.environ["STUDIO_TENANT_ID"] = raw.strip()
+        print(
+            f"[studio] STUDIO_TENANT_ID had surrounding whitespace ({raw!r}) — "
+            f"normalized to {raw.strip()!r}. Unnormalized, every tenant-keyed read "
+            "(artwork library, artists, review counts) would have missed and read EMPTY.",
+            flush=True,
+        )
     tenant = os.environ.get("STUDIO_TENANT_ID")
     if tenant:
         print(f"[studio] serving tenant: {tenant}", flush=True)

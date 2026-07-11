@@ -569,13 +569,14 @@ def enrich_post_actions(
     artist: str | None = None,
     artwork: dict[str, Any] | None = None,
     theme: str | None = None,
+    competitor: dict[str, Any] | None = None,
     dsn: str | None = None,
 ) -> int:
-    """Land artist + artwork + grounded hashtags/CTA on every staged POST action of
-    ``run_id`` (context JSON, merged — an existing text context is preserved under
-    ``note``). Also lands the flat ``artwork_asset_id`` (+ ``broll_asset_id`` when
-    a real video is on file) so the social ready queue can resolve the draft's
-    media. Returns the number of rows updated. Best-effort; never sends."""
+    """Land artist + artwork + the molded competitor + grounded hashtags/CTA on every
+    staged POST action of ``run_id`` (context JSON, merged — an existing text context is
+    preserved under ``note``). Also lands the flat ``artwork_asset_id`` (+ ``broll_asset_id``
+    when a real video is on file) so the social ready queue can resolve the draft's media.
+    Returns the number of rows updated. Best-effort; never sends."""
     import psycopg
 
     fields: dict[str, Any] = {}
@@ -592,6 +593,22 @@ def enrich_post_actions(
         # draft-creation route, never a second source of truth.
         if artwork.get("assetId"):
             fields["artwork_asset_id"] = artwork.get("assetId")
+    # THE MOLD, ON THE DRAFT.
+    # The operator is asked to choose which competitor post to mold, and then had no way
+    # to check that their choice was the one actually used: the pick lived only in the
+    # pause row, never on the staged draft. Recording it here is what makes the answer
+    # verifiable at review time — handle, the real score, the honest "why it worked", and
+    # the source URL, so the operator can open the original and compare. Copied verbatim
+    # from the chosen row; nothing here is inferred.
+    if competitor:
+        fields["competitor"] = {
+            "postId": competitor.get("postId") or competitor.get("id"),
+            "handle": competitor.get("handle"),
+            "url": competitor.get("url"),
+            "totalScore": competitor.get("totalScore") or competitor.get("total_score"),
+            "whyItWorked": competitor.get("whyItWorked") or competitor.get("why_it_worked"),
+            "metrics": competitor.get("metrics") or {},
+        }
     # Optional b-roll reference: the newest REAL video asset on file for this
     # artist — the same rows the brief's b-roll block cites. load_broll is
     # honest-empty ([]) when none exist / the store is unavailable, so this key
