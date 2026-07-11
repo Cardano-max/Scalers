@@ -19,6 +19,18 @@ import { ArtifactMedia } from './ArtifactMedia';
 
 const TEAL = '#0F8A82';
 
+/** Human name for the channel leg that raised the pause. A multi-channel campaign can
+ *  ask the operator up to six questions; without the leg name every dialog is identical
+ *  and the operator is choosing an image without knowing which channel it lands on. */
+export const CHANNEL_LABEL: Record<string, string> = {
+  ig: 'Instagram',
+  instagram: 'Instagram',
+  fb: 'Facebook',
+  facebook: 'Facebook',
+  email: 'Email',
+  gmail: 'Email',
+};
+
 export function ArtworkPickerModal({
   request,
   busy = false,
@@ -91,7 +103,17 @@ export function ArtworkPickerModal({
           />
           <div style={{ minWidth: 0, flex: 1 }}>
             <h2 style={{ margin: 0, fontSize: 16.5, fontWeight: 650, letterSpacing: '-0.01em', color: 'var(--ink)' }}>
-              The run is paused — your pick is needed
+              {/* NAME THE LEG. One multi-channel campaign raises up to six pauses, and
+                  unlabeled they all read "I found 4 matching pieces — which should I
+                  use?". The operator cannot tell whether they are choosing the image for
+                  Instagram, for Facebook, or for the email. */}
+              {CHANNEL_LABEL[(request.channel || '').toLowerCase()] ? (
+                <>
+                  {CHANNEL_LABEL[(request.channel || '').toLowerCase()]} — pick the artwork
+                </>
+              ) : (
+                'The run is paused — your pick is needed'
+              )}
             </h2>
             <p style={{ margin: '4px 0 0', fontSize: 13, lineHeight: 1.5, color: 'var(--text-secondary)' }}>
               {request.question}

@@ -28,7 +28,7 @@ import {
 } from '@/lib/studio/agency';
 import { AGENT_PERSONAS } from '@/lib/studio/persona';
 import { StepSpanRow } from './StepSpanRow';
-import { ArtworkPickerModal } from './ArtworkPickerModal';
+import { ArtworkPickerModal, CHANNEL_LABEL } from './ArtworkPickerModal';
 import { CompetitorPickModal } from './CompetitorPickModal';
 import { ResearchSourcesRail } from './ResearchSourcesRail';
 import { SpecArtifactCard } from './SpecArtifactCard';
@@ -260,7 +260,16 @@ export function AgencyCanvas({
           }}
         >
           <span style={{ minWidth: 0, flex: 1 }}>
-            <strong>Paused:</strong> {selectionRequest.question}
+            {/* Name the leg here too — this banner is the ONLY way back into a dismissed
+                dialog, so it has to say which channel is still waiting on the operator. */}
+            <strong>
+              Paused
+              {CHANNEL_LABEL[(selectionRequest.channel || '').toLowerCase()]
+                ? ` · ${CHANNEL_LABEL[(selectionRequest.channel || '').toLowerCase()]}`
+                : ''}
+              :
+            </strong>{' '}
+            {selectionRequest.question}
           </span>
           <button
             type="button"

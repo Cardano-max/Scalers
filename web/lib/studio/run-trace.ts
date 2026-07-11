@@ -294,15 +294,20 @@ function parseCompetitorSelectionRequest(raw: unknown): CompetitorSelectionReque
         }
       }
       return {
-        // The engine's payload names it postId (competitor_flow options); accept
-        // both — requiring 'id' silently dropped EVERY option, so the competitor
-        // modal never rendered from a real payload (operators saw no popup at all).
+        // The engine names this field `postId` (it is the competitor_posts row id, and
+        // select-competitor takes it back as `postId`). Reading only `id` produced an
+        // EMPTY id on every option, the `id.length > 0` filter below then dropped all of
+        // them, `options.length === 0` returned null — and the competitor picker never
+        // rendered once, on any run. The backend was serving six real scored posts the
+        // whole time and the operator was never shown a single one.
         id:
           typeof o.postId === 'string' && o.postId.length > 0
             ? o.postId
-            : typeof o.id === 'string'
-              ? o.id
-              : '',
+            : typeof o.post_id === 'string' && o.post_id.length > 0
+              ? o.post_id
+              : typeof o.id === 'string'
+                ? o.id
+                : '',
         handle: typeof o.handle === 'string' ? o.handle : '',
         caption: typeof o.caption === 'string' ? o.caption : '',
         url: typeof o.url === 'string' && o.url.length > 0 ? o.url : null,
@@ -378,7 +383,9 @@ export async function selectCompetitor(
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      // The engine route requires postId; optionId rides along for back-compat.
+      // The engine reads `postId` (it 400s on "missing postId"). Sending only `optionId`
+      // meant the operator's pick was rejected every time — the run stayed paused and the
+      // channels behind it looked "queued". `optionId` is kept for older engines.
       body: JSON.stringify({ postId: optionId, optionId }),
       signal,
     },

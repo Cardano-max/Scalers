@@ -149,12 +149,39 @@ def test_messenger_dm_is_honest_not_built_no_run(monkeypatch):
     assert "isn't built" in summary["message"]
 
 
-def test_artist_with_attachments_is_honest_not_built(monkeypatch):
+def test_stated_channel_with_attachments_runs_that_channel(monkeypatch):
+    """A NAMED channel + artwork words must run THAT channel — never dead-end.
+
+    This asserted the opposite until a real operator hit it: they asked for "Instagram,
+    research competitors first, and attach an image", and the artwork words routed the leg
+    to the standalone artist_artwork pipeline, which is not built. The leg died with zero
+    steps, staged nothing, and the host — reading only its own tools — reported Instagram
+    as "queued" with "no manual override". Nothing was queued; the channel had silently
+    dead-ended on the very phrase the operator used to describe it. Attaching artwork is
+    something a channel DOES, not a channel of its own."""
     calls = _spy_pipelines(monkeypatch)
     plan = CampaignPlan(
         goal="run a campaign for this artist with attachments",
         audience="all",
         channels=["instagram"],
+        attach_artwork=True,
+    )
+    summary = _execute_campaign_sync(plan, "sess", "t", None, run_id="team-camp_x-abc")
+
+    assert "compose" in calls  # the IG pipeline really ran
+    assert summary["run_status"] != "not_built"
+    assert summary["pipeline_built"] is True
+    assert summary["routed_channel"] == "instagram"
+
+
+def test_artwork_with_no_stated_channel_is_honest_not_built(monkeypatch):
+    """The honest not-built case that remains: artwork asked for, but NO channel named —
+    there is no standalone artist/artwork run to execute, so we say so rather than fake it."""
+    calls = _spy_pipelines(monkeypatch)
+    plan = CampaignPlan(
+        goal="run a campaign for this artist with attachments",
+        audience="all",
+        channels=[],
         attach_artwork=True,
     )
     summary = _execute_campaign_sync(plan, "sess", "t", None, run_id="team-camp_x-abc")

@@ -63,6 +63,42 @@ def _norm_set(terms: list[str] | tuple[str, ...] | None) -> set[str]:
     return {n for n in (_norm(t) for t in (terms or [])) if n}
 
 
+#: Lexical bridges between the two vocabularies in play.
+#:
+#: The operator writes the brief in MARKETING words ("fine-line botanical"); the library
+#: is tagged in DESCRIPTIVE words the VLM actually saw ("Dahlia flower", "Sunflowers",
+#: "Red roses"). The two share no literal token, so a botanical brief scored ZERO against
+#: every botanical piece, the ranking fell back to raw tag count, and a Spider-Man
+#: blackwork piece — which carries six style tags — was offered as the top match for
+#: "promote Keebs' fine-line botanical work".
+#:
+#: These are synonyms within one domain, not an ontology: each expansion is a word a
+#: tagger would plausibly have used for the SAME subject. Applied to the THEME side only
+#: (never to a piece's own tags), so a piece can never be credited with a tag it does not
+#: carry, and the "why" still quotes only real stored tags.
+_FLORA = (
+    "flower", "flowers", "floral", "flora", "botanical", "bloom", "blossom", "petal",
+    "dahlia", "sunflower", "sunflowers", "rose", "roses", "peony", "lavender", "orchid",
+    "leaf", "leaves", "vine", "plant", "foliage", "fern", "branch", "stem",
+)
+_FINE_LINE = ("fineline", "linework", "line", "linear", "delicate", "thin", "fine")
+_TERM_EXPANSIONS: dict[str, tuple[str, ...]] = {
+    **{_norm(k): _FLORA for k in ("botanical", "floral", "flower", "flora", "nature")},
+    **{_norm(k): _FINE_LINE for k in ("fineline", "fine", "linework", "delicate")},
+}
+
+
+def _expand_theme(terms: set[str]) -> set[str]:
+    """The theme tokens plus their in-domain synonyms. Pure, deterministic."""
+    out = set(terms)
+    for t in terms:
+        for syn in _TERM_EXPANSIONS.get(t, ()):
+            n = _norm(syn)
+            if n:
+                out.add(n)
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Normalized domain models.
 # --------------------------------------------------------------------------- #
@@ -245,39 +281,49 @@ def select_artwork(
     if not artworks:
         return None
 
-    style_cmp = _norm_set(artist_styles) | _norm_set(theme_terms)
-    theme_cmp = _norm_set(theme_terms)
+    # The theme side is expanded with in-domain synonyms so the operator's marketing
+    # words reach the library's descriptive tags ("botanical" -> "Dahlia flower").
+    theme_cmp = _expand_theme(_norm_set(theme_terms))
+    style_cmp = _norm_set(artist_styles) | theme_cmp
 
-    scored: list[tuple[int, int, int, bool, int, str, ArtworkRef, list[str], list[str], str]] = []
+    scored: list[
+        tuple[int, int, int, bool, int, str, ArtworkRef, list[str], list[str], str]
+    ] = []
     for a in artworks:
         matched_styles = _overlap(a.styles, style_cmp)
         matched_motifs = _overlap(a.motifs, theme_cmp)
         # The theme may name the piece's collection directly (e.g. theme='4th-of-july').
         matched_collection = a.collection if (_norm(a.collection) and _norm(a.collection) in theme_cmp) else ""
         coll_flag = 1 if matched_collection else 0
-        # THEME-RELEVANCE BUCKET (the fix for a real "Spider-Man under a fine-line
-        # botanical brief" pick): a piece whose OWN tags overlap the THEME terms
-        # specifically outranks a piece that only matches the artist's general
-        # style. Without this, an off-theme piece scored purely on
-        # 'black-and-grey-realism ∈ the artist's styles' and buried the one
-        # botanical piece the brief actually asked for. Only fires when a theme is
-        # given — with no theme_terms every piece is bucket 0 and the score decides
-        # exactly as before (so the collection-first + tag-score behaviour is
-        # unchanged for the untargeted case).
-        theme_hits = _overlap(a.styles, theme_cmp) or _overlap(a.motifs, theme_cmp)
-        theme_flag = 1 if (theme_cmp and (theme_hits or matched_collection)) else 0
         score = 2 * len(matched_styles) + len(matched_motifs) + (1 if a.is_best_example else 0)
+        # THEME RELEVANCE OUTRANKS TAG COUNT.
+        # ``style_cmp`` unions the ARTIST'S OWN styles with the theme, so every piece
+        # matches its own style tags and ``score`` degenerates into a count of how heavily
+        # a piece is tagged. The busiest piece therefore won whatever the brief said: a
+        # "fine-line botanical" campaign surfaced Spider-Man masks, a dragon and Jack
+        # Skellington, because those carry six style tags and the botanical pieces carry
+        # two. Every piece real, every "why" honest — and every one of them wrong, which a
+        # client sees at a glance. So how well a piece matches what the OPERATOR ASKED FOR
+        # is a primary sort key ABOVE raw tag score; score only breaks ties within an equal
+        # level of theme relevance.
+        #
+        # It is a COUNT, not a flag: several pieces can be on-theme, and the MOST on-theme
+        # one should lead. Under a botanical brief the Dahlia/Sunflowers/Wildflowers piece
+        # (many floral tags) must outrank a piece that merely happens to include one rose.
+        # With no theme terms this is 0 for every piece and the old ordering is unchanged.
+        theme_hits = len(_overlap(a.styles, theme_cmp)) + len(matched_motifs)
+        if matched_collection:
+            theme_hits += 1
         # CSV (real, first-party artwork) outranks seed (mock) on an otherwise exact tie.
         source_rank = 0 if _norm(a.source) == _norm("csv") else 1
         scored.append(
-            (coll_flag, theme_flag, score, a.is_best_example, source_rank, a.asset_id, a, matched_styles, matched_motifs, matched_collection)
+            (coll_flag, theme_hits, score, a.is_best_example, source_rank, a.asset_id, a, matched_styles, matched_motifs, matched_collection)
         )
 
-    # Best: collection-match first, then THEME-relevant pieces, then highest score,
-    # then best-example, then CSV-over-seed, then stable asset-id (ascending) so the
-    # choice is fully deterministic.
+    # Best: collection-match first, then THEME RELEVANCE, then highest tag score, then
+    # best-example, then CSV-over-seed, then stable asset-id — fully deterministic.
     scored.sort(key=lambda t: (-t[0], -t[1], -t[2], not t[3], t[4], t[5]))
-    _cf, _tf, score, _best, _src, _aid, art, matched_styles, matched_motifs, matched_collection = scored[0]
+    _cf, _th, score, _best, _src, _aid, art, matched_styles, matched_motifs, matched_collection = scored[0]
     exact = bool(matched_styles or matched_motifs or matched_collection)
     pick = ArtworkPick(
         asset_id=art.asset_id,

@@ -16,6 +16,7 @@
 import { useState } from 'react';
 import type { CompetitorSelectionRequest, CompetitorOption } from '@/lib/studio/run-trace';
 import { Chip } from '../console-bits';
+import { CHANNEL_LABEL } from './ArtworkPickerModal';
 
 const TEAL = '#0F8A82';
 
@@ -91,7 +92,11 @@ export function CompetitorPickModal({
           />
           <div style={{ minWidth: 0, flex: 1 }}>
             <h2 style={{ margin: 0, fontSize: 16.5, fontWeight: 650, letterSpacing: '-0.01em', color: 'var(--ink)' }}>
-              The run is paused — pick the competitor post to mold
+              {/* NAME THE LEG — Instagram and Facebook each raise their own competitor
+                  pause, and unlabeled the two dialogs are indistinguishable. */}
+              {CHANNEL_LABEL[(request.channel || '').toLowerCase()]
+                ? `${CHANNEL_LABEL[(request.channel || '').toLowerCase()]} — pick the competitor post to mold`
+                : 'The run is paused — pick the competitor post to mold'}
             </h2>
             <p style={{ margin: '4px 0 0', fontSize: 13, lineHeight: 1.5, color: 'var(--text-secondary)' }}>
               {request.question}

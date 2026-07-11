@@ -449,6 +449,10 @@ export function useStudioAgui(
   // On completion we refresh history once so the persisted operator trigger + per-agent
   // traces + host summary replace the live placeholders. NOTHING sends (HELD/PENDING).
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** The run id the console is CURRENTLY bound to. Authoritative for both re-binding
+   *  (attach only when the id actually changes) and for discarding an in-flight poll
+   *  that belongs to a run we have since moved off. */
+  const runIdRef = useRef<string | null>(null);
 
   // Shared poll loop: GET /studio/run/{id} every ~2s, surfacing per-agent steps as
   // they land, until the run completes/errors or a no-progress safety cap. Used by
@@ -466,6 +470,9 @@ export function useStudioAgui(
       const poll = async () => {
         try {
           const st = await fetchRunState(aguiUrl, runId);
+          // A poll that was already in flight when we re-bound to a different run must
+          // not write its stale state over the new one.
+          if (runIdRef.current !== runId) return;
           setRunState(st);
           if (st.status === 'completed' || st.status === 'error') {
             setRunningCampaign(false);
@@ -528,6 +535,7 @@ export function useStudioAgui(
       try {
         const r = await startRun(aguiUrl, sessionId, planRef.current);
         runId = r.runId;
+        runIdRef.current = runId; // keep the binding ref in step with the button path
         setRunState((prev) => ({ ...(prev as RunState), runId }));
       } catch (e) {
         setError(e instanceof Error ? e.message : 'run start failed');
@@ -546,7 +554,13 @@ export function useStudioAgui(
   // reasoning stream then fills with the SAME real agent_runs the Command run uses.
   const attachRun = useCallback(
     (runId: string) => {
-      if (!runId || runningCampaign) return;
+      if (!runId) return;
+      // Re-binding to a DIFFERENT run must be allowed even while one is already being
+      // polled — otherwise a console latched onto a stale/superseded run can never
+      // recover, and shows an empty panel while the real run streams and asks for picks.
+      // Only a redundant re-attach to the SAME id is a no-op.
+      if (runIdRef.current === runId) return;
+      runIdRef.current = runId;
       setRunningCampaign(true);
       // Deliberately NOT setBusy(true): busy serializes CHAT round-trips, and a
       // watched background run can pause indefinitely on an operator pick — holding
@@ -556,7 +570,7 @@ export function useStudioAgui(
       setRunState({ runId, status: 'running', steps: [], nPending: null, pending: [], archetype: null, error: null });
       pollRun(runId);
     },
-    [runningCampaign, pollRun],
+    [pollRun],
   );
 
   // FIND THE RUN, WHATEVER LAUNCHED IT.
@@ -570,13 +584,19 @@ export function useStudioAgui(
   // queued. They were stuck behind a question the operator was never shown. So: when we
   // are idle, ASK the backend which run belongs to this session, and attach to it.
   useEffect(() => {
-    // Keep watching while idle — including AFTER a run finished: a SECOND typed
-    // launch in the same mounted session must auto-attach too (only a run that is
-    // actively being polled suppresses the probe). Same-id re-attach is skipped so
-    // a finished run never re-binds in a loop.
-    const terminal =
-      runState != null && (runState.status === 'completed' || runState.status === 'error');
-    if (runningCampaign || (runState != null && !terminal)) return;
+    // PROBE ALWAYS — never suppress this while a run is bound.
+    //
+    // Suppressing it "while busy" looks harmless and is not: the moment the console
+    // binds to a run that never reaches a terminal state, it can NEVER re-bind. That
+    // is not hypothetical — it bound to a channel CHILD (`{parent}-fb`) that had been
+    // superseded, and then sat on "0 agents landed / Timeline 0 steps" forever while
+    // the real run was nine steps in and holding two operator questions. A console
+    // that cannot correct its own binding is worse than one that never binds, because
+    // it looks alive.
+    //
+    // The backend is the authority on which run this session should watch, so we ask
+    // it every few seconds and follow it. Attaching is idempotent when the id is
+    // unchanged (the common case), so this is a no-op while a run streams normally.
     let cancelled = false;
     const boundId = runState?.runId ?? null;
     const tick = async () => {
@@ -593,7 +613,7 @@ export function useStudioAgui(
       cancelled = true;
       clearInterval(timer);
     };
-  }, [aguiUrl, sessionId, runningCampaign, runState, attachRun]);
+  }, [aguiUrl, sessionId, runState, attachRun]);
 
   // Resolve a paused run's artwork pick (spec section 22). POSTs the REAL assetId to
   // select-artwork; on success the pause is cleared optimistically and polling

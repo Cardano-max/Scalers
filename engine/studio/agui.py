@@ -2014,7 +2014,9 @@ def _execute_campaign_sync(
             theme_terms_from_plan,
         )
 
-        _theme_terms = theme_terms_from_plan(plan)
+        # Lead with THIS leg's own image_style ("fine-line botanical"): the operator's most
+        # specific instruction about the picture. Without it the top-4 ignored the brief.
+        _theme_terms = theme_terms_from_plan(plan, channel=decision.channel)
         if ig_competitor_pick:
             from studio.competitor_flow import competitor_theme_terms
 
@@ -3855,6 +3857,38 @@ async def launch_studio_run(
     return info
 
 
+def _parent_run_id(run_id: str) -> str:
+    """Fold a channel child (``{parent}-ig``) back onto its PARENT; a parent (or a
+    single-channel run) is returned unchanged.
+
+    The parent id is the ONLY one the console should ever watch: GET /studio/run/{parent}
+    fans in every leg's steps, drafts and pauses. Bind to a child instead and the operator
+    sees one third of their own campaign and is never asked the other legs' questions.
+
+    Thin wrapper over :func:`studio.run_children.parent_of` (the one definition of the
+    family naming rule) so there is no second, drifting copy of the suffix list."""
+    from studio.run_children import parent_of
+
+    return parent_of(run_id) or run_id
+
+
+def leg_channel(run_id: str, parent_run_id: str) -> str | None:
+    """The channel leg a child run belongs to ('ig' | 'fb' | 'email' | …), or None when
+    ``run_id`` IS the parent (single-channel run). Children are ``{parent}-{channel}``.
+
+    A multi-channel campaign can raise up to SIX operator pauses — a competitor pick and an
+    artwork pick per social leg, plus an artwork pick on an artwork-attach email leg. With
+    no leg label every popup reads identically ("I found 4 matching pieces for this
+    campaign — which should I use?") and the operator cannot tell whether they are choosing
+    the image for Instagram, for Facebook, or for the email. Pure."""
+    if not run_id or not parent_run_id:
+        return None
+    prefix = f"{parent_run_id}-"
+    if not run_id.startswith(prefix):
+        return None
+    return run_id[len(prefix) :] or None
+
+
 def child_run_ids(
     run_id: str, dsn: str | None = None, registry: dict | None = None
 ) -> list[str]:
@@ -5174,11 +5208,13 @@ def mount_studio_agui(app) -> None:
             for rid, rec in (runs_registry or {}).items()
             if isinstance(rec, dict) and rec.get("session_id") == session_id
         ]
-        # Collapse each candidate to its FAMILY PARENT by the channel suffix. On a
-        # multi-channel launch ONLY the children register (the parent id is just the
-        # launch handle), so the old not-a-prefix-of-another filter kept all three
-        # children and handed back the LAST one — the panel bound to the fb leg
-        # alone and the email/ig legs went invisible again, one layer up.
+        # ALWAYS hand back the family PARENT. On a multi-channel launch ONLY the children
+        # are registered (start_registered_run calls _start_one once per channel and never
+        # registers the parent), so "the id that is not a child of another registered id"
+        # matched all three children and the console bound to whichever leg happened to be
+        # registered last — showing one third of its own campaign and missing the pauses
+        # raised by the other two. Fold every child back onto its parent; it is
+        # GET /studio/run/{parent} that fans the whole family back in.
         from studio.run_children import composite_status, parent_of
 
         parents: list[str] = []
@@ -5216,30 +5252,35 @@ def mount_studio_agui(app) -> None:
             # Newest awaiting pause ACROSS BOTH tables — never table-priority, or a stale
             # competitor pause from an abandoned run outranks the live artwork pause the
             # operator is actually staring at.
+            #
+            # SCOPED TO THIS SESSION. A pause row is only ever 'awaiting' or 'selected'
+            # (check constraint) — it can never be retired — so every abandoned run holds
+            # its pause forever. Picking the newest pause GLOBALLY therefore binds the
+            # console to whoever paused last, which in practice meant one operator's
+            # console latching onto a DIFFERENT session's run. The pause carries its
+            # session_id; honour it.
             awaiting: str | None = None
             newest = None
             with psycopg.connect(get_dsn(), autocommit=True) as conn:
                 for table in ("competitor_selections", "artwork_selections"):
                     try:
                         row = conn.execute(
-                            f"SELECT run_id, created_at FROM {table} WHERE status='awaiting' "
-                            "ORDER BY created_at DESC LIMIT 1"
+                            f"SELECT run_id, created_at FROM {table} "
+                            "WHERE status='awaiting' AND session_id=%s "
+                            "ORDER BY created_at DESC LIMIT 1",
+                            (session_id,),
                         ).fetchone()
                     except Exception:
                         continue
                     if row and row[0] and (newest is None or row[1] > newest):
                         awaiting, newest = str(row[0]), row[1]
             if awaiting:
-                # Children are '{parent}-{channel}' — strip a known channel suffix.
-                parent = awaiting
-                for suffix in (
-                    "-instagram", "-facebook", "-email", "-gmail", "-ig", "-fb", "-sms",
-                ):
-                    if parent.endswith(suffix):
-                        parent = parent[: -len(suffix)]
-                        break
                 return JSONResponse(
-                    {"ok": True, "runId": parent, "status": "awaiting_selection"}
+                    {
+                        "ok": True,
+                        "runId": _parent_run_id(awaiting),
+                        "status": "awaiting_selection",
+                    }
                 )
         except Exception:
             pass
@@ -5448,12 +5489,14 @@ def mount_studio_agui(app) -> None:
                     sel = get_selection(rid, dsn=dsn)
                     if sel and sel.get("status") == "awaiting":
                         selection_request = selection_request_payload(sel)
-                        # Carry the OWNING run id + leg so the answer routes to the
-                        # right leg and the modal can SAY which channel is asking.
+                        # Carry the OWNING run id so the answer routes to the right leg,
+                        # AND the leg's channel so the operator can tell WHICH pipeline is
+                        # asking. One multi-channel campaign raises up to six pauses; with
+                        # no label every popup reads identically ("I found 4 matching
+                        # pieces — which should I use?") and the operator picks blind.
                         if isinstance(selection_request, dict):
                             selection_request["runId"] = rid
-                            if rid.startswith(f"{run_id}-"):
-                                selection_request["channel"] = rid[len(run_id) + 1 :]
+                            selection_request["channel"] = leg_channel(rid, run_id)
                         if status in (None, "running", "awaiting_selection"):
                             status = "awaiting_selection"
                         break
@@ -5477,10 +5520,7 @@ def mount_studio_agui(app) -> None:
                         competitor_selection_request = competitor_selection_payload(csel)
                         if isinstance(competitor_selection_request, dict):
                             competitor_selection_request["runId"] = rid
-                            if rid.startswith(f"{run_id}-"):
-                                competitor_selection_request["channel"] = (
-                                    rid[len(run_id) + 1 :]
-                                )
+                            competitor_selection_request["channel"] = leg_channel(rid, run_id)
                         if status in (None, "running", "awaiting_selection"):
                             status = "awaiting_selection"
                         break

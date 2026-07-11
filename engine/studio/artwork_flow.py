@@ -295,11 +295,34 @@ def artwork_gate(
     return "pause", {"kind": "artwork", "question": question, "options": options}
 
 
-def theme_terms_from_plan(plan: Any, extra: list[str] | None = None) -> list[str]:
+def theme_terms_from_plan(
+    plan: Any, extra: list[str] | None = None, channel: str | None = None
+) -> list[str]:
     """Bounded matching terms for artwork selection, drawn from the plan's REAL
     fields (campaign type / goal / offer type / segment) + any extras (e.g. the
-    strategist's angle words). Pure."""
+    strategist's angle words). Pure.
+
+    THE CHANNEL'S OWN STYLE COMES FIRST. The operator answers an explicit style question
+    per social channel ("promote Keebs' FINE-LINE BOTANICAL work" -> image_style
+    'fine-line botanical'), and that answer used to be read by nobody: the terms came only
+    from the campaign-level goal/audience, so a botanical brief surfaced a top-4 of
+    Spider-Man masks, dragons and blackwork. The pieces were real and the reasoning was
+    honest, but they were the wrong pieces — and the operator (and their client) sees that
+    instantly. The style answer is the single most specific thing the operator said about
+    the image, so it leads the term list."""
     terms: list[str] = []
+    # This channel's block: image_style, then its own goal — the most specific signal.
+    if channel:
+        try:
+            from studio.competitor_flow import social_channel_plan
+
+            block = social_channel_plan(plan, channel)
+        except Exception:
+            block = {}
+        for key in ("image_style", "goal"):
+            v = block.get(key) if isinstance(block, dict) else None
+            if isinstance(v, str) and v.strip():
+                terms.extend(v.split())
     for attr in ("campaign_type", "offer_type", "segment", "goal", "audience"):
         v = getattr(plan, attr, "") or ""
         if isinstance(v, str) and v.strip():
