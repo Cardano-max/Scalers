@@ -178,6 +178,30 @@ export async function startRun(
   return { runId: data.runId };
 }
 
+/** The run this session's console should be WATCHING — whatever launched it.
+ *
+ *  The Run button and the voice orchestrate gate hand us a runId directly. The HOST's
+ *  launch tool does NOT: it returns the run id as TEXT for the model to narrate. So an
+ *  operator who simply TYPED "go ahead" got a real, live run that the console never
+ *  watched — an empty Agency panel still reading "start a run", and, far worse, no
+ *  artwork/competitor PICKER, while the run itself sat PAUSED waiting for exactly that
+ *  pick. The host then explained the stalled channels away as "queued" with "no manual
+ *  override". They were not queued; they were blocked behind a question the operator was
+ *  never shown. Returns null when the session has no run. */
+export async function fetchActiveRunId(
+  aguiUrl: string,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const res = await fetch(
+    `${studioBase(aguiUrl)}/session/${encodeURIComponent(sessionId)}/active-run`,
+    { method: 'GET', headers: { accept: 'application/json' }, signal },
+  );
+  if (!res.ok) return null;
+  const data = (await res.json()) as { runId?: string | null };
+  return data?.runId || null;
+}
+
 /** Fetch the current state of a run (steps so far + status). */
 export async function fetchRunState(
   aguiUrl: string,

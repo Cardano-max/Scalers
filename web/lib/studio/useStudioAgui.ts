@@ -34,6 +34,7 @@ import { fetchStudioHistory } from './studio-history';
 import {
   startRun,
   fetchRunState,
+  fetchActiveRunId,
   selectArtwork,
   selectCompetitor,
   type RunState,
@@ -546,6 +547,35 @@ export function useStudioAgui(
     },
     [runningCampaign, pollRun],
   );
+
+  // FIND THE RUN, WHATEVER LAUNCHED IT.
+  // attachRun only fires when the launcher hands us a runId. The Run button and the voice
+  // orchestrate gate do that; the HOST's launch tool does not — it returns the run id as
+  // TEXT for the model to narrate. So an operator who simply TYPED "go ahead" got a real,
+  // live, multi-channel run that this console never watched: an empty Agency panel still
+  // saying "start a run", no agents, and — the damaging part — no artwork/competitor
+  // PICKER, while the run sat PAUSED waiting for precisely that pick. The host then
+  // described the blocked channels as "queued" with "no manual override". They were not
+  // queued. They were stuck behind a question the operator was never shown. So: when we
+  // are idle, ASK the backend which run belongs to this session, and attach to it.
+  useEffect(() => {
+    if (runningCampaign || runState) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const found = await fetchActiveRunId(aguiUrl, sessionId);
+        if (!cancelled && found) attachRun(found);
+      } catch {
+        // transient — the next tick retries.
+      }
+    };
+    void tick();
+    const timer = setInterval(() => void tick(), 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [aguiUrl, sessionId, runningCampaign, runState, attachRun]);
 
   // Resolve a paused run's artwork pick (spec section 22). POSTs the REAL assetId to
   // select-artwork; on success the pause is cleared optimistically and polling

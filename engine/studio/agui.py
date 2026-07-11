@@ -5142,6 +5142,83 @@ def mount_studio_agui(app) -> None:
     except Exception:
         pass
 
+    @app.get("/studio/session/{session_id}/active-run")
+    async def studio_session_active_run(session_id: str):  # noqa: ANN202
+        """The run this session's console should be WATCHING — whatever launched it.
+
+        An operator can start a campaign three ways: the Run button, the voice host, or by
+        TYPING "go" to the host. ONLY the button path handed the run id back to the UI.
+        The host's launch tool returns its run id as TEXT for the model to narrate, so a
+        voice/typed launch left the Agency panel sitting on "The agency is ready — start a
+        run": no agents, no progress, and — far worse — no artwork/competitor PICKER, while
+        the run itself sat PAUSED waiting for exactly that answer. The operator was told to
+        pick a piece and given nothing to pick with; the host then reported the other
+        channels as "queued" with "no manual override", when they were simply blocked
+        behind an unanswerable question. The UI polls this to find its run.
+
+        Returns the newest PARENT run of the session (a child is ``{parent}-{channel}``).
+        """
+        from fastapi.responses import JSONResponse
+
+        candidates = [
+            rid
+            for rid, rec in (runs_registry or {}).items()
+            if isinstance(rec, dict) and rec.get("session_id") == session_id
+        ]
+        # A parent is any id that is not a channel-child of another id in this session.
+        parents = [
+            rid
+            for rid in candidates
+            if not any(other != rid and rid.startswith(f"{other}-") for other in candidates)
+        ]
+        if parents:
+            run_id = parents[-1]  # dict preserves insertion order — newest launch last
+            rec = runs_registry.get(run_id) or {}
+            return JSONResponse(
+                {"ok": True, "runId": run_id, "status": rec.get("status") or "running"}
+            )
+
+        # FALLBACK — the registry lives in memory and dies with the process. A run PAUSED
+        # on an operator pick OUTLIVES a restart (the pause is a DB row), and it is the one
+        # thing the operator most needs to see: without it the run is unanswerable, so it
+        # hangs forever and every channel behind it looks "queued". Find this tenant's
+        # newest still-awaiting pause and hand back the PARENT id that owns it.
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        try:
+            import psycopg
+
+            # Newest awaiting pause ACROSS BOTH tables — never table-priority, or a stale
+            # competitor pause from an abandoned run outranks the live artwork pause the
+            # operator is actually staring at.
+            awaiting: str | None = None
+            newest = None
+            with psycopg.connect(get_dsn(), autocommit=True) as conn:
+                for table in ("competitor_selections", "artwork_selections"):
+                    try:
+                        row = conn.execute(
+                            f"SELECT run_id, created_at FROM {table} WHERE status='awaiting' "
+                            "ORDER BY created_at DESC LIMIT 1"
+                        ).fetchone()
+                    except Exception:
+                        continue
+                    if row and row[0] and (newest is None or row[1] > newest):
+                        awaiting, newest = str(row[0]), row[1]
+            if awaiting:
+                # Children are '{parent}-{channel}' — strip a known channel suffix.
+                parent = awaiting
+                for suffix in (
+                    "-instagram", "-facebook", "-email", "-gmail", "-ig", "-fb", "-sms",
+                ):
+                    if parent.endswith(suffix):
+                        parent = parent[: -len(suffix)]
+                        break
+                return JSONResponse(
+                    {"ok": True, "runId": parent, "status": "awaiting_selection"}
+                )
+        except Exception:
+            pass
+        return JSONResponse({"ok": True, "runId": None})
+
     @app.post("/studio/run")
     async def studio_run_start(request: Request):  # noqa: ANN202
         """DETERMINISTIC async campaign run — the 'Run campaign' BUTTON path, made LIVE.
