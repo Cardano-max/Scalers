@@ -54,8 +54,66 @@ def _graph_get(path: str, token: str, app_secret: str | None, fields: str) -> di
         raise RuntimeError(detail) from None
 
 
+def _verify_id(
+    graph_id: str, token: str, app_secret: str | None, fields: str,
+    render: Any,
+) -> dict[str, Any]:
+    """Verify ONE Graph id, separating the two failure classes an operator hit:
+
+    * token bad → verified False with the real Graph error;
+    * token GOOD but META_APP_SECRET belongs to a DIFFERENT app → Meta rejects the
+      appsecret_proof signature. A plain probe read that as ``verified: false``,
+      which points the operator at the (perfectly valid) token. Here we retry
+      WITHOUT the proof to prove the token itself, and report the mismatch on
+      ``appsecretProof`` — publishing stays blocked until the secret is fixed
+      (the publish connectors ALWAYS sign; they never drop the proof)."""
+    if app_secret:
+        try:
+            data = _graph_get(graph_id, token, app_secret, fields)
+            return {
+                "verified": str(data.get("id")) == graph_id,
+                "detail": render(data),
+                "appsecretProof": "ok",
+            }
+        except RuntimeError as exc:
+            if "appsecret_proof" not in str(exc).lower():
+                return {"verified": False, "detail": str(exc), "appsecretProof": "unknown"}
+            # Proof rejected — prove the token on its own so the diagnosis is exact.
+            try:
+                data = _graph_get(graph_id, token, None, fields)
+                return {
+                    "verified": str(data.get("id")) == graph_id,
+                    "detail": render(data),
+                    "appsecretProof": (
+                        "MISMATCH — the token is valid, but META_APP_SECRET does not "
+                        "belong to the app that issued META_PAGE_TOKEN. Publishing "
+                        "will FAIL until the matching app secret is set (every "
+                        "publish call is signed)."
+                    ),
+                }
+            except RuntimeError as exc2:
+                return {"verified": False, "detail": str(exc2), "appsecretProof": "mismatch"}
+    try:
+        data = _graph_get(graph_id, token, None, fields)
+        return {
+            "verified": str(data.get("id")) == graph_id,
+            "detail": render(data),
+            "appsecretProof": (
+                "MISSING — META_APP_SECRET is not set; the publish connectors "
+                "require it (every publish call is signed), so publishing will "
+                "refuse until it is configured."
+            ),
+        }
+    except RuntimeError as exc:
+        return {"verified": False, "detail": str(exc), "appsecretProof": "missing"}
+
+
 def meta_verify() -> dict[str, Any]:
-    """The full honest status: configured keys + live Graph verification results."""
+    """The full honest status: configured keys + live Graph verification results.
+
+    ``publishReady`` is True only when the PROOF-SIGNED call succeeded — a valid
+    token with a mismatched/missing app secret verifies the account but cannot
+    publish, and this endpoint must say exactly that."""
     token = (os.environ.get("META_PAGE_TOKEN") or "").strip()
     ig_id = (os.environ.get("META_IG_USER_ID") or "").strip()
     page_id = (os.environ.get("META_PAGE_ID") or "").strip()
@@ -70,6 +128,7 @@ def meta_verify() -> dict[str, Any]:
         },
         "instagram": {"verified": False, "detail": None},
         "facebook": {"verified": False, "detail": None},
+        "publishReady": False,
     }
     if not token:
         out["instagram"]["detail"] = out["facebook"]["detail"] = (
@@ -78,27 +137,23 @@ def meta_verify() -> dict[str, Any]:
         return out
 
     if ig_id:
-        try:
-            data = _graph_get(ig_id, token, app_secret, "id,username")
-            out["instagram"] = {
-                "verified": str(data.get("id")) == ig_id,
-                "detail": f"@{data.get('username')}" if data.get("username") else str(data),
-            }
-        except RuntimeError as exc:
-            out["instagram"] = {"verified": False, "detail": str(exc)}
+        out["instagram"] = _verify_id(
+            ig_id, token, app_secret, "id,username",
+            lambda d: f"@{d.get('username')}" if d.get("username") else str(d),
+        )
     else:
         out["instagram"]["detail"] = "META_IG_USER_ID is not set"
 
     if page_id:
-        try:
-            data = _graph_get(page_id, token, app_secret, "id,name")
-            out["facebook"] = {
-                "verified": str(data.get("id")) == page_id,
-                "detail": str(data.get("name") or data),
-            }
-        except RuntimeError as exc:
-            out["facebook"] = {"verified": False, "detail": str(exc)}
+        out["facebook"] = _verify_id(
+            page_id, token, app_secret, "id,name",
+            lambda d: str(d.get("name") or d),
+        )
     else:
         out["facebook"]["detail"] = "META_PAGE_ID is not set"
 
+    out["publishReady"] = (
+        out["instagram"].get("appsecretProof") == "ok"
+        or out["facebook"].get("appsecretProof") == "ok"
+    )
     return out
