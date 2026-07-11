@@ -91,6 +91,11 @@ def test_instagram_post_runs_ig_spine_not_email(monkeypatch):
         goal="create an Instagram post for our new artist",
         audience="local clients",
         channels=["instagram"],
+        # Competitor research now defaults ON for a social leg, and its operator gate
+        # PAUSES the spine before the drafter is ever reached. This test is about
+        # ROUTING (instagram must not run the email path), so the gate is switched off
+        # to isolate it; the gate itself is covered by the competitor-pause tests.
+        channel_plans={"instagram": {"competitor_research": False}},
     )
     summary = _execute_campaign_sync(plan, "sess", "t", None, run_id="team-camp_x-abc")
 
@@ -121,6 +126,9 @@ def test_facebook_campaign_runs_fb_spine_not_email(monkeypatch):
         goal="create a Facebook campaign for the flash-day promo",
         audience="all",
         channels=["facebook"],
+        # See the Instagram routing test: the competitor gate defaults ON for a social
+        # leg and pauses before the drafter. Off here so this test isolates ROUTING.
+        channel_plans={"facebook": {"competitor_research": False}},
     )
     summary = _execute_campaign_sync(plan, "sess", "t", None, run_id="team-camp_x-abc")
 
@@ -165,6 +173,8 @@ def test_stated_channel_with_attachments_runs_that_channel(monkeypatch):
         audience="all",
         channels=["instagram"],
         attach_artwork=True,
+        # Isolate routing from the competitor gate (which now defaults ON and pauses).
+        channel_plans={"instagram": {"competitor_research": False}},
     )
     summary = _execute_campaign_sync(plan, "sess", "t", None, run_id="team-camp_x-abc")
 
