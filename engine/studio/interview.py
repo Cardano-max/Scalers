@@ -188,6 +188,14 @@ CHANNEL_QUESTIONS: dict[str, tuple[tuple[str, str], ...]] = {
         ("channel_plans.fb.audience",
          "Who is the Facebook post for — your page followers, locals, or fans of a "
          "particular style?"),
+        ("channel_plans.fb.competitor_research",
+         "Should I research competitor posts first and mold the best-performing "
+         "structure to your brand for Facebook too? (yes/no)"),
+        ("channel_plans.fb.attach_images",
+         "Attach artwork images to the Facebook post? (yes/no)"),
+        ("channel_plans.fb.image_style",
+         "What style/type of images for Facebook — e.g. fine-line botanical, "
+         "black-and-grey realism, healed photos?"),
         ("channel_plans.fb.offer",
          "What's the ask in the Facebook post — a booking link, an offer, or just "
          "'message us to book'?"),

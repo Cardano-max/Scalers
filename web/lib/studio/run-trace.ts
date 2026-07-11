@@ -32,6 +32,12 @@ export interface SelectionRequest {
   kind: string; // 'artwork'
   question: string;
   options: SelectionOption[];
+  /** The run that raised the pause — on a multi-channel launch that is a CHANNEL
+   *  CHILD (`{parent}-ig`), and the pick must be POSTed to IT, not the watched
+   *  parent (two legs can pause on the same kind simultaneously). */
+  runId?: string | null;
+  /** Which channel leg raised it ('ig' | 'fb' | …) — display + disambiguation. */
+  channel?: string | null;
 }
 
 /** One pickable competitor post in a paused run's competitor pick. Real scraped
@@ -57,6 +63,10 @@ export interface CompetitorSelectionRequest {
   kind: string; // 'competitor_pick'
   question: string;
   options: CompetitorOption[];
+  /** The run that raised the pause (a channel child on multi-channel launches). */
+  runId?: string | null;
+  /** Which channel leg raised it ('ig' | 'fb' | …). */
+  channel?: string | null;
 }
 
 /** One per-agent trace step (a row of agent_runs). */
@@ -67,6 +77,9 @@ export interface RunStep {
   input: unknown;
   output: unknown;
   createdAt?: string;
+  /** The channel leg that ran this step on a multi-channel launch ('ig' | 'fb' |
+   *  'email' | …); null/absent on a single-channel run. */
+  channel?: string | null;
 }
 
 /** One HELD draft (a PENDING `actions` row) produced by the run. Carries exactly
@@ -236,6 +249,8 @@ function parseSelectionRequest(raw: unknown): SelectionRequest | null {
     kind: typeof r.kind === 'string' ? r.kind : 'artwork',
     question: typeof r.question === 'string' ? r.question : 'Pick an artwork for this campaign.',
     options,
+    runId: typeof r.runId === 'string' && r.runId.length > 0 ? r.runId : null,
+    channel: typeof r.channel === 'string' && r.channel.length > 0 ? r.channel : null,
   };
 }
 
@@ -286,6 +301,8 @@ function parseCompetitorSelectionRequest(raw: unknown): CompetitorSelectionReque
     question:
       typeof r.question === 'string' ? r.question : 'Pick the competitor post to mold.',
     options,
+    runId: typeof r.runId === 'string' && r.runId.length > 0 ? r.runId : null,
+    channel: typeof r.channel === 'string' && r.channel.length > 0 ? r.channel : null,
   };
 }
 

@@ -425,12 +425,14 @@ def build_ig_brief_block(
     artwork: dict[str, Any] | None = None,
     artwork_note: str | None = None,
     competitor_pick: dict[str, Any] | None = None,
+    platform: str = "instagram",
     dsn: str | None = None,
 ) -> str:
-    """Assemble the IG-specific grounded brief block AND record the channel crew's
-    real steps (``artist_memory`` / ``trend_research`` agent_runs) so the Instagram
-    run visibly carries a different agent team. Returns the text to append to the
-    compose brief."""
+    """Assemble the posting-channel grounded brief block AND record the channel
+    crew's real steps (``artist_memory`` / ``trend_research`` agent_runs) so the
+    posting run visibly carries a different agent team. ``platform`` labels the
+    mold ('instagram' or 'facebook' — the Facebook child gets the same grounding
+    with page-post framing). Returns the text to append to the compose brief."""
     artist = (getattr(plan, "artist", "") or "").strip() or None
     mem = load_artist_memory(tenant_id, artist, dsn=dsn)
     if run_id:
@@ -502,7 +504,7 @@ def build_ig_brief_block(
 
             mold = mold_competitor_pattern(
                 tenant_id, plan, competitor_pick,
-                run_id=run_id, campaign_id=campaign_id, dsn=dsn,
+                run_id=run_id, campaign_id=campaign_id, platform=platform, dsn=dsn,
             )
             competitor_block = render_molded_block(mold, competitor_pick)
         except Exception:

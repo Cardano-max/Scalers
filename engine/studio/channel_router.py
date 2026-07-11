@@ -118,6 +118,27 @@ def _has(text: str, *words: str) -> bool:
     return any(re.search(rf"(?<![a-z]){re.escape(w)}(?![a-z])", text) for w in words)
 
 
+#: Channel tokens that can ONLY mean a POSTING leg (an image/caption post). When a
+#: plan's stated channels are exclusively these, the plan IS a posting run — the
+#: provided-leads and artwork not-built rules must not capture it (a real fan-out's
+#: ig/fb children inherited the email leg's lead_source='provided' and were routed
+#: into the per-lead executor: 'Hi Kevin' message drafts on instagram, no competitor
+#: gate, no artwork pause, no image).
+_POSTING_ONLY_TOKENS = frozenset(
+    {"ig", "instagram", "insta", "reel", "reels", "story", "stories", "fb", "facebook"}
+)
+
+
+def _posting_only(plan: Any) -> bool:
+    """True when the plan STATES channels and every one is a posting channel. Pure."""
+    channels = [
+        str(c).strip().lower()
+        for c in (getattr(plan, "channels", None) or [])
+        if str(c or "").strip()
+    ]
+    return bool(channels) and all(c in _POSTING_ONLY_TOKENS for c in channels)
+
+
 def route_pipeline(plan: Any) -> RouteDecision:
     """Route ``plan`` to a channel pipeline from its real fields. Pure — no I/O.
 
@@ -128,7 +149,10 @@ def route_pipeline(plan: Any) -> RouteDecision:
       2. lead_source=='provided' → BUILT (email) — the per-lead outreach compliance
          path is never bypassed by an incidental social word in the goal; with
          ``attach_artwork`` it now ALSO runs the artwork top-pick gate (item 3), so
-         it must precede the artwork rule
+         it must precede the artwork rule. EXCEPTION: a plan whose stated channels
+         are EXCLUSIVELY posting channels (an isolated ig/fb child of a fan-out) is
+         a posting run — there is no per-lead posting pipeline, so rules 2–3 are
+         skipped and the social rules below decide.
       3. artist/artwork/attachments (with NO built channel chosen) → NOT BUILT (honest)
       4. Instagram/Reels/Story → BUILT (compose IG archetype + artwork gate)
       5. Facebook → BUILT (compose FB page-post archetype)
@@ -138,6 +162,7 @@ def route_pipeline(plan: Any) -> RouteDecision:
     text = _text(plan)
     attach_artwork = bool(getattr(plan, "attach_artwork", False))
     lead_source = (getattr(plan, "lead_source", "") or "").strip().lower()
+    posting_only = _posting_only(plan)
 
     # 1. Messenger — outbound DM: hard-escalated by the connector, no pipeline to run.
     if _has(text, "messenger"):
@@ -150,7 +175,9 @@ def route_pipeline(plan: Any) -> RouteDecision:
     #    consent-gated path (nmh.9 review S1), and ``attach_artwork`` on this cohort is
     #    BUILT now: the run pauses on the artwork top-picks for the operator's choice
     #    and attaches the selected piece to each staged draft (engine-core item 3).
-    if lead_source == "provided":
+    #    A POSTING-ONLY channel set is exempt: an ig/fb child is a post, never a
+    #    per-lead message blast.
+    if lead_source == "provided" and not posting_only:
         reason = (
             "uploaded-lead outreach — running the per-lead email pipeline against your "
             "own leads; nothing is sent (HELD)."
@@ -168,7 +195,11 @@ def route_pipeline(plan: Any) -> RouteDecision:
     #    IS built inside the two real pipelines (provided-lead email above; the IG
     #    spine's artwork gate below reaches it when the plan names Instagram WITHOUT
     #    artwork phrasing), so the honest not-built here points the operator at them.
-    if attach_artwork or _has(text, "artwork", "attachment", "attachments", "portfolio"):
+    #    A posting-only channel set skips this too — its artwork ask IS the built
+    #    artwork gate on the ig/fb spine below, never a not-built dead end.
+    if not posting_only and (
+        attach_artwork or _has(text, "artwork", "attachment", "attachments", "portfolio")
+    ):
         return RouteDecision(
             Pipeline.ARTIST_ARTWORK, False, _NOT_BUILT_REASON[Pipeline.ARTIST_ARTWORK]
         )

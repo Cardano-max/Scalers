@@ -126,10 +126,32 @@ export async function postRunStatus(
   return (await res.json()) as Record<string, unknown>;
 }
 
-/** The ONLY tool names this relay will route (two write-shaped, one read-only).
+/** Forward a `list_conversation_leads` tool call to the server's READ-ONLY leads
+ *  route — the imported conversation threads' real names/emails (optional topic
+ *  filter). The host's ONLY honest source for "what's the first customer's name?". */
+export async function postConversationLeads(
+  aguiUrl: string,
+  sessionId: string,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const res = await fetch(`${studioBase(aguiUrl)}/voice/leads`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId, topic: args.topic ?? null, limit: args.limit ?? null }),
+  });
+  if (!res.ok) throw new Error(`voice leads HTTP ${res.status}`);
+  return (await res.json()) as Record<string, unknown>;
+}
+
+/** The ONLY tool names this relay will route (two write-shaped, two read-only).
  *  Anything else is dropped with an honest error output — there is no send/publish
  *  handler in the browser. */
-export const ROUTABLE_TOOLS = ['update_plan', 'request_orchestration', 'get_run_status'] as const;
+export const ROUTABLE_TOOLS = [
+  'update_plan',
+  'request_orchestration',
+  'get_run_status',
+  'list_conversation_leads',
+] as const;
 export type RoutableTool = (typeof ROUTABLE_TOOLS)[number];
 
 export interface ToolRouteDeps {
@@ -195,6 +217,11 @@ export async function routeToolCall(
   if (name === 'get_run_status') {
     // Read-only: the model must narrate ONLY what this returns.
     return await postRunStatus(deps.aguiUrl, deps.sessionId);
+  }
+
+  if (name === 'list_conversation_leads') {
+    // Read-only: the imported conversation leads (real names, DB-backed).
+    return await postConversationLeads(deps.aguiUrl, deps.sessionId, args);
   }
 
   // No other tool is routable — there is deliberately no send/publish handler.

@@ -41,10 +41,12 @@ def test_voice_instructions_forbid_guessing_and_define_draft_one():
     assert "never invent" in t or "never guess" in t
     assert "draft #1" in t
     # And it must not have gained a SEND-capable tool: the surface is exactly
-    # update_plan (edit) + request_orchestration (gated launch request) +
-    # get_run_status (READ-ONLY truth for narration) — no publish/send anywhere.
+    # update_plan (edit) + get_run_status / list_conversation_leads (READ-ONLY
+    # truth for narration) + request_orchestration (gated launch request) — no
+    # publish/send anywhere.
     assert voice.VOICE_TOOL_NAMES == (
-        "update_plan", "get_run_status", "request_orchestration",
+        "update_plan", "get_run_status", "list_conversation_leads",
+        "request_orchestration",
     )
 
 

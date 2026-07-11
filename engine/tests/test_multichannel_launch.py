@@ -82,7 +82,9 @@ def test_effective_channel_plan_applies_overrides_and_narrows_channel() -> None:
     assert eff.output_count == 2
     # Fields without an override inherit the shared plan.
     assert eff.audience == "shared audience"
-    assert eff.offer == "shared offer" and eff.tone == "warm" and eff.lead_count == 9
+    assert eff.offer == "shared offer" and eff.tone == "warm"
+    # POSTING child: lead_count is per-lead message sizing — never leaks in.
+    assert eff.lead_count == 0
     # Channel-scoped capability keys stay ONLY in channel_plans — never lifted
     # to top-level fields (the IG pipeline reads them from the dict).
     assert eff.channel_plans["ig"]["attach_images"] is True
@@ -368,10 +370,10 @@ def test_voice_plan_post_merges_channel_plans_without_clobbering(monkeypatch) ->
 def test_voice_update_plan_schema_declares_channel_plans() -> None:
     """The minted realtime tool schema lets the model store per-channel answers —
     an object of per-channel override objects — while the surface stays the same
-    three tools (still no send/publish tool)."""
+    fixed tools (still no send/publish tool)."""
     from studio.voice import VOICE_TOOL_NAMES, VOICE_TOOLS
 
-    assert VOICE_TOOL_NAMES == ("update_plan", "get_run_status", "request_orchestration")
+    assert VOICE_TOOL_NAMES == ("update_plan", "get_run_status", "list_conversation_leads", "request_orchestration")
     update_plan = next(t for t in VOICE_TOOLS if t["name"] == "update_plan")
     cp = update_plan["parameters"]["properties"]["channel_plans"]
     assert cp["type"] == "object"

@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -288,6 +289,13 @@ def selection_request_payload(row: dict[str, Any]) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # The gate the IG executor calls (pause #1).
 # --------------------------------------------------------------------------- #
+#: One live-discovery pass at a time per process: a multi-channel fan-out can hit
+#: this gate from two children (ig + fb) within the same second — without the lock
+#: both would spend the same Firecrawl/Graph budget discovering the same posts.
+#: The second child re-checks the table after acquiring and reuses the first's rows.
+_DISCOVERY_LOCK = threading.Lock()
+
+
 def competitor_gate(
     run_id: str,
     tenant_id: str,
@@ -296,6 +304,7 @@ def competitor_gate(
     *,
     artist: str | None = None,
     k: int = MAX_COMPETITOR_OPTIONS,
+    competitor_research: bool | None = None,
     dsn: str | None = None,
 ) -> tuple[str, Any]:
     """Decide the competitor-intelligence step for this run. Returns one of:
@@ -335,21 +344,41 @@ def competitor_gate(
 
     options = top_competitor_options(tenant_id, artist=artist, k=k, dsn=dsn)
     discovery_note: str | None = None
-    if not options and bool(ig_channel_plan(plan).get("competitor_research")):
+    # The caller passes the RESOLVED research flag (channel plan value, defaulted
+    # from plan.deep_research for posting children); a caller that doesn't reads
+    # the ig channel plan directly — the pre-existing behavior, unchanged.
+    want_research = (
+        bool(competitor_research)
+        if competitor_research is not None
+        else bool(ig_channel_plan(plan).get("competitor_research"))
+    )
+    if not options and want_research:
         # LIVE DISCOVERY (ToS-compliant, bounded ~60s): the operator turned
         # competitor research ON and nothing is on file — go find real posts via
         # Firecrawl public-web search + the official Business Discovery API,
         # then pause over them exactly like uploaded rows. Any failure (no keys,
         # no candidates, all misses) falls through to the honest skip below.
-        try:
-            from studio.competitor_discovery import run_discovery
+        # Serialized process-wide: a fan-out sibling that arrives second waits,
+        # re-checks the table, and reuses the first child's freshly landed posts
+        # instead of burning a second identical discovery pass.
+        with _DISCOVERY_LOCK:
+            options = top_competitor_options(tenant_id, artist=artist, k=k, dsn=dsn)
+            if not options:
+                try:
+                    from studio.competitor_discovery import run_discovery
 
-            disc = run_discovery(tenant_id, plan=plan, dsn=dsn, time_budget_s=60.0)
-            discovery_note = str(disc.get("note") or "") or None
-            if disc.get("posts"):
-                options = top_competitor_options(tenant_id, artist=artist, k=k, dsn=dsn)
-        except Exception as exc:  # noqa: BLE001 — discovery must never wedge the run
-            discovery_note = f"live competitor discovery failed: {type(exc).__name__}"
+                    disc = run_discovery(
+                        tenant_id, plan=plan, dsn=dsn, time_budget_s=60.0
+                    )
+                    discovery_note = str(disc.get("note") or "") or None
+                    if disc.get("posts"):
+                        options = top_competitor_options(
+                            tenant_id, artist=artist, k=k, dsn=dsn
+                        )
+                except Exception as exc:  # noqa: BLE001 — discovery must never wedge the run
+                    discovery_note = (
+                        f"live competitor discovery failed: {type(exc).__name__}"
+                    )
     if not options:
         if discovery_note:
             return "skip", f"{NO_COMPETITOR_NOTE} ({discovery_note})"
@@ -474,6 +503,7 @@ def mold_competitor_pattern(
     *,
     run_id: str | None = None,
     campaign_id: str | None = None,
+    platform: str = "instagram",
     dsn: str | None = None,
 ) -> dict[str, Any]:
     """MOLD the operator-picked competitor post into OUR brand — angle, hook and
@@ -549,7 +579,7 @@ def mold_competitor_pattern(
                 "competitor's words, offers, or claims): "
                 f"emotional angle {angle}; structure {' -> '.join(str(p) for p in parts)}; "
                 f"hook shape: {hook_shape}.\n"
-                "Platform: instagram\n"
+                f"Platform: {platform}\n"
                 + (f"Goal: {goal}\n" if goal else "")
                 + "Write the hook and CTA fresh in OUR brand voice."
             )

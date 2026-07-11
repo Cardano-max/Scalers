@@ -552,8 +552,12 @@ export function useStudioAgui(
   // re-arms immediately so the resumed steps stream in without a dead gap.
   const pickArtwork = useCallback(
     (assetId: string) => {
-      const runId = runState?.runId;
-      if (!runId || !assetId) return;
+      // Target the leg that ASKED: on a multi-channel launch the pause carries its
+      // own child run id (two legs can pause on artwork at once — posting to the
+      // watched parent could answer the wrong one). Fall back to the watched id.
+      const runId = runState?.selectionRequest?.runId ?? runState?.runId;
+      const watchId = runState?.runId;
+      if (!runId || !watchId || !assetId) return;
       setError(null);
       (async () => {
         try {
@@ -562,13 +566,13 @@ export function useStudioAgui(
             prev ? { ...prev, status: 'running', selectionRequest: null } : prev,
           );
           setRunningCampaign(true);
-          pollRun(runId);
+          pollRun(watchId);
         } catch (e) {
           setError(e instanceof Error ? e.message : 'artwork selection failed');
         }
       })();
     },
-    [aguiUrl, runState?.runId, pollRun],
+    [aguiUrl, runState?.runId, runState?.selectionRequest?.runId, pollRun],
   );
 
   // Resolve a paused run's COMPETITOR pick — the competitor-research counterpart of
@@ -576,8 +580,11 @@ export function useStudioAgui(
   // cleared optimistically and polling re-arms so the resumed steps stream in.
   const pickCompetitor = useCallback(
     (optionId: string) => {
-      const runId = runState?.runId;
-      if (!runId || !optionId) return;
+      // Same leg-targeting rule as pickArtwork: the pause names the child run that
+      // raised it; keep polling the watched (parent) id so the family view streams.
+      const runId = runState?.competitorSelectionRequest?.runId ?? runState?.runId;
+      const watchId = runState?.runId;
+      if (!runId || !watchId || !optionId) return;
       setError(null);
       (async () => {
         try {
@@ -586,13 +593,13 @@ export function useStudioAgui(
             prev ? { ...prev, status: 'running', competitorSelectionRequest: null } : prev,
           );
           setRunningCampaign(true);
-          pollRun(runId);
+          pollRun(watchId);
         } catch (e) {
           setError(e instanceof Error ? e.message : 'competitor selection failed');
         }
       })();
     },
-    [aguiUrl, runState?.runId, pollRun],
+    [aguiUrl, runState?.runId, runState?.competitorSelectionRequest?.runId, pollRun],
   );
 
   // Stop polling on unmount.

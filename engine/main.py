@@ -48,8 +48,8 @@ mount_studio_agui(app)
 # Mount the speech-to-speech voice layer (P3 voice, OpenAI Realtime option B) at
 # POST /studio/voice/{session,plan,orchestrate}. The voice agent is a pure FRONT-END
 # (interviewer + narrator): the raw OPENAI_API_KEY stays server-side and only mints
-# short-TTL ephemeral client secrets; the model is given exactly two tools
-# (update_plan + request_orchestration) and a SERVER-SIDE 2-factor GO-gate guards the
+# short-TTL ephemeral client secrets; the model gets a fixed send-incapable tool
+# surface (plan edit + read-only state/leads) and a SERVER-SIDE 2-factor GO-gate guards the
 # launch of the EXISTING held /studio/run spine. NOTHING is ever sent.
 from studio.voice import mount_studio_voice  # noqa: E402
 

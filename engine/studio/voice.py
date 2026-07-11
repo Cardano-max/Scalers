@@ -7,8 +7,10 @@ seams, and it is the only place the realtime posture is enforced:
   1. ``POST /studio/voice/session`` — mints a short-TTL **ephemeral** Realtime
      client secret with ``OPENAI_API_KEY`` (server-side only). The browser receives
      ONLY that ``ek_...`` secret, never the raw key. The minted session declares
-     EXACTLY TWO tools (``update_plan`` + ``request_orchestration``) and NO
-     send/publish tool — so the model is structurally incapable of sending.
+     the FIXED tool surface (``update_plan`` + two READ-ONLY tools —
+     ``get_run_status`` / ``list_conversation_leads`` — + the GO-gated
+     ``request_orchestration``) and NO send/publish tool — so the model is
+     structurally incapable of sending.
 
   2. ``POST /studio/voice/plan`` — the server handler for the model's
      ``update_plan`` tool call. Persists the edited plan via the SAME ``_persist_plan``
@@ -62,14 +64,15 @@ REALTIME_VOICE = os.environ.get("OPENAI_REALTIME_VOICE", "cedar")
 _CLIENT_SECRETS_URL = "https://api.openai.com/v1/realtime/client_secrets"
 
 # --------------------------------------------------------------------------- #
-# The EXACTLY-TWO tool surface exposed to the voice agent.
+# The FIXED tool surface exposed to the voice agent.
 #
-# This list is the single source of truth for what the realtime model can call.
-# It contains update_plan + request_orchestration and NOTHING ELSE — there is no
-# publish/send/stage tool anywhere in it, so the voice agent is structurally
+# This list is the single source of truth for what the realtime model can call:
+# update_plan (edit), get_run_status + list_conversation_leads (READ-ONLY), and
+# request_orchestration (GO-gated launch of a HELD run) — NOTHING ELSE. There is
+# no publish/send/stage tool anywhere in it, so the voice agent is structurally
 # incapable of sending or publishing. (Defense in depth: the browser relay only
-# has handlers for these two names, and the server only exposes the two matching
-# routes, so even a hallucinated tool name has no send path.)
+# has handlers for these names, and the server only exposes the matching routes,
+# so even a hallucinated tool name has no send path.)
 # --------------------------------------------------------------------------- #
 
 VOICE_TOOLS: list[dict[str, Any]] = [
@@ -193,6 +196,38 @@ VOICE_TOOLS: list[dict[str, Any]] = [
     },
     {
         "type": "function",
+        "name": "list_conversation_leads",
+        "description": (
+            "READ the imported customer conversation threads from the database: "
+            "each lead's REAL name, email, and thread size — optionally filtered "
+            "by topic ('price' / 'timing' / 'trust' or any keyword), with the "
+            "customer's own matching sentence quoted verbatim. Call this whenever "
+            "the operator asks about the uploaded customer list / CSV / imported "
+            "conversations ('what's the first customer's name?', 'who stepped "
+            "back over price?') — the threads live in the DATABASE, not in a "
+            "file, and this is your ONLY honest source for those names. "
+            "Read-only — it cannot launch or send anything."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "description": (
+                        "Optional filter: 'price', 'timing', 'trust', or a "
+                        "literal keyword to match in the customer's own turns."
+                    ),
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max leads to return (default 12).",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
         "name": "request_orchestration",
         "description": (
             "Ask the SERVER to launch the held multi-agent campaign run. Only call "
@@ -224,6 +259,58 @@ _VOICE_LAUNCH_DEBOUNCE_S = 45.0
 _VOICE_LAUNCHES: dict[str, tuple[float, str, str]] = {}
 
 
+def _child_snapshot(
+    tenant_id: str, parent: str, cid: str, registry: dict[str, Any], dsn: str | None
+) -> dict[str, Any]:
+    """One fan-out child's honest state for the voice host: status (registry, with
+    the durable pause rows outranking it), which pause it awaits (if any), the
+    agent roles that actually recorded steps, and its staged drafts with real
+    names. DB reads only — never invented."""
+    from studio.agui import _agent_runs_for
+    from studio.live_state import finalized_leads
+
+    channel = cid[len(parent) + 1:]
+    entry: dict[str, Any] = {"channel": channel, "runId": cid}
+    status = str((registry.get(cid) or {}).get("status") or "") or None
+    pause = None
+    try:
+        from studio.artwork_flow import get_selection as _get_art_sel
+
+        art = _get_art_sel(cid, dsn=dsn)
+        if art and art.get("status") == "awaiting":
+            pause = "artwork_pick"
+    except Exception:
+        pass
+    try:
+        from studio.competitor_flow import get_selection as _get_comp_sel
+
+        comp = _get_comp_sel(cid, dsn=dsn)
+        if comp and comp.get("status") == "awaiting":
+            pause = "competitor_pick"
+    except Exception:
+        pass
+    if pause:
+        status = "awaiting_selection"
+    entry["status"] = status or "unknown"
+    entry["pause"] = pause
+    try:
+        roles: dict[str, None] = {}
+        for ar in _agent_runs_for(cid, dsn):
+            roles.setdefault(str(ar.get("role") or ""), None)
+        entry["agentsRan"] = [r for r in roles if r]
+    except Exception:
+        entry["agentsRan"] = []
+    try:
+        leads = finalized_leads(tenant_id, cid, dsn=dsn)
+        entry["drafts"] = leads.get("staged") or []
+        entry["skipped"] = leads.get("skipped") or []
+    except Exception as exc:
+        entry["drafts"] = []
+        entry["skipped"] = []
+        entry["draftsError"] = f"{type(exc).__name__}: {exc}"
+    return entry
+
+
 def voice_run_status_snapshot(
     tenant_id: str, session_id: str, *, dsn: str | None = None
 ) -> dict[str, Any]:
@@ -232,31 +319,68 @@ def voice_run_status_snapshot(
     Composes the existing live-state seams: the most recent run id, its finalized
     leads / staged drafts (real names + recipients, in order), the current agent
     activity, and the tenant's review-queue truth block. Everything the voice model
-    says about a run MUST come from here."""
+    says about a run MUST come from here.
+
+    MULTI-CHANNEL: a fan-out launch is reported as the PARENT with one entry per
+    channel child (status, agents, drafts, and any PAUSE awaiting the operator's
+    pick) — the resolver used to land on ONE child, so the host truthfully saw
+    3 fb drafts and honestly-but-wrongly told the operator that was everything."""
     from studio.inventory import live_operations_block
-    from studio.live_state import agent_activity, finalized_leads, resolve_recent_run_id
+    from studio.live_state import (
+        agent_activity,
+        finalized_leads,
+        get_runs_registry,
+        resolve_recent_run_id,
+    )
+    from studio.run_children import child_run_ids, composite_status, parent_of
 
     out: dict[str, Any] = {"sessionId": session_id}
     run_id = resolve_recent_run_id(tenant_id, dsn)
-    out["runId"] = run_id
-    if run_id:
+    registry = get_runs_registry()
+    parent = parent_of(run_id) or run_id
+    kids = child_run_ids(parent, registry=registry, dsn=dsn) if parent else []
+    if kids:
+        out["runId"] = parent
+        children = [
+            _child_snapshot(tenant_id, parent, cid, registry, dsn) for cid in kids
+        ]
+        out["children"] = children
+        out["runStatus"] = composite_status([c.get("status") for c in children])
+        merged = [
+            dict(s) for c in children for s in (c.get("drafts") or [])
+        ]
+        out["drafts"] = {
+            "runId": parent,
+            "staged": merged,
+            "skipped": [dict(s) for c in children for s in (c.get("skipped") or [])],
+            "note": None,
+        }
+        paused = [c for c in children if c.get("pause")]
+        if paused:
+            waits = "; ".join(
+                f"the {c['channel']} run is PAUSED waiting for the operator's "
+                + ("competitor-pattern pick" if c["pause"] == "competitor_pick"
+                   else "artwork pick")
+                for c in paused
+            )
+            out["pausedNote"] = (
+                f"{waits}. Tell the operator plainly: a pick popup is on screen "
+                "(Voice or Agency tab) and that channel resumes the moment they "
+                "click a choice. Do NOT call this 'stuck' or 'failed'."
+            )
+        out["multiChannelNote"] = (
+            "This launch fanned out into one ISOLATED run per channel (the "
+            "children list). Narrate PER CHANNEL — each child has its own agents, "
+            "drafts and status; never present one channel's drafts as the whole "
+            "campaign."
+        )
+    elif run_id:
+        out["runId"] = run_id
         try:
-            from studio.live_state import get_runs_registry
-
-            reg = get_runs_registry().get(run_id) or {}
+            reg = registry.get(run_id) or {}
             out["runStatus"] = str(reg.get("status") or "unknown")
         except Exception:
             out["runStatus"] = "unknown"
-        if out["runStatus"] not in ("completed", "failed", "error", "not_built"):
-            # A real operator was told "run completed, no drafts staged" while the
-            # run was still writing its drafts — the snapshot must carry the truth
-            # that counts can still GROW so the narrator never reads a mid-write
-            # zero as a final zero.
-            out["stagingNote"] = (
-                "The run is still executing — drafts may still be staging. Say the "
-                "team is still working; NEVER state a final draft count until "
-                "runStatus is 'completed'."
-            )
         try:
             out["drafts"] = finalized_leads(tenant_id, run_id, dsn=dsn)
         except Exception as exc:
@@ -266,9 +390,22 @@ def voice_run_status_snapshot(
         except Exception as exc:
             out["activity"] = {"error": f"{type(exc).__name__}: {exc}"}
     else:
+        out["runId"] = None
         out["drafts"] = None
         out["activity"] = None
         out["note_no_run"] = "No campaign run exists yet for this studio."
+    if out.get("runId") and out.get("runStatus") not in (
+        "completed", "failed", "error", "not_built"
+    ):
+        # A real operator was told "run completed, no drafts staged" while the
+        # run was still writing its drafts — the snapshot must carry the truth
+        # that counts can still GROW so the narrator never reads a mid-write
+        # zero as a final zero.
+        out["stagingNote"] = (
+            "The run is still executing — drafts may still be staging. Say the "
+            "team is still working; NEVER state a final draft count until "
+            "runStatus is 'completed'."
+        )
     try:
         out["queue"] = live_operations_block(tenant_id, dsn=dsn)
     except Exception as exc:
@@ -307,12 +444,20 @@ VOICE_INSTRUCTIONS = (
     "channel's block, then move to the next; each channel gets its OWN goal, "
     "audience and count (Instagram questions are not email questions). Store every "
     "per-channel answer via update_plan channel_plans.{channel}.{field} (channels: "
-    "ig / fb / email / sms). The Instagram block MUST also ask: should I research "
+    "ig / fb / email / sms) — a per-channel answer you only SAY and never WRITE "
+    "into channel_plans is LOST and the run will not do it. COUNTS ARE "
+    "PER-CHANNEL: 'exactly three drafts' said for email goes in "
+    "channel_plans.email.output_count (and lead_count); Instagram/Facebook "
+    "default to ONE post each unless the operator states a count for THAT "
+    "channel. The Instagram block MUST also ask: should I research "
     "competitor posts first and mold the best-performing structure to your brand? "
-    "— attach artwork images to the post? — and what style/type of images (e.g. "
-    "fine-line botanical, black-and-grey realism, healed photos). Facebook asks "
-    "its own goal/audience/ask (page-post voice, longer copy is fine); email asks "
-    "its own offer/ask; SMS copy stays short and compliant, opt-out kept.\n"
+    "(write channel_plans.ig.competitor_research true/false) — attach artwork "
+    "images to the post? (attach_images) — and what style/type of images (e.g. "
+    "fine-line botanical, black-and-grey realism, healed photos → image_style). "
+    "Facebook asks the same image/competitor questions in its own block "
+    "(channel_plans.fb.*) plus its goal/audience/ask (page-post voice, longer "
+    "copy is fine); email asks its own offer/ask; SMS copy stays short and "
+    "compliant, opt-out kept.\n"
     "PER-LEAD MODE IS A FIELD, NOT A VIBE: when the operator wants THEIR OWN "
     "people — 'pick them from the imported conversations', 'use their real "
     "conversations', 'these three customers', names/emails, 'one message per "
@@ -361,6 +506,21 @@ VOICE_INSTRUCTIONS = (
     "If a required step (e.g. the strategist or critic) is reported as failed, say so "
     "honestly — do not claim the run finished cleanly. If the tool errors, say you "
     "cannot read the state right now rather than guessing.\n\n"
+    "MULTI-CHANNEL STATE: on a multi-channel launch get_run_status returns a "
+    "'children' list — one isolated run per channel, each with its own status, "
+    "agents, and drafts. Narrate PER CHANNEL ('email staged three, Facebook one, "
+    "Instagram is paused for your pick') and NEVER present one channel's drafts "
+    "as the whole campaign. When a child shows a pause (competitor_pick or "
+    "artwork_pick), tell the operator a pick popup is waiting on screen and that "
+    "channel resumes the moment they click — a paused child is WAITING FOR THEM, "
+    "not stuck or failed.\n\n"
+    "IMPORTED CONVERSATIONS: when the operator asks about the uploaded customer "
+    "list / CSV / imported conversation threads — 'can you see it', 'what is the "
+    "first customer's name', 'who stepped back over price' — CALL "
+    "list_conversation_leads (optionally with topic='price'/'timing'/…) and "
+    "answer ONLY from its output. The threads live in the database; NEVER say "
+    "you cannot see the customer list without calling this tool first, and NEVER "
+    "invent a name that is not in its output.\n\n"
     "ONE GO = ONE RUN — after a successful launch, NEVER call request_orchestration "
     "again for the same campaign. A repeated 'go ahead' from the operator while a run "
     "is executing is them being polite, not a new launch order; the server will also "
@@ -381,7 +541,7 @@ def voice_instructions_with_docs(
     """The voice supervisor's instructions, with the ACTIVE persistent documents
     injected so it truthfully knows it HAS the operator's docs and can reference/reason
     over them by voice ("yes, I have your brand playbook"). Read-only: the voice agent
-    gains NO tool from this — it stays structurally send-incapable (exactly two tools).
+    gains NO tool from this — it stays structurally send-incapable (no send/publish tool).
 
     HONESTY: with no active docs it is told plainly to say none are uploaded; the store
     being unreachable degrades to the base instructions, never a false claim. The honest
@@ -516,7 +676,7 @@ def voice_instructions_with_state(
     """Voice instructions (with docs) PLUS the current run's real-state briefing injected,
     so the supervisor narrates the run from real rows. With no active run it degrades to
     the docs-aware instructions (no fabricated state). Read-only: adds NO tool — the voice
-    agent stays send-incapable (exactly two tools)."""
+    agent stays send-incapable (no send/publish tool)."""
     base = voice_instructions_with_docs(tenant_id, dsn=dsn)
     if not run_id:
         return base
@@ -534,8 +694,8 @@ def voice_instructions_with_state(
 def build_session_config(
     *, instructions: str = VOICE_INSTRUCTIONS, voice: str = REALTIME_VOICE
 ) -> dict[str, Any]:
-    """The realtime session config minted for the browser. Declares the two-tool
-    surface + input transcription (so the server receives the operator's spoken
+    """The realtime session config minted for the browser. Declares the fixed
+    send-incapable tool surface + input transcription (so the server receives the operator's spoken
     transcript for the go-phrase factor of the GO-gate)."""
     return {
         "type": "realtime",
@@ -686,7 +846,7 @@ def evaluate_go_gate(*, awaiting_go: bool, transcript: str | None) -> dict[str, 
 
 
 def mount_studio_voice(app) -> None:
-    """Mount the three voice seams alongside ``POST /studio/agui`` + ``/studio/run``."""
+    """Mount the voice seams alongside ``POST /studio/agui`` + ``/studio/run``."""
     from fastapi.responses import JSONResponse
 
     from obsapi.db import get_dsn
@@ -699,7 +859,7 @@ def mount_studio_voice(app) -> None:
     async def studio_voice_session(request: Request):  # noqa: ANN202
         """Mint a short-TTL ephemeral Realtime client secret. The raw OPENAI_API_KEY
         stays server-side; the browser receives only the ``ek_...`` value + the
-        two-tool session config. Honest failure if the key is missing or OpenAI errors."""
+        send-incapable session config. Honest failure if the key is missing or OpenAI errors."""
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             return JSONResponse(
@@ -709,7 +869,7 @@ def mount_studio_voice(app) -> None:
         # Inject the active persistent documents into the voice supervisor's
         # instructions so it truthfully knows it has the operator's docs. Best-effort
         # seed first so a fresh demo already has the brand playbook. Read-only — the
-        # tool surface stays exactly two (send-incapable).
+        # tool surface stays fixed and send-incapable.
         tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
         dsn = get_dsn()
         payload = await _json_body(request)
@@ -955,6 +1115,51 @@ def mount_studio_voice(app) -> None:
                 }
             )
         return JSONResponse({"ok": True, **snapshot})
+
+    @app.post("/studio/voice/leads")
+    async def studio_voice_leads(request: Request):  # noqa: ANN202
+        """Server handler for the model's read-only ``list_conversation_leads``
+        tool: the imported conversation threads' REAL lead names/emails (optional
+        topic filter with the customer's own matching sentence quoted verbatim) —
+        the same index the chat host's tool reads. A real operator asked 'what is
+        the first customer's name in the CSV?' and the voice host had NO honest
+        way to answer. Read-only: cannot launch or send anything."""
+        dsn = get_dsn()
+        payload = await _json_body(request)
+        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
+        topic = str(payload.get("topic") or "").strip() or None
+        try:
+            limit = max(1, min(int(payload.get("limit") or 12), 50))
+        except (TypeError, ValueError):
+            limit = 12
+        try:
+            from studio.customer_research import conversation_lead_index
+
+            leads = await _to_thread(
+                conversation_lead_index, tenant_id, topic=topic, limit=limit, dsn=dsn
+            )
+        except Exception as exc:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "note": "Could not read the conversation leads — say so "
+                    "honestly; do not guess a name.",
+                }
+            )
+        return JSONResponse(
+            {
+                "ok": True,
+                "topic": topic,
+                "leads": leads,
+                "count": len(leads),
+                "rule": (
+                    "These are the ONLY imported-conversation lead names you may "
+                    "state, in cohort order — 'the first customer' is the first "
+                    "entry. An empty list means none are imported; say so."
+                ),
+            }
+        )
 
 
 def _readback_text(plan: CampaignPlan) -> str:

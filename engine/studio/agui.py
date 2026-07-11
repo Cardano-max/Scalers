@@ -33,6 +33,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -375,6 +376,13 @@ def effective_channel_plan(plan: CampaignPlan, channel: str) -> CampaignPlan:
         eff.lead_source = ""
         eff.use_conversation_history = False
         eff.leads = []
+        # COUNT ISOLATION: the top-level count is per-lead MESSAGE sizing ('exactly
+        # three drafts' spoken for the email leg). A social child whose own block
+        # states no count produces ONE post — never three near-identical page posts.
+        if overrides.get("output_count") is None:
+            eff.output_count = 1
+        if overrides.get("lead_count") is None:
+            eff.lead_count = 0
 
     for key in _CHANNEL_OVERRIDE_FIELDS:
         value = overrides.get(key)
@@ -1158,18 +1166,9 @@ def _narration_line(step: dict[str, Any], progress: str = "") -> str:
     return f"{label.capitalize()} step {'failed' if failed else 'completed'}."
 
 
-def run_narration(steps: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    """Project the run's REAL recorded steps into host-voice narration — one entry per
-    recorded ``agent_run``, in order. Pure + DB-free (takes the already-loaded steps),
-    so it is unit-testable and can never narrate a stage that did not actually run.
-
-    Per-lead steps (researcher / draft / critic) carry an "X of N" progress tag when
-    the planned total N is genuinely known from the run data: N is the real ``n_leads``
-    the strategist / jury recorded, and X is the real count of that role's steps done so
-    far. The tag is omitted only when N is genuinely unknown — never invented.
-
-    Each entry: ``{seq, role, line, failed}``."""
-    steps = [s for s in (steps or []) if isinstance(s, dict)]
+def _narrate_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One narration entry per step, aligned with the input order (the single-run
+    body of :func:`run_narration` — progress counters assume ONE run's steps)."""
     total = _planned_lead_total(steps)
     role_done: dict[str, int] = {}
     out: list[dict[str, Any]] = []
@@ -1189,6 +1188,36 @@ def run_narration(steps: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def run_narration(steps: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Project the run's REAL recorded steps into host-voice narration — one entry per
+    recorded ``agent_run``, in order. Pure + DB-free (takes the already-loaded steps),
+    so it is unit-testable and can never narrate a stage that did not actually run.
+
+    Per-lead steps (researcher / draft / critic) carry an "X of N" progress tag when
+    the planned total N is genuinely known from the run data: N is the real ``n_leads``
+    the strategist / jury recorded, and X is the real count of that role's steps done so
+    far. The tag is omitted only when N is genuinely unknown — never invented.
+
+    MULTI-CHANNEL MERGED VIEW: steps tagged with a ``channel`` (a parent-run poll)
+    are numbered WITHIN their own leg and prefixed with it — counting per-lead
+    steps across merged legs produced 'Researching Kevin Koob (4 of 3)' on a real
+    launch, which read as a broken counter.
+
+    Each entry: ``{seq, role, line, failed}`` (+ ``channel`` on merged views)."""
+    steps = [s for s in (steps or []) if isinstance(s, dict)]
+    if not any(s.get("channel") for s in steps):
+        return _narrate_steps(steps)
+    entry_by_step: dict[int, dict[str, Any]] = {}
+    for ch in dict.fromkeys(s.get("channel") for s in steps):
+        chunk = [s for s in steps if s.get("channel") == ch]
+        for step, entry in zip(chunk, _narrate_steps(chunk)):
+            if ch:
+                entry["line"] = f"[{ch}] {entry['line']}"
+                entry["channel"] = ch
+            entry_by_step[id(step)] = entry
+    return [entry_by_step[id(s)] for s in steps]
 
 
 def _mirror_failed(run: dict[str, Any]) -> bool:
@@ -1704,6 +1733,19 @@ def _summary_text(summary: dict[str, Any]) -> str:
     )
 
 
+# Plan text that can ONLY mean "message MY OWN existing people" (win-back / lapsed /
+# conversation-thread phrasing). Matched against goal + audience + campaign_type when
+# the interview never set an explicit lead source — the deterministic net under the
+# voice host: a spoken "win back three customers who stepped back over price" must
+# never fall through to the recipientless template path just because the model wrote
+# it into the audience TEXT instead of the lead_source FIELD (a real launch did).
+_OWN_PEOPLE_TEXT = re.compile(
+    r"win[- ]?back|\bwinback\b|stepped[- ](?:back|away)|past (?:lead|client|customer)"
+    r"|\blapsed\b|\bchurn|re-?engag|previous (?:client|customer)"
+    r"|returning (?:client|customer)|imported conversation|conversation (?:thread|history)"
+)
+
+
 def _use_provided_leads(plan: CampaignPlan) -> bool:
     """The hard compliance branch: True iff the operator chose to use ONLY their own
     leads (uploaded CSV / existing DB) rather than sourcing new ones from the web.
@@ -1711,14 +1753,17 @@ def _use_provided_leads(plan: CampaignPlan) -> bool:
     DETERMINISTIC, not model-dependent: besides the explicit interview answer
     (``lead_source='provided'``), any plan state that can ONLY mean "my own
     people" selects this path — the operator NAMED leads, asked for per-lead
-    messages, or asked the team to read their imported conversation threads.
-    A real operator said "pick them from the imported conversation threads,
-    use their real conversations" and the run still executed the generic
-    win_back TEMPLATE (one niche researcher, no analyst, recipientless drafts)
-    because the voice host had set every field EXCEPT lead_source."""
+    messages, asked the team to read their imported conversation threads,
+    UPLOADED a customer list, or (with no explicit source at all) described the
+    audience as their own past/lapsed customers. A real operator said "pick them
+    from the imported conversation threads, use their real conversations" and the
+    run still executed the generic win_back TEMPLATE (one niche researcher, no
+    analyst, recipientless drafts) because the voice host had set every field
+    EXCEPT lead_source."""
     from studio.interview import LEAD_SOURCE_PROVIDED
 
-    if (plan.lead_source or "").strip().lower() == LEAD_SOURCE_PROVIDED:
+    lead_source = (plan.lead_source or "").strip().lower()
+    if lead_source == LEAD_SOURCE_PROVIDED:
         return True
     if [h for h in (plan.leads or []) if (h or "").strip()]:
         return True  # operator-picked people — never a template blast
@@ -1726,6 +1771,18 @@ def _use_provided_leads(plan: CampaignPlan) -> bool:
         return True  # "use their real conversations" = per-lead over MY threads
     if plan.per_lead is True:
         return True  # one personalized message per lead = per-lead executor
+    if (plan.customers or {}).get("customer_ids"):
+        return True  # an uploaded, ingested customer list IS the provided cohort
+    if not lead_source and _OWN_PEOPLE_TEXT.search(
+        " ".join(
+            str(getattr(plan, attr, "") or "")
+            for attr in ("goal", "audience", "campaign_type")
+        ).lower()
+    ):
+        # No explicit source chosen: win-back phrasing in the plan's own words means
+        # the operator's existing people. An explicit non-provided source (e.g. web
+        # sourcing) above always wins — this net only catches the unset case.
+        return True
     return False
 
 
@@ -1881,19 +1938,31 @@ def _execute_campaign_sync(
             campaign_id = f"camp_{uuid.uuid4().hex[:12]}"
             run_id = f"team-{campaign_id}-{uuid.uuid4().hex[:12]}"
 
-        # COMPETITOR-INTELLIGENCE GATE (pause #1) — when the ig channel plan turns
+        _platform = (
+            "instagram" if decision.pipeline is Pipeline.INSTAGRAM else "facebook"
+        )
+        # COMPETITOR-INTELLIGENCE GATE (pause #1) — when the channel plan turns
         # competitor research on: score the operator-uploaded competitor posts and
         # PAUSE for the operator's pattern pick BEFORE molding/drafting (the artwork
         # gate below then style-matches OUR portfolio to the chosen pattern). An
-        # empty competitor table NEVER pauses: honest 'skip' with a visible step
-        # note, and the run continues the normal IG path — posts and metrics are
-        # never fabricated.
+        # empty competitor table NEVER pauses without a live-discovery attempt:
+        # honest 'skip' with a visible step note, and the run continues the normal
+        # posting path — posts and metrics are never fabricated.
         from studio.competitor_flow import social_channel_plan
 
         # Read THIS leg's own block ('ig' or 'fb') — each social channel carries its own
         # competitor_research / attach_images / image_style answers from the interview.
         _ig_cfg = social_channel_plan(plan, decision.channel)
-        if bool(_ig_cfg.get("competitor_research")):
+        # DEFAULT: 'deep research' spoken for a POSTING channel MEANS competitor /
+        # trend research (there are no leads to research on a page post). The
+        # channel plan's explicit true/false always wins; only the unset case
+        # inherits plan.deep_research — so the interview's "research competitors
+        # first" cannot be lost to a model that confirmed it aloud but never wrote
+        # the channel_plans field (a real launch lost it exactly that way).
+        _want_competitor = _ig_cfg.get("competitor_research")
+        if _want_competitor is None:
+            _want_competitor = bool(plan.deep_research)
+        if bool(_want_competitor):
             from studio.competitor_flow import (
                 awaiting_competitor_summary,
                 competitor_gate,
@@ -1905,6 +1974,7 @@ def _execute_campaign_sync(
                 session_id,
                 plan,
                 artist=(plan.artist or "").strip() or None,
+                competitor_research=True,
                 dsn=dsn,
             )
             if _cgate_state == "pause":
@@ -1993,6 +2063,7 @@ def _execute_campaign_sync(
                 artwork=ig_artwork,
                 artwork_note=ig_artwork_note,
                 competitor_pick=ig_competitor_pick,
+                platform=_platform,
                 dsn=dsn,
             )
         except Exception:
@@ -3662,6 +3733,76 @@ def _background_app() -> Any:
     return _FALLBACK_APP
 
 
+# ONE GO = ONE LAUNCH, ACROSS SURFACES: the same session's byte-identical plan
+# launched again within this window returns the FIRST launch instead of stacking a
+# duplicate fan-out. A real session's typed 'GO AHEAD' (chat host) and spoken
+# '[voice GO] Go ahead' (voice gate) launched TWO full multi-channel families
+# minutes apart — the per-lead dedup absorbed the message legs, but posting legs
+# have no recipient key and would stage duplicate posts. Keyed on the plan CONTENT
+# hash, so an EDITED plan always relaunches; only an unchanged re-GO dedupes.
+_LAUNCH_DEDUPE_WINDOW_S = 600.0
+#: session_id -> (monotonic_ts, plan_fingerprint, run_id, campaign_id, children)
+_SESSION_LAUNCHES: dict[str, tuple[float, str, str, str, list[dict[str, str]]]] = {}
+
+
+def _plan_fingerprint(plan: CampaignPlan) -> str:
+    try:
+        return hashlib.sha1(
+            json.dumps(plan.model_dump(), sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+    except Exception:
+        return ""
+
+
+def recent_duplicate_launch(
+    session_id: str, plan: CampaignPlan
+) -> dict[str, Any] | None:
+    """The prior launch to hand back when THIS session already launched THIS exact
+    plan within the dedupe window — else None (launch normally)."""
+    import time as _time
+
+    rec = _SESSION_LAUNCHES.get(session_id)
+    if not rec:
+        return None
+    ts, fp, run_id, campaign_id, children = rec
+    if (_time.monotonic() - ts) > _LAUNCH_DEDUPE_WINDOW_S:
+        return None
+    now_fp = _plan_fingerprint(plan)
+    if not fp or not now_fp or fp != now_fp:
+        return None
+    out: dict[str, Any] = {
+        "runId": run_id,
+        "campaignId": campaign_id,
+        "status": "already-running",
+        "deduped": True,
+    }
+    if children:
+        out["children"] = [dict(c) for c in children]
+    return out
+
+
+def record_session_launch(
+    session_id: str,
+    plan: CampaignPlan,
+    run_id: str,
+    campaign_id: str,
+    children: list[dict[str, str]] | None,
+) -> None:
+    import time as _time
+
+    _SESSION_LAUNCHES[session_id] = (
+        _time.monotonic(),
+        _plan_fingerprint(plan),
+        run_id,
+        campaign_id,
+        [
+            {"channel": str(c.get("channel") or ""),
+             "runId": str(c.get("runId") or c.get("run_id") or "")}
+            for c in (children or [])
+        ],
+    )
+
+
 async def launch_studio_run(
     app,
     dsn: str | None,
@@ -3683,6 +3824,10 @@ async def launch_studio_run(
     if not hasattr(app.state, "_studio_runs"):
         app.state._studio_runs = {}
 
+    dup = recent_duplicate_launch(session_id, plan)
+    if dup is not None:
+        return dup
+
     campaign_id = f"camp_{uuid.uuid4().hex[:12]}"
     run_id = f"team-{campaign_id}-{uuid.uuid4().hex[:12]}"
 
@@ -3697,6 +3842,7 @@ async def launch_studio_run(
         # Multi-channel fan-out: the caller must surface EACH channel's own run id
         # (the parent id is the launch/debounce handle, not an executing run).
         info["children"] = [{"channel": c["channel"], "runId": c["run_id"]} for c in children]
+    record_session_launch(session_id, plan, run_id, campaign_id, info.get("children"))
     return info
 
 
@@ -3879,6 +4025,17 @@ async def run_campaign(ctx: RunContext[StudioDeps]) -> str:
     A plan naming MORE than one channel launches ONE ISOLATED CHILD RUN PER CHANNEL
     (each with its own goal/audience/counts from ``channel_plans``); the JSON line then
     carries ``children`` — tell the operator EACH channel's own run id."""
+    dup = recent_duplicate_launch(ctx.deps.session_id, ctx.deps.state)
+    if dup is not None:
+        # One GO = one launch across chat AND voice: this exact plan already
+        # launched from this session — hand back the SAME run instead of stacking
+        # a duplicate family (a real session's typed + spoken GO did exactly that).
+        return (
+            f"{json.dumps(dup)}\n"
+            f"This exact plan was ALREADY launched by this session as run "
+            f"{dup['runId']} — NOT launching a duplicate. Narrate that run "
+            "(watch it in the Agency tab); only an edited plan launches a new run."
+        )
     campaign_id = f"camp_{uuid.uuid4().hex[:12]}"
     run_id = f"team-{campaign_id}-{uuid.uuid4().hex[:12]}"
     children = start_registered_run(
@@ -3888,6 +4045,10 @@ async def run_campaign(ctx: RunContext[StudioDeps]) -> str:
         ctx.deps.tenant_id,
         ctx.deps.state,
         run_id,
+    )
+    record_session_launch(
+        ctx.deps.session_id, ctx.deps.state, run_id, campaign_id,
+        [{"channel": c["channel"], "runId": c["run_id"]} for c in children],
     )
     if children:
         launch = {"run_id": run_id, "children": children, "status": "launched",
@@ -5126,13 +5287,15 @@ def mount_studio_agui(app) -> None:
                 # empty list is honest (no drafts staged yet / older run).
                 try:
                     pend = c.execute(
-                        "SELECT id, channel, target, subject, draft, idempotency_key, status "
+                        "SELECT id, run_id, channel, target, subject, draft, "
+                        "idempotency_key, status "
                         "FROM actions WHERE run_id = ANY(%s) AND status='pending' "
                         "ORDER BY created_at",
                         (rids,),
                     ).fetchall()
                     for ar in pend:
                         draft_txt = ar.get("draft") or ""
+                        rid_of_action = str(ar.get("run_id") or "")
                         pending_actions.append(
                             {
                                 "id": ar.get("id"),
@@ -5142,6 +5305,14 @@ def mount_studio_agui(app) -> None:
                                 "draft": draft_txt,
                                 "idempotencyKey": ar.get("idempotency_key"),
                                 "status": ar.get("status"),
+                                # Which leg staged it (multi-channel poll) — empty
+                                # for a single-channel run's own rows.
+                                "runId": rid_of_action or None,
+                                "legChannel": (
+                                    rid_of_action[len(run_id) + 1 :]
+                                    if rid_of_action.startswith(f"{run_id}-")
+                                    else None
+                                ),
                             }
                         )
                 except Exception:
@@ -5153,7 +5324,11 @@ def mount_studio_agui(app) -> None:
                 status = reg.get("status")
                 if reg.get("summary"):
                     archetype = reg["summary"].get("archetype_id")
-                    if reg["summary"].get("n_pending") is not None:
+                    # Single-run only: on a multi-channel poll the aggregated reg
+                    # carries ONE child's summary — letting its n_pending override
+                    # the family-wide DB count reported '0 HELD' over 6 real drafts
+                    # on a real launch.
+                    if reg["summary"].get("n_pending") is not None and not kids:
                         n_pending = reg["summary"]["n_pending"]
             # Mid-run artwork pause (item 3): the durable selection row is the source
             # of truth — it survives an engine restart (the in-memory registry does
@@ -5257,8 +5432,61 @@ def mount_studio_agui(app) -> None:
             try:
                 from studio.campaign_state import campaign_state, describe_state
 
-                voice_state = campaign_state(run_id, dsn=dsn, run_status=runs_status)
-                voice_briefing = describe_state(voice_state)
+                if kids:
+                    # FAMILY VIEW: the parent owns no actions, so its own
+                    # campaign_state reads all-zero ('Reconciled 0 of 0' rendered
+                    # over 9 real drafts on a real launch). Sum the CHILDREN's
+                    # reconciliations and brief per leg instead.
+                    child_states: list[tuple[str, dict]] = []
+                    for kid in kids:
+                        try:
+                            child_states.append(
+                                (kid[len(run_id) + 1 :], campaign_state(kid, dsn=dsn))
+                            )
+                        except Exception:
+                            continue
+                    merged_rec: dict[str, Any] = {
+                        k: 0
+                        for k in (
+                            "requested", "expected", "created", "inQueue",
+                            "approved", "sent", "rejected", "accounted",
+                        )
+                    }
+                    merged_rec["skipped"] = []
+                    merged_rec["failed"] = []
+                    merged_rec["reconciled"] = True
+                    for _ch, st in child_states:
+                        rec = (st or {}).get("reconciliation") or {}
+                        for k in (
+                            "requested", "expected", "created", "inQueue",
+                            "approved", "sent", "rejected", "accounted",
+                        ):
+                            try:
+                                merged_rec[k] += int(rec.get(k) or 0)
+                            except (TypeError, ValueError):
+                                pass
+                        merged_rec["skipped"] += list(rec.get("skipped") or [])
+                        merged_rec["failed"] += list(rec.get("failed") or [])
+                        merged_rec["reconciled"] = merged_rec["reconciled"] and bool(
+                            rec.get("reconciled", True)
+                        )
+                    voice_state = {
+                        "runId": run_id,
+                        "reconciliation": merged_rec,
+                        "perChannel": {
+                            ch: (st or {}).get("reconciliation")
+                            for ch, st in child_states
+                        },
+                    }
+                    voice_briefing = (
+                        " ".join(
+                            f"[{ch}] {describe_state(st)}" for ch, st in child_states
+                        )
+                        or None
+                    )
+                else:
+                    voice_state = campaign_state(run_id, dsn=dsn, run_status=runs_status)
+                    voice_briefing = describe_state(voice_state)
             except Exception:
                 voice_state, voice_briefing = None, None
 
@@ -5283,6 +5511,24 @@ def mount_studio_agui(app) -> None:
                 # Real campaign state for the voice supervisor (draft #1, counts, agents).
                 "state": voice_state,
                 "voiceBriefing": voice_briefing,
+                # Multi-channel family breakdown (empty for a single-channel run):
+                # each leg's own run id, live status, and real step/draft counts —
+                # so the panel and the voice host can name every channel's run.
+                "children": [
+                    {
+                        "channel": kid[len(run_id) + 1 :],
+                        "runId": kid,
+                        "status": (runs_registry.get(kid) or {}).get("status"),
+                        "steps": sum(
+                            1 for st in steps
+                            if st.get("channel") == kid[len(run_id) + 1 :]
+                        ),
+                        "drafts": sum(
+                            1 for pa in pending_actions if pa.get("runId") == kid
+                        ),
+                    }
+                    for kid in kids
+                ],
             }
 
         data = await asyncio.to_thread(_load)

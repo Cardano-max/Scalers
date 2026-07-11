@@ -345,14 +345,23 @@ _ALIAS: dict[str, str] = {
 }
 
 #: Per-channel drafting directives folded into the draft_one prompt. A Facebook
-#: page post is NOT an IG caption: page-post voice, longer copy allowed. Channels
-#: without an entry keep the unchanged base prompt (ig/email behavior identical).
+#: page post is NOT an IG caption (page-post voice, longer copy allowed) and
+#: NEITHER is an email: posting channels must never open like a message — a real
+#: fb child staged 'Hey <name>'-shaped drafts the critic flagged as off-voice.
+#: Channels without an entry keep the unchanged base prompt.
 _CHANNEL_STYLE: dict[str, str] = {
     "fb": (
         "Channel style — Facebook Page post: write in the studio's page-post voice "
-        "(conversational, speaking as the studio to its page followers). Longer "
-        "copy than an Instagram caption is fine; skip hashtag walls and end with "
-        "one clear call to action."
+        "(conversational, speaking as the studio to its page followers). This is a "
+        "PUBLIC POST, not a message: never open with an email-style greeting "
+        "('Hey <name>', 'Hi there'), never address one named person, no sign-off. "
+        "Longer copy than an Instagram caption is fine; skip hashtag walls and end "
+        "with one clear call to action."
+    ),
+    "ig": (
+        "Channel style — Instagram caption: a PUBLIC caption, not a message. Hook "
+        "in the first line, tight copy, no email-style greeting or sign-off, one "
+        "clear call to action; a few relevant hashtags at the end are fine."
     ),
 }
 

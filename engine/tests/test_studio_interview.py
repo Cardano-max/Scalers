@@ -685,15 +685,17 @@ def test_sms_channel_block_stays_short() -> None:
     assert sms_fields == ["goal", "audience", "output_count"]
 
 
-def test_fb_channel_block_stays_minimal_no_image_questions() -> None:
-    # The fb block is goal/audience/offer/count only — no image/competitor leaves
-    # (the artwork gate is IG plumbing; fb media attach is a follow-up).
+def test_fb_channel_block_asks_the_image_and_competitor_questions() -> None:
+    # A Facebook page post is the same artefact as an IG post (image + caption),
+    # so the fb block asks the SAME competitor/image questions the ig block does —
+    # a real fb leg drafted bare email-shaped text because these were never asked.
     from studio.interview import CHANNEL_QUESTIONS
 
     fb_fields = [f.rsplit(".", 1)[-1] for f, _ in CHANNEL_QUESTIONS["fb"]]
-    assert fb_fields == ["goal", "audience", "offer", "output_count"]
-    for f, _q in CHANNEL_QUESTIONS["fb"]:
-        assert "image" not in f, f
+    assert fb_fields == [
+        "goal", "audience", "competitor_research", "attach_images", "image_style",
+        "offer", "output_count",
+    ]
 
 
 def test_two_channel_email_fb_plan_walks_both_blocks_in_order() -> None:

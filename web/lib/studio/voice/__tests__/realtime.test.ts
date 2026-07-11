@@ -25,9 +25,31 @@ describe('voice tool router', () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it('exposes exactly the routable tools (no publish/send)', () => {
-    // Two write-shaped (plan edit + gated launch request) + one READ-ONLY
-    // (get_run_status) — still no publish/send handler anywhere in the browser.
-    expect(ROUTABLE_TOOLS).toEqual(['update_plan', 'request_orchestration', 'get_run_status']);
+    // Two write-shaped (plan edit + gated launch request) + two READ-ONLY
+    // (get_run_status + list_conversation_leads) — still no publish/send handler
+    // anywhere in the browser.
+    expect(ROUTABLE_TOOLS).toEqual([
+      'update_plan',
+      'request_orchestration',
+      'get_run_status',
+      'list_conversation_leads',
+    ]);
+  });
+
+  it('routes list_conversation_leads to the read-only leads route', async () => {
+    fetchMock.mockReturnValueOnce(
+      mockJson({ ok: true, leads: [{ name: 'Amanda Kuhl' }], count: 1 }),
+    );
+    const out = await routeToolCall('list_conversation_leads', '{"topic":"price"}', {
+      aguiUrl: 'http://x/studio/agui',
+      sessionId: 's1',
+      latestTranscript: () => '',
+    });
+    expect(out.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://x/studio/voice/leads',
+      expect.objectContaining({ method: 'POST' }),
+    );
   });
 
   it('routes get_run_status to the read-only run-state route', async () => {
