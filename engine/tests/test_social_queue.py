@@ -378,6 +378,7 @@ def test_load_broll_is_tenant_scoped():
             conn.execute("DELETE FROM assets WHERE id = %s", (vid,))
 
 
+@pytest.mark.integration
 def test_load_broll_theme_match_drops_off_theme_reel():
     """A fine-line-botanical post must never carry an off-theme (Marvel) b-roll: with
     a theme, load_broll surfaces only videos whose OWN subject overlaps the theme —

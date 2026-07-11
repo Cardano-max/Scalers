@@ -5246,9 +5246,8 @@ def mount_studio_agui(app) -> None:
         # FALLBACK — the registry lives in memory and dies with the process. A run PAUSED
         # on an operator pick OUTLIVES a restart (the pause is a DB row), and it is the one
         # thing the operator most needs to see: without it the run is unanswerable, so it
-        # hangs forever and every channel behind it looks "queued". Find this tenant's
+        # hangs forever and every channel behind it looks "queued". Find this session's
         # newest still-awaiting pause and hand back the PARENT id that owns it.
-        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
         try:
             import psycopg
 
