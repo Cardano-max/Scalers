@@ -12,13 +12,23 @@
  * POST /studio/interview round-trip and passes the authoritative gate state in.
  */
 import { useEffect, useState } from 'react';
-import { ALL_META, type FieldMeta, type InterviewState, type PlanSummary } from '@/lib/studio/interview';
+import {
+  ALL_META,
+  channelFieldMeta,
+  type ChannelSection,
+  type FieldMeta,
+  type InterviewState,
+  type PlanSummary,
+} from '@/lib/studio/interview';
 import { PlannedSteps } from './PlannedSteps';
 
 const TEAL = '#0F8A82';
 
 function metaFor(field: string | undefined): FieldMeta | undefined {
-  return ALL_META.find((m) => m.field === field);
+  if (!field) return undefined;
+  // Flat plan fields carry local meta; namespaced per-channel fields
+  // ('channel_plans.ig.goal') derive their input kind + label from the id.
+  return ALL_META.find((m) => m.field === field) ?? channelFieldMeta(field);
 }
 
 function chipValue(field: string, value: unknown): string {
@@ -125,6 +135,13 @@ export function AgencyInterview({
           );
         })}
       </div>
+
+      {/* Per-channel question sections (multi-channel campaigns): the engine asks
+          SEPARATE channel-specific questions per channel — each section shows that
+          channel's real answers so far. Renders nothing for a single-channel plan. */}
+      {(state?.channelSections ?? []).map((section) => (
+        <ChannelSectionChips key={section.channel} section={section} />
+      ))}
 
       {/* The current question + an input appropriate to its kind. */}
       {next && meta && (
@@ -269,6 +286,59 @@ export function AgencyInterview({
         )}
       </div>
     </section>
+  );
+}
+
+/** One per-channel question section — the channel's name plus a chips row of its
+ *  real answers so far ("Instagram · goal"), matching the collected-chips styling. */
+function ChannelSectionChips({ section }: { section: ChannelSection }) {
+  return (
+    <div
+      data-testid={`channel-section-${section.channel}`}
+      style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
+    >
+      <span
+        style={{
+          fontSize: 11.5,
+          fontWeight: 640,
+          color: 'var(--text-secondary)',
+          textAlign: 'center',
+          letterSpacing: '0.02em',
+        }}
+      >
+        {section.label} questions
+      </span>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'center' }}>
+        {section.fields.map((f) => {
+          const done = f.answered;
+          const val =
+            typeof f.value === 'boolean' ? (f.value ? 'yes' : 'no') : f.value == null ? '' : String(f.value);
+          return (
+            <span
+              key={f.field}
+              title={f.question}
+              style={{
+                fontSize: 11.5,
+                fontWeight: 540,
+                color: done ? TEAL : 'var(--text-muted)',
+                background: done ? 'rgba(15,138,130,0.08)' : 'var(--surface-alt)',
+                border: `1px solid ${done ? 'rgba(15,138,130,0.3)' : 'var(--hairline)'}`,
+                borderRadius: 'var(--radius-pill)',
+                padding: '3px 9px',
+                maxWidth: 240,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {done ? '✓ ' : ''}
+              {section.label} · {f.label}
+              {done && val ? `: ${val}` : ''}
+            </span>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

@@ -55,6 +55,10 @@ export interface CampaignPlan {
   // Lead source: 'provided' = use ONLY the operator's CSV / DB leads; 'source_new' =
   // find new prospects on the web. Empty = not chosen. Drives the orchestration mode.
   lead_source?: string;
+  // Per-channel interview answers for a MULTI-CHANNEL campaign, keyed by channel
+  // ('ig' / 'email' / 'sms'): {ig: {goal, audience, output_count, attach_images,
+  // image_style, competitor_research, …}}. Empty/absent = single-channel plan.
+  channel_plans?: Record<string, Record<string, unknown>>;
   // Uploaded customer list — a real parse of the operator's CSV, surfaced to the
   // supervisor so it can truthfully read the rows. Empty/absent = no CSV uploaded.
   customers?: {

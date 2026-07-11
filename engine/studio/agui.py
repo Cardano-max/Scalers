@@ -245,13 +245,16 @@ class CampaignPlan(BaseModel):
     leads: list[str] = Field(default_factory=list)
     # --- multi-channel campaigns: ONE launch, PER-CHANNEL isolation ---------------- #
     # Per-channel OVERRIDES keyed by channel id ('ig' | 'email' | 'sms'). Each value
-    # is that channel's own brief, applied over the shared top-level fields when the
-    # launch fans out into one isolated child run per channel (optional keys: goal,
-    # audience, output_count, lead_count, offer, tone). attach_images / image_style /
+    # is that channel's own brief — collected by the per-channel interview blocks
+    # (studio.interview.CHANNEL_QUESTIONS, so Instagram questions are not email
+    # questions) and applied over the shared top-level fields when the launch fans
+    # out into one isolated child run per channel (optional keys: goal, audience,
+    # output_count, lead_count, offer, tone). attach_images / image_style /
     # competitor_research live ONLY here, never as top-level fields — the IG pipeline
     # reads them from this dict. Always merged per channel (never wholesale-replaced),
-    # so editing one channel's overrides cannot clobber another's. Empty = every
-    # channel runs the shared plan as-is.
+    # so editing one channel's overrides cannot clobber another's. Never gates arming
+    # — the flat GATING set stays the deterministic run gate. Empty = every channel
+    # runs the shared plan as-is.
     channel_plans: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
@@ -2753,6 +2756,18 @@ def _execute_provided_leads_sync(
             if _strategist_failed and _model_fail_streak >= MODEL_FAILURE_BREAKER_THRESHOLD:
                 _breaker_tripped = True
                 break
+            continue
+
+        # CONSENT SKIP (operator-explicit channels): the builder returns a
+        # skip_reason instead of a draft when every requested channel needs a
+        # consent this lead has not given (e.g. an 'sms' child run against a
+        # no-opt-in lead) — counted, never silently diverted to another channel.
+        if draft.get("skip_reason"):
+            skipped.append({
+                "row": _row,
+                "lead": facts.get("name") or cust_id,
+                "reason": str(draft["skip_reason"]),
+            })
             continue
 
         # FOREIGN-IDENTITY GATE (wwy.7 r8, the smoking gun): a draft staged for this

@@ -392,18 +392,29 @@ def conversation_lead_index(
 def choose_channel(facts: dict[str, Any], plan_channels: list[str] | None) -> str:
     """Pick the outreach channel for a lead, honestly respecting consent.
 
-    Order: persona ``likely_best_channel`` → first ``preferred_channels`` → first
-    plan channel → ``instagram``. Email is only chosen if the lead opted in; SMS
-    only if opted in — otherwise we fall through to instagram (organic DM), never
-    overriding a withheld consent."""
+    OPERATOR-EXPLICIT channels are authoritative: when ``plan_channels`` is set
+    (the operator answered 'email channel' / this is one channel's isolated child
+    run), ONLY those channels are candidates — consent still outranks the
+    operator (a below-consent email/SMS is never sent to that channel), but the
+    lead is NEVER silently diverted to a channel the operator did not ask for
+    (an 'sms' child run once staged an instagram DM because the persona
+    preference outranked the plan). Returns '' when no requested channel is
+    consented — the caller records a counted skip.
+
+    Legacy (no plan channels): persona ``likely_best_channel`` → first
+    ``preferred_channels`` → ``instagram``, email/SMS consent-gated with the
+    instagram fall-through."""
     traits = facts.get("persona_traits", {})
+    explicit = [str(c).strip().lower() for c in (plan_channels or []) if str(c or "").strip()]
     candidates: list[str] = []
-    best = traits.get("likely_best_channel")
-    if best:
-        candidates.append(str(best))
-    candidates += [str(c) for c in facts.get("preferred_channels", [])]
-    candidates += [str(c) for c in (plan_channels or [])]
-    candidates.append("instagram")
+    if explicit:
+        candidates = list(explicit)
+    else:
+        best = traits.get("likely_best_channel")
+        if best:
+            candidates.append(str(best))
+        candidates += [str(c) for c in facts.get("preferred_channels", [])]
+        candidates.append("instagram")
 
     # The consent gate is routed through the first-class ``entities.Consent`` (one typed
     # representation with provenance): email/SMS require the opt-in; a below-consent SMS
@@ -424,7 +435,10 @@ def choose_channel(facts: dict[str, Any], plan_channels: list[str] | None) -> st
             return "instagram"
         if ch == "facebook":
             return "facebook"
-    return "instagram"
+    # Explicit channels exhausted without consent: an honest no-channel — the
+    # caller records the skip. Only the legacy (no-plan-channel) path keeps the
+    # instagram fall-through.
+    return "" if explicit else "instagram"
 
 
 # --------------------------------------------------------------------------- #
@@ -1735,6 +1749,19 @@ def build_outreach_draft(
         ch = channel.strip().lower()
     else:
         ch = choose_channel(facts, plan_channels)
+        if not ch:
+            # Operator-explicit channels exhausted without consent (e.g. an 'sms'
+            # child run against a lead with no SMS opt-in): an honest skip — the
+            # caller counts it. Never silently diverted to another channel.
+            return {
+                "skip_reason": (
+                    f"requested channel(s) {', '.join(plan_channels or [])} need a "
+                    "consent this lead has not given — not drafted"
+                ),
+                "channel": "",
+                "target": None,
+                "lead": facts.get("name"),
+            }
         # Only when no channel was explicitly requested: a lead reachable solely by
         # email (real address, opted in, no IG handle) should route to email rather
         # than fall through to an instagram DM it has no handle for.

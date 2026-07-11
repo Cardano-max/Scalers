@@ -34,6 +34,31 @@ export interface SelectionRequest {
   options: SelectionOption[];
 }
 
+/** One pickable competitor post in a paused run's competitor pick. Real scraped
+ *  data only — every field renders verbatim or not at all (no fabricated metrics). */
+export interface CompetitorOption {
+  id: string;
+  handle: string;
+  caption: string;
+  url: string | null;
+  /** Real engagement numbers when present (e.g. likes / comments). */
+  metrics: Record<string, number>;
+  totalScore: number | null;
+  whyItWorked: string | null;
+  visualTags: string[];
+}
+
+/**
+ * A run PAUSED for the operator to pick WHICH competitor post to mold (kind
+ * 'competitor_pick' — the competitor-research counterpart of the artwork pause).
+ * POST select-competitor resumes the run with the chosen option.
+ */
+export interface CompetitorSelectionRequest {
+  kind: string; // 'competitor_pick'
+  question: string;
+  options: CompetitorOption[];
+}
+
 /** One per-agent trace step (a row of agent_runs). */
 export interface RunStep {
   seq: number;
@@ -111,6 +136,8 @@ export interface RunState {
   reconciliation?: Reconciliation | null;
   /** Present while status === 'awaiting_selection' — the operator must pick. */
   selectionRequest?: SelectionRequest | null;
+  /** Present while the run is paused on a COMPETITOR pick (kind 'competitor_pick'). */
+  competitorSelectionRequest?: CompetitorSelectionRequest | null;
   error: string | null;
 }
 
@@ -165,6 +192,9 @@ export async function fetchRunState(
     // Present when the run paused for an operator artwork pick (spec section 22).
     selection_request?: SelectionRequest | null;
     selectionRequest?: SelectionRequest | null;
+    // Present when the run paused for a competitor-post pick (competitor research).
+    competitor_selection_request?: CompetitorSelectionRequest | null;
+    competitorSelectionRequest?: CompetitorSelectionRequest | null;
     error?: string | null;
   };
   return {
@@ -180,6 +210,9 @@ export async function fetchRunState(
     // Reconciliation comes from the campaign_state block the endpoint attaches.
     reconciliation: d.state?.reconciliation ?? null,
     selectionRequest: parseSelectionRequest(d.selection_request ?? d.selectionRequest),
+    competitorSelectionRequest: parseCompetitorSelectionRequest(
+      d.competitor_selection_request ?? d.competitorSelectionRequest,
+    ),
     error: d.error ?? null,
   };
 }
@@ -206,6 +239,56 @@ function parseSelectionRequest(raw: unknown): SelectionRequest | null {
   };
 }
 
+/** Defensive parse of a competitor_selection_request payload (contract:
+ *  kind 'competitor_pick' / question / options). HONEST-EMPTY: an option without a
+ *  real id is dropped, missing metrics/score render as absent — never fabricated. */
+function parseCompetitorSelectionRequest(raw: unknown): CompetitorSelectionRequest | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const rawOptions = Array.isArray(r.options) ? (r.options as Array<Record<string, unknown>>) : [];
+  const options: CompetitorOption[] = rawOptions
+    .map((o) => {
+      const metrics: Record<string, number> = {};
+      if (o.metrics && typeof o.metrics === 'object') {
+        for (const [k, v] of Object.entries(o.metrics as Record<string, unknown>)) {
+          if (typeof v === 'number' && Number.isFinite(v)) metrics[k] = v;
+        }
+      }
+      return {
+        id: typeof o.id === 'string' ? o.id : '',
+        handle: typeof o.handle === 'string' ? o.handle : '',
+        caption: typeof o.caption === 'string' ? o.caption : '',
+        url: typeof o.url === 'string' && o.url.length > 0 ? o.url : null,
+        metrics,
+        totalScore:
+          typeof o.total_score === 'number' && Number.isFinite(o.total_score)
+            ? o.total_score
+            : typeof o.totalScore === 'number' && Number.isFinite(o.totalScore)
+              ? o.totalScore
+              : null,
+        whyItWorked:
+          typeof o.why_it_worked === 'string' && o.why_it_worked.length > 0
+            ? o.why_it_worked
+            : typeof o.whyItWorked === 'string' && o.whyItWorked.length > 0
+              ? o.whyItWorked
+              : null,
+        visualTags: Array.isArray(o.visual_tags)
+          ? o.visual_tags.filter((t): t is string => typeof t === 'string')
+          : Array.isArray(o.visualTags)
+            ? o.visualTags.filter((t): t is string => typeof t === 'string')
+            : [],
+      };
+    })
+    .filter((o) => o.id.length > 0);
+  if (options.length === 0) return null;
+  return {
+    kind: typeof r.kind === 'string' ? r.kind : 'competitor_pick',
+    question:
+      typeof r.question === 'string' ? r.question : 'Pick the competitor post to mold.',
+    options,
+  };
+}
+
 /**
  * Resume a run paused on an artwork pick: POST /studio/campaign/{runId}/select-artwork
  * with the chosen assetId. The caller keeps polling — the run resumes server-side.
@@ -228,4 +311,29 @@ export async function selectArtwork(
   if (!res.ok) throw new Error(`select-artwork HTTP ${res.status}`);
   const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
   if (data.ok === false) throw new Error(data.error ?? 'select-artwork failed');
+}
+
+/**
+ * Resume a run paused on a competitor pick: POST
+ * /studio/campaign/{runId}/select-competitor with the chosen optionId (the mirror
+ * of select-artwork). The caller keeps polling — the run resumes server-side.
+ */
+export async function selectCompetitor(
+  aguiUrl: string,
+  runId: string,
+  optionId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(
+    `${studioBase(aguiUrl)}/campaign/${encodeURIComponent(runId)}/select-competitor`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ optionId }),
+      signal,
+    },
+  );
+  if (!res.ok) throw new Error(`select-competitor HTTP ${res.status}`);
+  const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+  if (data.ok === false) throw new Error(data.error ?? 'select-competitor failed');
 }

@@ -544,3 +544,142 @@ def test_campaign_interview_prompt_contains_all_ten_questions() -> None:
     for i in range(1, 11):
         assert f"{i}." in prompt
     assert "TEST MODE" in prompt and "held in the Review Queue" in prompt
+
+
+# --------------------------------------------------------------------------- #
+# PER-CHANNEL interview blocks (multi-channel campaigns). A campaign spanning
+# ig + email + sms gets a SEPARATE channel-specific block per chosen channel,
+# asked ONE CHANNEL AT A TIME after the base gating fields. Field ids are
+# namespaced channel_plans.{ch}.{field}; answers land under plan.channel_plans.
+# The blocks NEVER gate arming, and a single-channel plan is unchanged.
+# --------------------------------------------------------------------------- #
+
+def _multi_channel_plan() -> CampaignPlan:
+    plan = _full_plan()
+    plan.channels = ["instagram", "email"]
+    return plan
+
+
+def _channel_answer(field: str):
+    leaf = field.rsplit(".", 1)[-1]
+    if leaf == "output_count":
+        return 3
+    if leaf in ("attach_images", "competitor_research"):
+        return "yes"
+    return "a concrete channel answer"
+
+
+def test_multi_channel_plan_walks_ig_block_after_base_gating() -> None:
+    from studio.interview import CHANNEL_QUESTIONS
+
+    plan = _multi_channel_plan()
+    # base gating fields all answered -> the FIRST channel block starts (ig first,
+    # the operator's channel order), before any optional follow-up.
+    q = next_question(plan)
+    assert q["field"] == "channel_plans.ig.goal"
+    assert q["channel"] == "ig"
+    # walk the channel questions to exhaustion: the whole ig block in order, THEN
+    # the whole email block — one channel at a time, never interleaved.
+    asked: list[str] = []
+    for _ in range(30):
+        q = next_question(plan)
+        if q is None or not q["field"].startswith("channel_plans."):
+            break
+        asked.append(q["field"])
+        apply_fields(plan, {q["field"]: _channel_answer(q["field"])})
+    expected = [f for f, _ in CHANNEL_QUESTIONS["ig"]] + [f for f, _ in CHANNEL_QUESTIONS["email"]]
+    assert asked == expected
+    # after the channel blocks the interview falls through to the optional walk.
+    assert next_question(plan)["field"] == "per_lead"
+
+
+def test_ig_block_asks_competitor_research_images_and_style() -> None:
+    from studio.interview import CHANNEL_QUESTIONS
+
+    ig_fields = [f for f, _ in CHANNEL_QUESTIONS["ig"]]
+    assert "channel_plans.ig.competitor_research" in ig_fields
+    assert "channel_plans.ig.attach_images" in ig_fields
+    assert "channel_plans.ig.image_style" in ig_fields
+    questions = dict(CHANNEL_QUESTIONS["ig"])
+    assert "competitor posts" in questions["channel_plans.ig.competitor_research"]
+    assert "images" in questions["channel_plans.ig.attach_images"]
+    # email and sms have their OWN blocks — no image questions there.
+    for ch in ("email", "sms"):
+        for f, _q in CHANNEL_QUESTIONS[ch]:
+            assert "image" not in f, f
+
+
+def test_field_present_resolves_namespaced_channel_fields() -> None:
+    plan = _multi_channel_plan()
+    assert field_present(plan, "channel_plans.ig.attach_images") is False
+    apply_fields(plan, {"channel_plans.ig.attach_images": "yes"})
+    assert plan.channel_plans["ig"]["attach_images"] is True
+    assert field_present(plan, "channel_plans.ig.attach_images") is True
+    # an explicit NO is also a real answer (the operator made a choice)
+    apply_fields(plan, {"channel_plans.ig.competitor_research": "no"})
+    assert plan.channel_plans["ig"]["competitor_research"] is False
+    assert field_present(plan, "channel_plans.ig.competitor_research") is True
+    # ints coerce from free text; 0 stays unanswered
+    apply_fields(plan, {"channel_plans.ig.output_count": "make 3 posts"})
+    assert plan.channel_plans["ig"]["output_count"] == 3
+    assert field_present(plan, "channel_plans.ig.output_count") is True
+    assert field_present(plan, "channel_plans.email.output_count") is False
+
+
+def test_apply_fields_ignores_unknown_channel_or_leaf() -> None:
+    plan = _multi_channel_plan()
+    apply_fields(plan, {
+        "channel_plans.tiktok.goal": "x",     # no such channel block
+        "channel_plans.ig.bogus_leaf": "x",   # no such leaf in the contract
+        "channel_plans.ig.attach_images": "hmm",  # unrecognized yes/no -> no guess
+    })
+    assert plan.channel_plans == {}
+
+
+def test_single_channel_plan_interview_unchanged() -> None:
+    # REGRESSION: a plain single-channel plan never sees a channel block — the flat
+    # interview walks straight from gating to the optional follow-ups.
+    plan = _full_plan()  # channels=["email"]
+    assert next_question(plan)["field"] == "per_lead"
+    state = interview_state(plan)
+    assert state["channelSections"] == []
+    summary = plan_summary(plan)
+    assert not any("·" in ln["label"] for ln in summary["lines"])
+
+
+def test_channel_blocks_never_gate_arming() -> None:
+    # The gate is the flat GATING set only: a fully-gated multi-channel plan is armed
+    # even with EVERY channel question unanswered (and disarms only on gating fields).
+    plan = _multi_channel_plan()
+    assert is_armed(plan) is True
+    assert interview_state(plan)["missing"] == []
+
+
+def test_channel_sections_render_state_and_plan_summary_lines() -> None:
+    plan = _multi_channel_plan()
+    apply_fields(plan, {
+        "channel_plans.ig.goal": "show off fresh fine-line work",
+        "channel_plans.ig.attach_images": "yes",
+    })
+    state = interview_state(plan)
+    sections = state["channelSections"]
+    assert [s["channel"] for s in sections] == ["ig", "email"]
+    assert sections[0]["label"] == "Instagram"
+    ig_fields = {f["field"]: f for f in sections[0]["fields"]}
+    assert ig_fields["channel_plans.ig.goal"]["answered"] is True
+    assert ig_fields["channel_plans.ig.goal"]["value"] == "show off fresh fine-line work"
+    assert ig_fields["channel_plans.ig.image_style"]["answered"] is False
+    assert ig_fields["channel_plans.ig.image_style"]["value"] is None
+    # the plan summary carries ONLY the answered channel fields ("Instagram · goal")
+    flat = {ln["label"]: ln["value"] for ln in plan_summary(plan)["lines"]}
+    assert flat.get("Instagram · goal") == "show off fresh fine-line work"
+    assert flat.get("Instagram · attach images") == "yes"
+    assert "Instagram · image style" not in flat  # unanswered -> absent (honest)
+    assert not any(k.startswith("Email ·") for k in flat)
+
+
+def test_sms_channel_block_stays_short() -> None:
+    from studio.interview import CHANNEL_QUESTIONS
+
+    sms_fields = [f.rsplit(".", 1)[-1] for f, _ in CHANNEL_QUESTIONS["sms"]]
+    assert sms_fields == ["goal", "audience", "output_count"]

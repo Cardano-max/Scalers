@@ -31,7 +31,13 @@ import {
   userMessage,
 } from './agui';
 import { fetchStudioHistory } from './studio-history';
-import { startRun, fetchRunState, selectArtwork, type RunState } from './run-trace';
+import {
+  startRun,
+  fetchRunState,
+  selectArtwork,
+  selectCompetitor,
+  type RunState,
+} from './run-trace';
 
 export interface PendingApproval {
   interrupt: AguiInterrupt;
@@ -115,6 +121,9 @@ export interface UseStudioAgui {
   /** Resolve a paused run's artwork pick (status 'awaiting_selection'): POST
    *  select-artwork with the chosen assetId; polling continues and the run resumes. */
   pickArtwork: (assetId: string) => void;
+  /** Resolve a paused run's competitor pick: POST select-competitor with the chosen
+   *  optionId; polling continues and the run resumes (mirror of pickArtwork). */
+  pickCompetitor: (optionId: string) => void;
   approve: () => void;
   reject: () => void;
 }
@@ -562,6 +571,30 @@ export function useStudioAgui(
     [aguiUrl, runState?.runId, pollRun],
   );
 
+  // Resolve a paused run's COMPETITOR pick — the competitor-research counterpart of
+  // pickArtwork. POSTs the REAL optionId to select-competitor; on success the pause is
+  // cleared optimistically and polling re-arms so the resumed steps stream in.
+  const pickCompetitor = useCallback(
+    (optionId: string) => {
+      const runId = runState?.runId;
+      if (!runId || !optionId) return;
+      setError(null);
+      (async () => {
+        try {
+          await selectCompetitor(aguiUrl, runId, optionId);
+          setRunState((prev) =>
+            prev ? { ...prev, status: 'running', competitorSelectionRequest: null } : prev,
+          );
+          setRunningCampaign(true);
+          pollRun(runId);
+        } catch (e) {
+          setError(e instanceof Error ? e.message : 'competitor selection failed');
+        }
+      })();
+    },
+    [aguiUrl, runState?.runId, pollRun],
+  );
+
   // Stop polling on unmount.
   useEffect(() => () => {
     if (pollRef.current) clearTimeout(pollRef.current);
@@ -587,6 +620,7 @@ export function useStudioAgui(
     runCampaign,
     attachRun,
     pickArtwork,
+    pickCompetitor,
     approve: () => resolveApproval(true),
     reject: () => resolveApproval(false),
   };

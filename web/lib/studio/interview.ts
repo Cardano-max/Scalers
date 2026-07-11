@@ -50,6 +50,25 @@ export interface PlanSummary {
   confirm: string;
 }
 
+/** One field of a per-channel interview section (namespaced id like
+ *  'channel_plans.ig.goal'). `value` is the REAL stored answer (or null). */
+export interface ChannelSectionField {
+  field: string;
+  label: string;
+  question: string;
+  value: unknown;
+  answered: boolean;
+}
+
+/** One per-channel question section of a MULTI-CHANNEL campaign interview —
+ *  the engine asks separate channel-specific questions per channel (Instagram
+ *  questions are not email questions). Empty/absent for a single-channel plan. */
+export interface ChannelSection {
+  channel: string; // 'ig' | 'email' | 'sms'
+  label: string; // 'Instagram' | 'Email' | 'SMS'
+  fields: ChannelSectionField[];
+}
+
 export interface InterviewState {
   armed: boolean;
   missing: string[];
@@ -63,6 +82,9 @@ export interface InterviewState {
   plannedSteps?: PlannedStep[];
   // The senior-exec plan summary shown before the go-ahead. Optional/null = not armed.
   planSummary?: PlanSummary | null;
+  // Per-channel question sections (multi-channel campaigns). Optional so older
+  // engine responses still typecheck; empty = single-channel (nothing extra renders).
+  channelSections?: ChannelSection[];
 }
 
 /** How the panel renders the input for each field (mirrors engine coercion). */
@@ -159,6 +181,35 @@ export const OPTIONAL_META: FieldMeta[] = [
 export const ALL_META: FieldMeta[] = [...GATING_META, ...OPTIONAL_META];
 export const GATING_FIELDS = GATING_META.map((m) => m.field);
 
+// Per-channel (namespaced) interview fields — 'channel_plans.ig.attach_images'.
+// The QUESTION text always comes from the engine's nextQuestion; this meta only
+// picks the right INPUT kind (yes/no chips, number, text) and a short label.
+const CHANNEL_LABELS: Record<string, string> = { ig: 'Instagram', email: 'Email', sms: 'SMS' };
+const CHANNEL_BOOL_LEAVES = new Set(['attach_images', 'competitor_research']);
+const CHANNEL_INT_LEAVES = new Set(['output_count']);
+
+/** FieldMeta for a namespaced per-channel field id, or undefined for a flat field. */
+export function channelFieldMeta(field: string): FieldMeta | undefined {
+  const parts = field.split('.');
+  if (parts.length !== 3 || parts[0] !== 'channel_plans' || !parts[1] || !parts[2]) {
+    return undefined;
+  }
+  const [, channel, leaf] = parts;
+  const kind: FieldKind = CHANNEL_BOOL_LEAVES.has(leaf)
+    ? 'yesno'
+    : CHANNEL_INT_LEAVES.has(leaf)
+      ? 'number'
+      : 'text';
+  const channelLabel =
+    CHANNEL_LABELS[channel] ?? channel.charAt(0).toUpperCase() + channel.slice(1);
+  return {
+    field,
+    question: '',
+    kind,
+    label: `${channelLabel} · ${leaf.replace(/_/g, ' ')}`,
+  };
+}
+
 const LIST_FIELDS = new Set(['channels']);
 const INT_FIELDS = new Set(['output_count', 'lead_count']);
 const BOOL_FIELDS = new Set(['deep_research', 'drafts_only', 'personalize', 'per_lead']);
@@ -213,6 +264,7 @@ export interface InterviewResponse {
   modeLabel?: string;
   plannedSteps?: PlannedStep[];
   planSummary?: PlanSummary | null;
+  channelSections?: ChannelSection[];
   error?: string;
 }
 

@@ -380,3 +380,21 @@ def test_voice_update_plan_schema_declares_channel_plans() -> None:
     # shared top-level fields.
     assert "own" in cp["description"].lower()
     assert "goal" in cp["description"]
+
+
+def test_operator_explicit_channel_never_diverts_to_persona_preference():
+    """An 'sms' child run against a lead with no SMS consent must yield an honest
+    NO-channel (counted skip), never a silent instagram DM the operator did not
+    ask for — a real multi-channel smoke staged exactly that."""
+    from studio.customer_research import choose_channel
+
+    facts = {
+        "persona_traits": {"likely_best_channel": "instagram"},
+        "preferred_channels": ["instagram"],
+        "sms_opt_in": False,
+        "email": "x@y.example",
+        "email_opt_in": True,
+    }
+    assert choose_channel(facts, ["sms"]) == ""          # consent outranks operator
+    assert choose_channel(facts, ["email"]) == "gmail"   # operator outranks persona
+    assert choose_channel(facts, None) == "instagram"    # legacy path unchanged

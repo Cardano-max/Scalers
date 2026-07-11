@@ -41,6 +41,7 @@ function toState(r: InterviewResponse): InterviewState {
     modeLabel: r.modeLabel,
     plannedSteps: r.plannedSteps,
     planSummary: r.planSummary,
+    channelSections: r.channelSections,
   };
 }
 
@@ -124,6 +125,7 @@ export function AgencyScreen() {
               onOpenReview={() => navigate('review')}
               onDeepReview={(actionId) => navigate('review', actionId)}
               onPickArtwork={studio.pickArtwork}
+              onPickCompetitor={studio.pickCompetitor}
             />
           </>
         ) : (

@@ -141,6 +141,121 @@ GATING_FIELDS: tuple[str, ...] = tuple(f for f, _ in GATING)
 OPTIONAL_FIELDS: tuple[str, ...] = tuple(f for f, _ in OPTIONAL)
 
 # --------------------------------------------------------------------------- #
+# PER-CHANNEL interview blocks. A campaign that spans MULTIPLE channels gets a
+# SEPARATE channel-specific question block per chosen channel — the Instagram
+# questions are not the email questions are not the SMS questions. Field ids are
+# namespaced ``channel_plans.{channel}.{field}`` and the answers live under
+# ``plan.channel_plans[channel][field]`` (see CampaignPlan.channel_plans), so the
+# SAME next_question / field_present / apply_fields machinery drives them. These
+# blocks NEVER gate arming — the flat GATING set stays the deterministic run gate.
+# --------------------------------------------------------------------------- #
+
+CHANNEL_QUESTIONS: dict[str, tuple[tuple[str, str], ...]] = {
+    "ig": (
+        ("channel_plans.ig.goal",
+         "Now the Instagram questions — what should the Instagram side achieve? "
+         "(for example: show off fresh work, pull new followers into bookings, or "
+         "hype a flash day)"),
+        ("channel_plans.ig.audience",
+         "Who is the Instagram post for — your followers, fans of a particular "
+         "style, or folks in your area?"),
+        ("channel_plans.ig.competitor_research",
+         "Should I research competitor posts first and mold the best-performing "
+         "structure to your brand? (yes/no)"),
+        ("channel_plans.ig.attach_images",
+         "Attach artwork images to the post? (yes/no)"),
+        ("channel_plans.ig.image_style",
+         "What style/type of images — e.g. fine-line botanical, black-and-grey "
+         "realism, healed photos?"),
+        ("channel_plans.ig.output_count",
+         "How many Instagram posts should the team create?"),
+    ),
+    "email": (
+        ("channel_plans.email.goal",
+         "On to the email side — what should the emails achieve?"),
+        ("channel_plans.email.audience",
+         "Who should the emails go to — which slice of your list?"),
+        ("channel_plans.email.offer",
+         "What's the ask in the emails — a booking link, a discount code, or just "
+         "'reply to book'?"),
+        ("channel_plans.email.output_count",
+         "How many emails should the team create?"),
+    ),
+    "sms": (
+        ("channel_plans.sms.goal",
+         "And the text messages — what should the SMS side achieve? "
+         "(texts stay short and compliant, with the opt-out kept)"),
+        ("channel_plans.sms.audience",
+         "Who should the texts go to — only folks who've opted in?"),
+        ("channel_plans.sms.output_count",
+         "How many text messages should the team create?"),
+    ),
+}
+
+# Human labels for the panel's per-channel sections ("Instagram · goal").
+CHANNEL_PLAN_LABELS: dict[str, str] = {"ig": "Instagram", "email": "Email", "sms": "SMS"}
+
+# The full leaf vocabulary a channel entry may carry (the cross-builder contract):
+# not every channel ASKS every leaf, but apply_fields accepts any of them.
+CHANNEL_PLAN_FIELDS: tuple[str, ...] = (
+    "goal", "audience", "output_count", "offer", "tone",
+    "attach_images", "image_style", "competitor_research",
+)
+_CHANNEL_BOOL_LEAVES = frozenset({"attach_images", "competitor_research"})
+_CHANNEL_INT_LEAVES = frozenset({"output_count"})
+
+# plan.channels canonical names -> the channel_plans key ('ig'|'email'|'sms').
+# Facebook has no per-channel block yet, so it maps to nothing (no fake questions).
+_CHANNEL_PLAN_KEYS: dict[str, str] = {
+    "ig": "ig", "instagram": "ig", "email": "email", "sms": "sms",
+}
+
+
+def split_channel_field(field: str) -> tuple[str, str] | None:
+    """``('ig', 'goal')`` for a namespaced ``channel_plans.ig.goal`` field id;
+    ``None`` for a flat plan field."""
+    parts = field.split(".")
+    if len(parts) == 3 and parts[0] == "channel_plans" and parts[1] and parts[2]:
+        return parts[1], parts[2]
+    return None
+
+
+def _channel_plan_value(plan: Any, channel: str, leaf: str) -> Any:
+    """The stored answer for one namespaced channel field, or None. Defensive:
+    ``channel_plans`` may be missing or oddly shaped (the contract is provided by
+    other builders) — anything unreadable reads as unanswered, never a crash."""
+    plans = getattr(plan, "channel_plans", None)
+    if not isinstance(plans, dict):
+        return None
+    entry = plans.get(channel)
+    if not isinstance(entry, dict):
+        return None
+    return entry.get(leaf)
+
+
+def interview_channels(plan: Any) -> list[str]:
+    """The per-channel blocks THIS plan interviews, in the operator's chosen channel
+    order. Active only for a MULTI-channel plan (len(channels) > 1) or once any
+    ``channel_plans`` entry exists; a plain single-channel plan keeps the flat
+    interview unchanged (regression-safe). Channels without a block (e.g. facebook)
+    are skipped — no fabricated questions."""
+    channels = [
+        str(c).strip().lower() for c in (getattr(plan, "channels", None) or []) if str(c).strip()
+    ]
+    plans = getattr(plan, "channel_plans", None)
+    has_entries = isinstance(plans, dict) and any(
+        isinstance(v, dict) and v for v in plans.values()
+    )
+    if len(channels) <= 1 and not has_entries:
+        return []
+    keys: list[str] = []
+    for c in channels:
+        k = _CHANNEL_PLAN_KEYS.get(c)
+        if k and k in CHANNEL_QUESTIONS and k not in keys:
+            keys.append(k)
+    return keys
+
+# --------------------------------------------------------------------------- #
 # ju1.3 — the canonical structured campaign-creation interview the supervisor asks
 # AFTER the honest data-inventory readback. Ten questions, in ask order, each keyed to
 # a real CampaignPlan field so answers are captured (never decorative). Reuses the
@@ -252,7 +367,23 @@ def field_present(plan: Any, field: str) -> bool:
 
     Empty string / empty list / 0 / None all read as "not yet answered". A boolean
     field counts as present once it is explicitly True OR False (the operator made a
-    choice) — i.e. only ``None`` is unanswered for a bool."""
+    choice) — i.e. only ``None`` is unanswered for a bool. Namespaced per-channel
+    fields (``channel_plans.ig.attach_images``) resolve from ``plan.channel_plans``
+    with the same rules keyed on the leaf name."""
+    ns = split_channel_field(field)
+    if ns:
+        channel, leaf = ns
+        val = _channel_plan_value(plan, channel, leaf)
+        if leaf in _CHANNEL_INT_LEAVES:
+            try:
+                return bool(val) and int(val) > 0
+            except (TypeError, ValueError):
+                return False
+        if leaf in _CHANNEL_BOOL_LEAVES:
+            if isinstance(val, str):  # defensive: another writer stored raw text
+                return bool(val.strip())
+            return val is not None
+        return bool(str(val or "").strip())
     val = getattr(plan, field, None)
     if field in _LIST_FIELDS:
         return bool([c for c in (val or []) if str(c).strip()])
@@ -358,7 +489,11 @@ def next_question(plan: Any) -> dict[str, Any] | None:
        (``probe: True``). A specific goal skips this.
     2. The first unanswered GATING field (this is what ARMS the run — unchanged,
        deterministic; a vague goal still counts as answered and does not block).
-    3. The first unanswered OPTIONAL follow-up that is still RELEVANT to the answers so
+    3. MULTI-CHANNEL plans only: each chosen channel's block, one channel at a
+       time in the operator's channel order — Instagram questions are not email
+       questions. Never gates arming and never capped (channel scoping is not an
+       optional refinement).
+    4. The first unanswered OPTIONAL follow-up that is still RELEVANT to the answers so
        far (irrelevant ones are skipped), UNTIL the follow-up budget is spent — then
        ``None``. GATING is never skipped or capped.
 
@@ -373,7 +508,14 @@ def next_question(plan: Any) -> dict[str, Any] | None:
         if not field_present(plan, f):
             return {"field": f, "question": q}
 
-    # 3. Adaptive optional walk — skip irrelevant follow-ups; stop at the budget so the
+    # 3. Per-channel walk — a multi-channel campaign interviews ONE CHANNEL AT A
+    #    TIME, finishing a channel's block before the next channel begins.
+    for ch in interview_channels(plan):
+        for f, q in CHANNEL_QUESTIONS[ch]:
+            if not field_present(plan, f):
+                return {"field": f, "question": q, "channel": ch}
+
+    # 4. Adaptive optional walk — skip irrelevant follow-ups; stop at the budget so the
     #    interview probes like a senior exec instead of interrogating.
     if _answered_optional_count(plan) >= _MAX_FOLLOW_UPS:
         return None
@@ -532,6 +674,32 @@ def real_lead_count(plan: Any) -> int:
     return 0
 
 
+def channel_sections(plan: Any) -> list[dict[str, Any]]:
+    """The per-channel interview sections the panel renders — one per chosen channel
+    block, each field with its namespaced id, short label, question, current value,
+    and answered flag. Pure projection of the plan: values are REAL stored answers
+    (or None), never a fabricated default. Empty for a plain single-channel plan
+    (the flat interview is unchanged)."""
+    sections: list[dict[str, Any]] = []
+    for ch in interview_channels(plan):
+        fields: list[dict[str, Any]] = []
+        for f, q in CHANNEL_QUESTIONS[ch]:
+            leaf = f.rsplit(".", 1)[-1]
+            fields.append({
+                "field": f,
+                "label": leaf.replace("_", " "),
+                "question": q,
+                "value": _channel_plan_value(plan, ch, leaf),
+                "answered": field_present(plan, f),
+            })
+        sections.append({
+            "channel": ch,
+            "label": CHANNEL_PLAN_LABELS.get(ch, ch),
+            "fields": fields,
+        })
+    return sections
+
+
 def plan_summary(plan: Any) -> dict[str, Any] | None:
     """The senior-exec PLAN SUMMARY shown before the run, the way an agency lead would
     read the brief back to a client and wait for a go-ahead. ``None`` until the gate is
@@ -619,6 +787,21 @@ def plan_summary(plan: Any) -> dict[str, Any] | None:
     if channels:
         lines.append({"label": "Channels", "value": ", ".join(channels)})
 
+    # Per-channel scoping (multi-channel campaigns): each ANSWERED channel field gets
+    # its own line ("Instagram · goal"). Honest — an unanswered channel field never
+    # appears, and a single-channel plan adds nothing here.
+    for section in channel_sections(plan):
+        for fld in section["fields"]:
+            if not fld["answered"]:
+                continue
+            val = fld["value"]
+            if isinstance(val, bool):
+                val = "yes" if val else "no"
+            lines.append({
+                "label": f"{section['label']} · {fld['label']}",
+                "value": str(val),
+            })
+
     # P1-B: the ask — prefer the typed CTA (offer_type) and add the free-text detail.
     if offer_type or offer:
         ask_bits: list[str] = []
@@ -683,6 +866,9 @@ def interview_state(plan: Any) -> dict[str, Any]:
         "nextQuestion": next_question(plan),
         "readyMessage": READY_MESSAGE if armed else None,
         "gatingFields": list(GATING_FIELDS),
+        # Per-channel question sections (multi-channel campaigns) — empty for a
+        # plain single-channel plan, so the panel renders nothing extra.
+        "channelSections": channel_sections(plan),
         # P4 dynamic selection: the steps THIS request needs + WHY (selected/skipped).
         "mode": mode,
         "modeLabel": mode_label,
@@ -934,7 +1120,16 @@ def _coerce_channels(value: Any) -> list[str]:
 
 def coerce_field(field: str, value: Any) -> Any:
     """Coerce a raw interview answer into the typed value the plan field expects.
-    Unknown fields pass through as a stripped string."""
+    Namespaced per-channel fields (``channel_plans.ig.attach_images``) coerce by
+    their LEAF name. Unknown fields pass through as a stripped string."""
+    ns = split_channel_field(field)
+    if ns:
+        leaf = ns[1]
+        if leaf in _CHANNEL_BOOL_LEAVES:
+            return _coerce_bool(value, field=leaf)
+        if leaf in _CHANNEL_INT_LEAVES:
+            return _coerce_int(value)
+        return str(value or "").strip()
     if field == "lead_source":
         return _coerce_lead_source(value)
     if field == "offer_type":
@@ -958,8 +1153,32 @@ def apply_fields(plan: Any, fields: dict[str, Any]) -> Any:
     """Apply a dict of ``{field: raw_value}`` interview answers to ``plan`` in place,
     coercing each to the right type and ignoring any non-interview key (so the route
     can pass the request body straight through). A bool coerced to ``None`` (an
-    unrecognized yes/no) is skipped — it stays unanswered rather than guessing."""
+    unrecognized yes/no) is skipped — it stays unanswered rather than guessing.
+    Namespaced per-channel answers (``channel_plans.ig.attach_images``) land under
+    ``plan.channel_plans[channel][leaf]``; a plan without that seam skips them
+    (they stay unanswered — never a crash, never a guess)."""
     for key, raw in (fields or {}).items():
+        ns = split_channel_field(key)
+        if ns:
+            channel, leaf = ns
+            if channel not in CHANNEL_QUESTIONS or leaf not in CHANNEL_PLAN_FIELDS:
+                continue
+            coerced = coerce_field(key, raw)
+            if leaf in _CHANNEL_BOOL_LEAVES and coerced is None:
+                continue
+            plans = getattr(plan, "channel_plans", None)
+            if not isinstance(plans, dict):
+                try:
+                    plan.channel_plans = {}
+                except (AttributeError, ValueError, TypeError):
+                    continue  # plan model has no channel_plans seam — stays unanswered
+                plans = plan.channel_plans
+            entry = plans.get(channel)
+            if not isinstance(entry, dict):
+                entry = {}
+            entry[leaf] = coerced
+            plans[channel] = entry
+            continue
         if key not in INTERVIEW_FIELDS:
             continue
         coerced = coerce_field(key, raw)

@@ -312,6 +312,8 @@ export function VoiceScreen() {
           /* A voice-triggered run can pause on an artwork pick — surface + resolve it
              right here in the rail (inline banner + the pick dialog). */
           onPickArtwork={studio.pickArtwork}
+          /* …and likewise on a competitor pick (competitor research). */
+          onPickCompetitor={studio.pickCompetitor}
         />
       </aside>
     </section>

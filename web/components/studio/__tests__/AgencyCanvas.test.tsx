@@ -141,6 +141,69 @@ describe('AgencyCanvas — awaiting_selection pause (spec 22)', () => {
   });
 });
 
+describe('AgencyCanvas — awaiting_selection COMPETITOR pause (competitor research)', () => {
+  const pausedOnCompetitor: RunState = {
+    runId: 'run_comp',
+    status: 'awaiting_selection',
+    steps: [step(1, 'competitor_research', { posts: 2 }, '2026-06-30T10:00:00Z')],
+    nPending: null,
+    pending: [],
+    archetype: 'ig_post',
+    competitorSelectionRequest: {
+      kind: 'competitor_pick',
+      question: 'Which competitor post should the team mold to your brand?',
+      options: [
+        {
+          id: 'opt_1',
+          handle: 'inkrivals',
+          caption: 'Fresh fine-line sleeve, healed at 6 weeks.',
+          url: null,
+          metrics: { likes: 4210, comments: 187 },
+          totalScore: 92.5,
+          whyItWorked: 'Healed proof reads as trust.',
+          visualTags: ['fine-line'],
+        },
+        {
+          id: 'opt_2',
+          handle: 'rivalstudio',
+          caption: 'Walk-in Wednesday flash drop.',
+          url: null,
+          metrics: {},
+          totalScore: null,
+          whyItWorked: null,
+          visualTags: [],
+        },
+      ],
+    },
+    error: null,
+  };
+
+  it('renders the paused banner + modal with the REAL options and posts the pick', () => {
+    const onPick = vi.fn();
+    wrap(
+      <AgencyCanvas runState={pausedOnCompetitor} running={false} connected onPickCompetitor={onPick} />,
+    );
+    expect(screen.getByText('Paused — your pick is needed')).toBeInTheDocument();
+    expect(screen.getAllByText(/Which competitor post should the team mold/).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Pick competitor post opt_2' }));
+    expect(onPick).toHaveBeenCalledWith('opt_2');
+  });
+
+  it('"Decide later" hides the dialog but keeps the honest paused banner', () => {
+    wrap(
+      <AgencyCanvas
+        runState={pausedOnCompetitor}
+        running={false}
+        connected
+        onPickCompetitor={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Decide later' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Pick competitor post \(2\)/ })).toBeInTheDocument();
+  });
+});
+
 describe('AgencyCanvas — honest research skipped vs queued', () => {
   const skippedResearchRun: RunState = {
     runId: 'run_skip',

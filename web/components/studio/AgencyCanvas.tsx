@@ -29,6 +29,7 @@ import {
 import { AGENT_PERSONAS } from '@/lib/studio/persona';
 import { StepSpanRow } from './StepSpanRow';
 import { ArtworkPickerModal } from './ArtworkPickerModal';
+import { CompetitorPickModal } from './CompetitorPickModal';
 import { ResearchSourcesRail } from './ResearchSourcesRail';
 import { SpecArtifactCard } from './SpecArtifactCard';
 import { StagedDraftsReview } from './StagedDraftsReview';
@@ -49,6 +50,9 @@ export interface AgencyCanvasProps {
   /** Resolve a paused run's artwork pick (POST select-artwork + keep polling).
    *  When omitted, the pause still renders honestly but cannot be resolved here. */
   onPickArtwork?: (assetId: string) => void;
+  /** Resolve a paused run's competitor pick (POST select-competitor + keep polling).
+   *  When omitted, the pause still renders honestly but cannot be resolved here. */
+  onPickCompetitor?: (optionId: string) => void;
   /** Compact mode (embedded beneath the Voice hero) trims the outer chrome. */
   compact?: boolean;
 }
@@ -61,6 +65,7 @@ export function AgencyCanvas({
   onOpenReview,
   onDeepReview,
   onPickArtwork,
+  onPickCompetitor,
   compact = false,
 }: AgencyCanvasProps) {
   const stages = useMemo(() => deriveAgencyStages(runState, running), [runState, running]);
@@ -80,6 +85,9 @@ export function AgencyCanvas({
   const completed = runState?.status === 'completed';
   const awaitingSelection = runState?.status === 'awaiting_selection';
   const selectionRequest = awaitingSelection ? runState?.selectionRequest ?? null : null;
+  const competitorRequest = awaitingSelection
+    ? runState?.competitorSelectionRequest ?? null
+    : null;
   const hasRun = steps.length > 0 || running || awaitingSelection;
 
   // The pick dialog opens whenever a NEW selection request arrives; "Decide later"
@@ -91,6 +99,15 @@ export function AgencyCanvas({
   useEffect(() => {
     setPickerDismissed(false);
   }, [selectionSignature]);
+  // Same pattern for the competitor pick — its own dismissed state so hiding one
+  // dialog never hides the other.
+  const [competitorDismissed, setCompetitorDismissed] = useState(false);
+  const competitorSignature = competitorRequest
+    ? `${runState?.runId}_${competitorRequest.question}_${competitorRequest.options.length}`
+    : null;
+  useEffect(() => {
+    setCompetitorDismissed(false);
+  }, [competitorSignature]);
   // Real HELD draft rows for this run. The run transitions into review mode (per-draft
   // Approve / Reject / Deep-Review) once it completes (or the jury has landed) and
   // there are staged drafts — never fabricated; empty list renders nothing.
@@ -269,6 +286,54 @@ export function AgencyCanvas({
           request={selectionRequest}
           onSelect={onPickArtwork}
           onDismiss={() => setPickerDismissed(true)}
+        />
+      )}
+
+      {/* Paused on an operator COMPETITOR pick — same pause-banner pattern as the
+          artwork pick: an always-visible inline banner + the pick dialog itself. */}
+      {competitorRequest && (
+        <div
+          role="status"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            flexWrap: 'wrap',
+            fontSize: 12.5,
+            color: 'var(--amber-text)',
+            background: 'var(--amber-bg)',
+            border: '1px solid var(--amber-border)',
+            borderRadius: 9,
+            padding: '9px 12px',
+          }}
+        >
+          <span style={{ minWidth: 0, flex: 1 }}>
+            <strong>Paused:</strong> {competitorRequest.question}
+          </span>
+          <button
+            type="button"
+            onClick={() => setCompetitorDismissed(false)}
+            style={{
+              font: 'inherit',
+              fontSize: 12,
+              fontWeight: 600,
+              color: '#fff',
+              background: 'var(--amber-dot, #B58A2A)',
+              border: 'none',
+              borderRadius: 'var(--radius-button)',
+              padding: '6px 12px',
+              cursor: 'pointer',
+            }}
+          >
+            Pick competitor post ({competitorRequest.options.length})
+          </button>
+        </div>
+      )}
+      {competitorRequest && !competitorDismissed && onPickCompetitor && (
+        <CompetitorPickModal
+          request={competitorRequest}
+          onSelect={onPickCompetitor}
+          onDismiss={() => setCompetitorDismissed(true)}
         />
       )}
 
