@@ -147,7 +147,7 @@ class Consent(BaseModel):
             return self.email
         if ch == "sms":
             return self.sms
-        if ch in ("instagram", "ig", "facebook"):
+        if ch in ("instagram", "ig", "facebook", "fb"):
             return True
         return False
 

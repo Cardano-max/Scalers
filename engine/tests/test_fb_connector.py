@@ -88,6 +88,90 @@ async def test_token_never_in_url_path():
     assert "PAGE-TOKEN-xyz" not in fake.calls[0]["path"]
 
 
+# ── FB Page PHOTO post (staged image URL) ────────────────────────────────────
+
+
+async def test_photo_post_routes_to_photos_endpoint_with_caption():
+    fake = _FakeFetcher()
+    c = _conn(fetcher=fake)
+    res = await c.send("idem-p1", "facebook_feed", {
+        "message": "Fresh fine-line peony 🌸",
+        "image_url": "https://img.example/peony.jpg",
+    })
+    call = fake.calls[0]
+    assert call["host"] == "graph.facebook.com"          # same secure boundary
+    assert call["path"] == "/v25.0/1789/photos"          # page photos endpoint
+    assert call["headers"]["Idempotency-Key"] == "idem-p1"
+    sent = json.loads(call["body"])
+    assert sent["url"] == "https://img.example/peony.jpg"
+    assert sent["caption"] == "Fresh fine-line peony 🌸"
+    assert sent["access_token"] == "PAGE-TOKEN-xyz"       # token in BODY, never URL
+    assert sent["appsecret_proof"] == hmac.new(
+        b"APP-SECRET", b"PAGE-TOKEN-xyz", hashlib.sha256).hexdigest()
+    assert "PAGE-TOKEN-xyz" not in call["path"]
+    assert res.external_id == "1789_456"
+
+
+async def test_text_only_payload_keeps_feed_endpoint():
+    fake = _FakeFetcher()
+    await _conn(fetcher=fake).send("k", "facebook_feed", {"message": "x"})
+    call = fake.calls[0]
+    assert call["path"] == "/v25.0/1789/feed"
+    sent = json.loads(call["body"])
+    assert "url" not in sent and "file_url" not in sent  # no media fields on a text post
+
+
+async def test_photo_post_non_2xx_raises_without_token_echo():
+    fake = _FakeFetcher(status=400, body='{"error": {"message": "bad url"}}')
+    c = _conn(fetcher=fake)
+    with pytest.raises(RuntimeError) as exc:
+        await c.send("k", "facebook_feed", {
+            "message": "x", "image_url": "https://img.example/a.jpg",
+        })
+    assert "400" in str(exc.value)
+    assert "PAGE-TOKEN-xyz" not in str(exc.value)
+
+
+# ── FB Page VIDEO post (staged video URL; Meta ingests async) ────────────────
+
+
+async def test_video_post_routes_to_videos_endpoint_with_description():
+    fake = _FakeFetcher(body='{"id": "987654"}')
+    c = _conn(fetcher=fake)
+    res = await c.send("idem-v1", "facebook_feed", {
+        "message": "Healed sleeve walkthrough",
+        "video_url": "https://vid.example/sleeve.mp4",
+    })
+    call = fake.calls[0]
+    assert call["path"] == "/v25.0/1789/videos"          # page videos endpoint
+    assert call["headers"]["Idempotency-Key"] == "idem-v1"
+    sent = json.loads(call["body"])
+    assert sent["file_url"] == "https://vid.example/sleeve.mp4"
+    assert sent["description"] == "Healed sleeve walkthrough"
+    assert sent["access_token"] == "PAGE-TOKEN-xyz"       # token in BODY, never URL
+    assert sent["appsecret_proof"] == hmac.new(
+        b"APP-SECRET", b"PAGE-TOKEN-xyz", hashlib.sha256).hexdigest()
+    # ASYNC-ingest contract: a 2xx returns the video id while Meta transcodes —
+    # the honest result is "accepted, id X", never a poll-faked published state.
+    assert res.provider_id == "987654" and res.external_id == "987654"
+    assert res.deep_link == "https://www.facebook.com/987654"
+
+
+async def test_video_wins_over_image_when_both_staged():
+    # Priority video > image: a reel-style staged asset is the primary media.
+    fake = _FakeFetcher()
+    await _conn(fetcher=fake).send("k", "facebook_feed", {
+        "message": "x",
+        "video_url": "https://vid.example/a.mp4",
+        "image_url": "https://img.example/a.jpg",
+    })
+    call = fake.calls[0]
+    assert call["path"] == "/v25.0/1789/videos"
+    sent = json.loads(call["body"])
+    assert sent["file_url"] == "https://vid.example/a.mp4"
+    assert "url" not in sent  # the image never rides along
+
+
 async def test_missing_creds_held():
     c = FacebookConnector(enabled=True, page_token="t", app_secret="s", page_id=None)
     with pytest.raises(ConnectorHeldError):

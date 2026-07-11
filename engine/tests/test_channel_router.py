@@ -1,10 +1,11 @@
 """Intent → channel pipeline router (nmh.9, spec §16) — pure, no DB.
 
 Proves the supervisor picks the workflow from the request: 'send emails' → email,
-'create Instagram post' → IG, 'Facebook campaign' → FB (honest not-built), 'artist
-with attachments' → artwork (honest not-built). The default stays email
-(backward-compatible), but an explicit social intent always wins over it — the fix
-for "always runs email agents".
+'create Instagram post' → IG, 'Facebook campaign' → the FB page-post pipeline
+(BUILT, archetype facebook_post), 'Messenger DMs' → honest not-built (DMs stay
+hard-escalated), 'artist with attachments' → artwork (honest not-built). The
+default stays email (backward-compatible), but an explicit social intent always
+wins over it — the fix for "always runs email agents".
 """
 
 from __future__ import annotations
@@ -53,10 +54,26 @@ def test_reels_and_story_route_to_instagram():
     assert route_pipeline(_Plan(goal="post an IG story")).pipeline is Pipeline.INSTAGRAM
 
 
-def test_facebook_campaign_routes_not_built():
+def test_facebook_campaign_routes_to_built_fb_pipeline():
     d = route_pipeline(_Plan(goal="create a Facebook campaign"))
+    assert d.pipeline is Pipeline.FACEBOOK and d.built is True
+    assert d.archetype_id == "facebook_post"  # a real FB page-post archetype
+    assert "HELD" in d.reason  # drafting only — nothing is sent
+
+
+def test_facebook_via_channels_field_only():
+    # The voice supervisor can set ONLY channels — routing must work off that alone.
+    d = route_pipeline(_Plan(goal="run a campaign", channels=["facebook"]))
+    assert d.pipeline is Pipeline.FACEBOOK and d.built is True
+    assert d.archetype_id == "facebook_post"
+
+
+def test_messenger_dm_stays_honest_not_built():
+    # DMs are hard-escalated by the connector; a messenger ask must never be quietly
+    # rewritten into a page post (or a fabricated email run).
+    d = route_pipeline(_Plan(goal="send messenger DMs to our followers"))
     assert d.pipeline is Pipeline.FACEBOOK and d.built is False
-    assert "isn't built yet" in d.reason
+    assert "isn't built" in d.reason
 
 
 def test_artist_with_attachments_routes_not_built():
@@ -73,7 +90,7 @@ def test_attach_artwork_flag_routes_to_artwork():
 def test_facebook_wins_over_email_when_both_present():
     # A mixed request naming Facebook must not silently fall through to email.
     d = route_pipeline(_Plan(goal="send a facebook campaign", channels=["email", "facebook"]))
-    assert d.pipeline is Pipeline.FACEBOOK and d.built is False
+    assert d.pipeline is Pipeline.FACEBOOK and d.built is True
 
 
 def test_provided_lead_source_defaults_to_email():
@@ -90,11 +107,12 @@ def test_provided_leads_not_bypassed_by_incidental_social_word():
     assert d.pipeline is Pipeline.EMAIL and d.built is True
 
 
-def test_provided_leads_facebook_still_honest_not_built():
-    # But an explicitly-unbuildable channel (Facebook) stays an honest not-built even
-    # with uploaded leads — we don't have an FB path to run against them.
+def test_provided_leads_not_bypassed_by_facebook_word():
+    # Like the instagram rule (S1): an uploaded-lead plan mentioning facebook still
+    # runs the per-lead outreach compliance path against THEIR leads — never an
+    # unrelated page post that ignores the uploaded cohort.
     d = route_pipeline(_Plan(goal="facebook blast to our list", lead_source="provided"))
-    assert d.pipeline is Pipeline.FACEBOOK and d.built is False
+    assert d.pipeline is Pipeline.EMAIL and d.built is True
 
 
 def test_no_intent_defaults_to_email_backward_compatible():
@@ -109,7 +127,7 @@ def test_ig_word_boundary_does_not_false_match():
 
 
 def test_not_built_summary_is_honest_no_fake_run():
-    d = route_pipeline(_Plan(goal="facebook campaign"))
+    d = route_pipeline(_Plan(goal="run a campaign for this artist with attachments"))
     s = not_built_summary(d, run_id="team-camp_x-y", campaign_id="camp_x")
     assert s["run_status"] == "not_built"
     assert s["pipeline_built"] is False

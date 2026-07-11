@@ -31,6 +31,7 @@ _pg = pytest.mark.skipif(
 )
 
 _BLOCKED_IG = "Meta credentials not configured (META_PAGE_TOKEN / META_IG_USER_ID)"
+_BLOCKED_FB = "Meta credentials not configured (META_PAGE_TOKEN / META_PAGE_ID)"
 
 
 @pytest.fixture(autouse=True)
@@ -130,6 +131,45 @@ def test_ready_posts_resolves_pending_ig_action_into_full_package(monkeypatch):
         with psycopg.connect(dsn, autocommit=True) as conn:
             conn.execute("DELETE FROM actions WHERE id = %s", (action_id,))
             conn.execute("DELETE FROM assets WHERE id = %s", (asset_id,))
+
+
+@pytest.mark.integration
+@_pg
+def test_ready_posts_lists_fb_rows_with_the_facebook_gate(monkeypatch):
+    """A pending 'fb' draft (the campaign spine's Channel.FB value) lists in the
+    social ready queue as channel 'facebook' with the SAME honest publishable/
+    blocked_reason fields the facebook gate enforces — and arms once the operator
+    sets META_PAGE_TOKEN + META_PAGE_ID."""
+    import psycopg
+
+    from studio.social_queue import ready_posts
+
+    dsn = os.environ["ENGINE_DATABASE_URL"]
+    tenant = "t_socialq_" + uuid.uuid4().hex[:8]
+    action_id = "act_sq_" + uuid.uuid4().hex[:8]
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO actions (id, tenant_id, type, channel, draft, status) "
+            "VALUES (%s, %s, 'post', 'fb', 'page-post caption', 'pending')",
+            (action_id, tenant),
+        )
+    try:
+        posts = ready_posts(tenant, dsn=dsn)
+        assert [p["action_id"] for p in posts] == [action_id]
+        pkg = posts[0]
+        assert pkg["channel"] == "facebook"  # 'fb' alias folded, same as the gate
+        assert pkg["caption"] == "page-post caption"
+        assert pkg["publishable"] is False
+        assert pkg["blocked_reason"] == _BLOCKED_FB
+
+        # With the operator's facebook credentials present the row is publishable.
+        monkeypatch.setenv("META_PAGE_TOKEN", "tok_it")
+        monkeypatch.setenv("META_PAGE_ID", "17890000000")
+        armed = ready_posts(tenant, dsn=dsn)[0]
+        assert armed["publishable"] is True and armed["blocked_reason"] is None
+    finally:
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            conn.execute("DELETE FROM actions WHERE id = %s", (action_id,))
 
 
 # ── (2) approve without credentials refuses fail-closed ─────────────────────────

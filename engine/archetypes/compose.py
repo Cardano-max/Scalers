@@ -344,6 +344,18 @@ _ALIAS: dict[str, str] = {
     "facebook": "fb",
 }
 
+#: Per-channel drafting directives folded into the draft_one prompt. A Facebook
+#: page post is NOT an IG caption: page-post voice, longer copy allowed. Channels
+#: without an entry keep the unchanged base prompt (ig/email behavior identical).
+_CHANNEL_STYLE: dict[str, str] = {
+    "fb": (
+        "Channel style — Facebook Page post: write in the studio's page-post voice "
+        "(conversational, speaking as the studio to its page followers). Longer "
+        "copy than an Instagram caption is fine; skip hashtag walls and end with "
+        "one clear call to action."
+    ),
+}
+
 
 def _draft_dispatch_node(state: CampaignState) -> dict[str, Any]:
     """Passthrough; the capped Send fan-out is the conditional edge after this."""
@@ -440,6 +452,7 @@ def _make_draft_one_node(team_store, dsn=None):
                 f"Campaign brief: {state.brief or state.archetype_id}",
                 f"Strategy:\n{state.strategy_text}",
                 variant_directive,
+                _CHANNEL_STYLE.get(channel, ""),
                 f"Produce one organic post for channel '{channel}'. Write the caption "
                 "in the BRAND VOICE above" + (
                     ", using ONLY the approved claims." if voice_block

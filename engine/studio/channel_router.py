@@ -2,8 +2,8 @@
 
 The supervisor must run the workflow the operator ASKED for — "send emails" → the
 email pipeline, "create an Instagram post" → the IG pipeline, "Facebook campaign"
-→ the FB pipeline, "run a campaign for this artist with attachments" → the
-artist/artwork pipeline — instead of always running the email agents.
+→ the FB page-post pipeline, "run a campaign for this artist with attachments" →
+the artist/artwork pipeline — instead of always running the email agents.
 
 Today the one dispatcher (:func:`studio.agui._execute_campaign_sync`) branches ONLY
 on ``lead_source == "provided"``; the compose spine ignores ``plan.channels`` and
@@ -11,10 +11,11 @@ every archetype bundles email, so email always runs. This module is the missing
 router: a PURE, unit-testable decision over the plan's real fields.
 
 HONESTY: a channel with no real supervisor-invoked run pipeline yet
-(Facebook — not even a modeled channel; artist/artwork attachments — only a
-standalone CLI drafter exists, nothing ingests attachments into a run) routes to a
-``built=False`` decision so the caller returns an HONEST "that pipeline isn't built
-yet" — never a fabricated email run dressed up as the requested one.
+(Messenger DMs — the FB connector hard-escalates every DM; artist/artwork
+attachments — only a standalone CLI drafter exists, nothing ingests attachments
+into a run) routes to a ``built=False`` decision so the caller returns an HONEST
+"that pipeline isn't built yet" — never a fabricated email run dressed up as the
+requested one.
 
 The router reads only plan fields (no I/O), so both the voice GO-gate and the chat
 button get the identical routing. Note the voice ``update_plan`` tool can set only
@@ -34,6 +35,11 @@ from typing import Any
 # IG drafting workflow (IG carousel/Reels), distinct from the email-outreach path.
 _INSTAGRAM_ARCHETYPE = "artist_spotlight"
 
+# The FB-first registered archetype a "Facebook campaign" intent runs through — a REAL
+# FB page-post drafting workflow (drafts stage HELD as channel 'fb'; the approve path
+# publishes via the FacebookConnector page-feed post behind the META_* credential gate).
+_FACEBOOK_ARCHETYPE = "facebook_post"
+
 
 class Pipeline(str, Enum):
     """The channel pipeline an operator request routes to."""
@@ -47,21 +53,26 @@ class Pipeline(str, Enum):
 # Which pipelines are BUILT as a supervisor-invoked run today (nmh.9 map):
 #   email      — _execute_provided_leads_sync / gmail  → BUILT end-to-end
 #   instagram  — compose spine IG archetypes            → BUILT (drafting, HELD)
-#   facebook   — no channel, no archetype, no ads path  → NOT BUILT
+#   facebook   — compose spine facebook_post archetype  → BUILT (page-post drafting,
+#                HELD; Messenger DMs stay hard-escalated, NOT a pipeline)
 #   artist/artwork — post_campaign.py standalone CLI    → NOT BUILT as a run
 _BUILT: dict[Pipeline, bool] = {
     Pipeline.EMAIL: True,
     Pipeline.INSTAGRAM: True,
-    Pipeline.FACEBOOK: False,
+    Pipeline.FACEBOOK: True,
     Pipeline.ARTIST_ARTWORK: False,
 }
 
+# Messenger = outbound DM. The FB connector HARD-ESCALATES every DM send (req E) and
+# no DM drafting pipeline exists, so a messenger ask stays an honest not-built — it
+# must never be quietly rewritten into a page post the operator didn't ask for.
+_MESSENGER_NOT_BUILT_REASON = (
+    "the Messenger DM pipeline isn't built — DMs are hard-escalated to a human and "
+    "there's no Messenger workflow to run. I won't fake a run; I can run a Facebook "
+    "page post, an Instagram post, or email instead."
+)
+
 _NOT_BUILT_REASON: dict[Pipeline, str] = {
-    Pipeline.FACEBOOK: (
-        "the Facebook campaign pipeline isn't built yet — Facebook isn't a modeled "
-        "channel and there's no Facebook posting/ads workflow to run. I won't fake a "
-        "run; upload the request as email or Instagram, or ask to have FB built."
-    ),
     Pipeline.ARTIST_ARTWORK: (
         "the standalone artist/artwork campaign pipeline isn't built yet as its own "
         "run. Artwork attach IS available inside the built pipelines: run it as an "
@@ -77,7 +88,7 @@ class RouteDecision:
     """The routing decision for a plan. ``built`` is False for a channel with no real
     supervisor-invoked pipeline yet — the caller returns an honest not-built response
     (no fabricated run). ``archetype_id`` is the compose archetype to force when the
-    pipeline runs through the posting spine (Instagram)."""
+    pipeline runs through the posting spine (Instagram / Facebook)."""
 
     pipeline: Pipeline
     built: bool
@@ -113,23 +124,24 @@ def route_pipeline(plan: Any) -> RouteDecision:
     Priority (most specific intent first) — a stated social channel wins over the
     email default so "create an Instagram post" never runs the email agents:
 
-      1. Facebook  → NOT BUILT (honest)
+      1. Messenger → NOT BUILT (honest) — DMs are hard-escalated, never a page post
       2. lead_source=='provided' → BUILT (email) — the per-lead outreach compliance
          path is never bypassed by an incidental social word in the goal; with
          ``attach_artwork`` it now ALSO runs the artwork top-pick gate (item 3), so
          it must precede the artwork rule
       3. artist/artwork/attachments (with NO built channel chosen) → NOT BUILT (honest)
       4. Instagram/Reels/Story → BUILT (compose IG archetype + artwork gate)
-      5. email/outreach → BUILT (email)
-      6. default → BUILT (email) — backward-compatible with today's behaviour
+      5. Facebook → BUILT (compose FB page-post archetype)
+      6. email/outreach → BUILT (email)
+      7. default → BUILT (email) — backward-compatible with today's behaviour
     """
     text = _text(plan)
     attach_artwork = bool(getattr(plan, "attach_artwork", False))
     lead_source = (getattr(plan, "lead_source", "") or "").strip().lower()
 
-    # 1. Facebook — explicit, and unbuildable in the current spine.
-    if _has(text, "facebook", "fb", "messenger"):
-        return RouteDecision(Pipeline.FACEBOOK, False, _NOT_BUILT_REASON[Pipeline.FACEBOOK])
+    # 1. Messenger — outbound DM: hard-escalated by the connector, no pipeline to run.
+    if _has(text, "messenger"):
+        return RouteDecision(Pipeline.FACEBOOK, False, _MESSENGER_NOT_BUILT_REASON)
 
     # 2. Provided leads (uploaded-CSV cohort) → the per-lead OUTREACH compliance path,
     #    BEFORE the social-channel AND artwork rules. lead_source='provided' means
@@ -173,7 +185,22 @@ def route_pipeline(plan: Any) -> RouteDecision:
             archetype_id=_INSTAGRAM_ARCHETYPE,
         )
 
-    # 5. Email — explicit.
+    # 5. Facebook — a real FB page-post drafting workflow via the compose spine,
+    #    pinned to the facebook_post archetype so the trace proves FB ran. Drafts
+    #    stage HELD as channel 'fb'; publishing stays behind the operator's
+    #    META_PAGE_TOKEN/META_PAGE_ID credential gate. AFTER the provided-leads rule
+    #    (like Instagram): an uploaded-lead plan mentioning facebook still runs the
+    #    per-lead compliance path, never an unrelated page post.
+    if _has(text, "facebook", "fb"):
+        return RouteDecision(
+            Pipeline.FACEBOOK,
+            True,
+            "Facebook post requested — running the FB page-post drafting pipeline "
+            f"(archetype {_FACEBOOK_ARCHETYPE}); nothing is sent (HELD).",
+            archetype_id=_FACEBOOK_ARCHETYPE,
+        )
+
+    # 6. Email — explicit.
     if _has(text, "email", "emails", "outreach", "newsletter", "gmail"):
         return RouteDecision(
             Pipeline.EMAIL,
@@ -181,7 +208,7 @@ def route_pipeline(plan: Any) -> RouteDecision:
             "email/outreach requested — running the email pipeline; nothing is sent (HELD).",
         )
 
-    # 5. Default — backward-compatible: the email/compose path today's callers expect.
+    # 7. Default — backward-compatible: the email/compose path today's callers expect.
     return RouteDecision(
         Pipeline.EMAIL,
         True,

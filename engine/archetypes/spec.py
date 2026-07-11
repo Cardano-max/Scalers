@@ -65,6 +65,7 @@ class Channel(str, Enum):
     IG = "ig"
     IG_STORIES = "ig_stories"
     REELS = "reels"
+    FB = "fb"                # Facebook Page feed post (publish folds 'fb' -> 'facebook')
     TIKTOK = "tiktok"
     META_PAID = "meta_paid"
 

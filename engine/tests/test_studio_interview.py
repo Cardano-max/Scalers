@@ -683,3 +683,38 @@ def test_sms_channel_block_stays_short() -> None:
 
     sms_fields = [f.rsplit(".", 1)[-1] for f, _ in CHANNEL_QUESTIONS["sms"]]
     assert sms_fields == ["goal", "audience", "output_count"]
+
+
+def test_fb_channel_block_stays_minimal_no_image_questions() -> None:
+    # The fb block is goal/audience/offer/count only — no image/competitor leaves
+    # (the artwork gate is IG plumbing; fb media attach is a follow-up).
+    from studio.interview import CHANNEL_QUESTIONS
+
+    fb_fields = [f.rsplit(".", 1)[-1] for f, _ in CHANNEL_QUESTIONS["fb"]]
+    assert fb_fields == ["goal", "audience", "offer", "output_count"]
+    for f, _q in CHANNEL_QUESTIONS["fb"]:
+        assert "image" not in f, f
+
+
+def test_two_channel_email_fb_plan_walks_both_blocks_in_order() -> None:
+    # A 2-channel ['email', 'facebook'] plan walks the WHOLE email block, then the
+    # WHOLE fb block (operator channel order, never interleaved) — answers land
+    # under plan.channel_plans['fb'] via the 'facebook' -> 'fb' key fold.
+    from studio.interview import CHANNEL_QUESTIONS
+
+    plan = _full_plan()
+    plan.channels = ["email", "facebook"]
+    q = next_question(plan)
+    assert q["field"] == "channel_plans.email.goal"
+    assert q["channel"] == "email"
+    asked: list[str] = []
+    for _ in range(30):
+        q = next_question(plan)
+        if q is None or not q["field"].startswith("channel_plans."):
+            break
+        asked.append(q["field"])
+        apply_fields(plan, {q["field"]: _channel_answer(q["field"])})
+    expected = [f for f, _ in CHANNEL_QUESTIONS["email"]] + [f for f, _ in CHANNEL_QUESTIONS["fb"]]
+    assert asked == expected
+    assert plan.channel_plans["fb"]["output_count"] == 3
+    assert plan.channel_plans["fb"]["goal"] == "a concrete channel answer"

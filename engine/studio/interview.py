@@ -181,6 +181,19 @@ CHANNEL_QUESTIONS: dict[str, tuple[tuple[str, str], ...]] = {
         ("channel_plans.email.output_count",
          "How many emails should the team create?"),
     ),
+    "fb": (
+        ("channel_plans.fb.goal",
+         "Now the Facebook questions — what should the Facebook page post achieve? "
+         "(for example: show off fresh work, promote a flash day, or drive bookings)"),
+        ("channel_plans.fb.audience",
+         "Who is the Facebook post for — your page followers, locals, or fans of a "
+         "particular style?"),
+        ("channel_plans.fb.offer",
+         "What's the ask in the Facebook post — a booking link, an offer, or just "
+         "'message us to book'?"),
+        ("channel_plans.fb.output_count",
+         "How many Facebook posts should the team create?"),
+    ),
     "sms": (
         ("channel_plans.sms.goal",
          "And the text messages — what should the SMS side achieve? "
@@ -193,7 +206,9 @@ CHANNEL_QUESTIONS: dict[str, tuple[tuple[str, str], ...]] = {
 }
 
 # Human labels for the panel's per-channel sections ("Instagram · goal").
-CHANNEL_PLAN_LABELS: dict[str, str] = {"ig": "Instagram", "email": "Email", "sms": "SMS"}
+CHANNEL_PLAN_LABELS: dict[str, str] = {
+    "ig": "Instagram", "fb": "Facebook", "email": "Email", "sms": "SMS",
+}
 
 # The full leaf vocabulary a channel entry may carry (the cross-builder contract):
 # not every channel ASKS every leaf, but apply_fields accepts any of them.
@@ -204,10 +219,10 @@ CHANNEL_PLAN_FIELDS: tuple[str, ...] = (
 _CHANNEL_BOOL_LEAVES = frozenset({"attach_images", "competitor_research"})
 _CHANNEL_INT_LEAVES = frozenset({"output_count"})
 
-# plan.channels canonical names -> the channel_plans key ('ig'|'email'|'sms').
-# Facebook has no per-channel block yet, so it maps to nothing (no fake questions).
+# plan.channels canonical names -> the channel_plans key ('ig'|'fb'|'email'|'sms').
 _CHANNEL_PLAN_KEYS: dict[str, str] = {
-    "ig": "ig", "instagram": "ig", "email": "email", "sms": "sms",
+    "ig": "ig", "instagram": "ig", "fb": "fb", "facebook": "fb",
+    "email": "email", "sms": "sms",
 }
 
 
@@ -237,8 +252,8 @@ def interview_channels(plan: Any) -> list[str]:
     """The per-channel blocks THIS plan interviews, in the operator's chosen channel
     order. Active only for a MULTI-channel plan (len(channels) > 1) or once any
     ``channel_plans`` entry exists; a plain single-channel plan keeps the flat
-    interview unchanged (regression-safe). Channels without a block (e.g. facebook)
-    are skipped — no fabricated questions."""
+    interview unchanged (regression-safe). Channels without a block are skipped —
+    no fabricated questions."""
     channels = [
         str(c).strip().lower() for c in (getattr(plan, "channels", None) or []) if str(c).strip()
     ]

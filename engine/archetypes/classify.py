@@ -70,7 +70,8 @@ def _instructions(descriptor: str) -> str:
         f"Registered archetypes:\n{menu}\n\n"
         "Guidance: a new artist / new style capability to promote -> artist_spotlight; "
         "a calendar date / holiday / observance tie-in -> holiday; bringing back lapsed "
-        "or inactive past customers -> win_back. Choose by the PRIMARY intent of the "
+        "or inactive past customers -> win_back; an explicit Facebook page post / "
+        "Facebook campaign ask -> facebook_post. Choose by the PRIMARY intent of the "
         "brief. Give one concrete sentence of rationale grounded in the brief's words."
     )
 

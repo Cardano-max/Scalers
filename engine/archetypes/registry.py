@@ -1,12 +1,13 @@
-"""The CAMPAIGN-TYPE registry — the 3 Phase-A anchor rows (§2, §6 Phase A).
+"""The CAMPAIGN-TYPE registry — the Phase-A anchor rows (§2, §6 Phase A).
 
 Each row is a versioned :class:`~archetypes.spec.ArchetypeSpec` composed from the
 B-block vocabulary. Phase A ships the three highest-value, lowest-gate types
-(§6 Phase A):
+(§6 Phase A) plus the operator-triggered Facebook page-post row:
 
   1. ``artist_spotlight`` — entity event, IG carousel/Reels, pure organic.
   2. ``holiday``          — cron, curated observances, relevance-gated.
   3. ``win_back``         — behavioral threshold, SMS+email multi-touch (HELD until A2P).
+  4. ``facebook_post``    — operator "Facebook campaign" ask, FB Page feed post, organic.
 
 A registered id is the ONLY thing the classifier may emit (Enum-validated against
 ``REGISTRY`` keys) — it can pick a registered route, never invent one. New types =
@@ -115,9 +116,35 @@ WIN_BACK = ArchetypeSpec(
 )
 
 
+FACEBOOK_POST = ArchetypeSpec(
+    id="facebook_post",
+    version=1,
+    trigger=TriggerClass.OPERATOR,         # studio ask: "Facebook campaign"
+    schedule=None,                         # on-demand (operator command)
+    # B1 trigger -> B3 RAG (brand voice/portfolio) -> B6 angle -> B7 FB page post
+    # (+ email companion) -> B8 -> B9 -> B10 -> B11 HELD -> B14.
+    steps_enabled={
+        StepKind.B1_TRIGGER, StepKind.B3_RAG,
+        *_SHARED_MIDDLE, *_CORE,
+    },
+    fanout_key=None,                       # per-channel draft_many only
+    fanout_cap=2,                          # FB page post + email
+    channels=[Channel.FB, Channel.EMAIL],
+    offer_schema_id=None,                  # organic page post, not an offer
+    rubric_id="rubric.facebook_post",
+    gates=GateSet(
+        approval_tier="hold",
+        citations_required=False,          # organic, RAG-grounded (no live web fact required)
+        consent_required=False,            # organic channel (page feed, never DMs)
+        skills_allowed=(),                 # 0 REGISTERED skills -> base cells only
+    ),
+    success_metric="page_engagement_reach + bookings_from_facebook",
+)
+
+
 # The registry keyed by id. The classifier may ONLY emit one of these keys.
 REGISTRY: dict[str, ArchetypeSpec] = {
-    s.id: s for s in (ARTIST_SPOTLIGHT, HOLIDAY, WIN_BACK)
+    s.id: s for s in (ARTIST_SPOTLIGHT, HOLIDAY, WIN_BACK, FACEBOOK_POST)
 }
 
 

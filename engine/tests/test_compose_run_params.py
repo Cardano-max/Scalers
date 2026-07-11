@@ -104,3 +104,18 @@ def test_gmail_alias_matches_spec_email_channel():
         output_count=2, plan_channels=["gmail"],
     )
     assert _planned_channels(st) == ["email", "email"]
+
+
+def test_facebook_alias_constrains_fb_archetype_to_fb_channel():
+    """'facebook' (the interview's canonical channel word) folds to the spec's 'fb'
+    channel: a facebook-only ask on the facebook_post spec (FB+EMAIL) drafts ONLY
+    fb — never a surprise email from the spec menu."""
+    assert _planned_channels(
+        _state("facebook_post", plan_channels=["facebook"])
+    ) == ["fb"]
+    # 3 drafts on the fb-only constraint -> 3 fb drafts.
+    assert _planned_channels(
+        _state("facebook_post", output_count=3, plan_channels=["facebook"])
+    ) == ["fb", "fb", "fb"]
+    # unconstrained default: one draft per spec channel (fb + email companion).
+    assert _planned_channels(_state("facebook_post")) == ["fb", "email"]

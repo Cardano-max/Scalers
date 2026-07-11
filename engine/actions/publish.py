@@ -12,9 +12,11 @@ calls :func:`reject`. Connector selection is by the action's ``channel``:
   ``META_PAGE_TOKEN`` + ``META_PAGE_ID`` for facebook — and REFUSES fail-closed
   (:class:`MetaCredentialsMissingError`, BEFORE the exactly-once claim, so the
   draft STAYS PENDING in the ready queue with the reason on ``last_error``).
-  With credentials present the post routes to the :func:`publish_to_meta` seam,
-  which deliberately raises ``NotImplementedError`` until the operator's
-  credentials are verified — **never a fake publish, never a silent drop**.
+  With credentials present the post routes to the :func:`publish_to_meta` seam
+  (operator-credentialed IG/FB Graph connectors; a facebook post carries its
+  staged media — video → ``/videos``, image → ``/photos``, else text ``/feed`` —
+  resolved by :func:`_resolve_fb_media`, never someone else's media, never a
+  silent downgrade of promised artwork).
   An injected test connector bypasses the env gate exactly like every other
   channel's test seam (``connectors={"instagram": fake}``). Comment REPLIES are
   NOT governed by this gate: the engagement reply connector reads its own env
@@ -796,37 +798,104 @@ def publish_to_meta(
             conn.send(
                 action.idempotency_key or action.id,
                 "facebook_feed",
-                {"message": action.draft or ""},
+                _fb_payload(action, image_url=image_url, video_url=video_url),
             )
         )
     raise NotImplementedError(f"meta publish not implemented for channel {channel!r}")
 
 
+def _fb_payload(
+    action: ActionRow, *, image_url: str | None = None, video_url: str | None = None
+) -> dict[str, Any]:
+    """The FB connector payload for a page post: the caption plus AT MOST ONE staged
+    media URL. Priority video > image (a staged video asset is the primary media);
+    neither set = a text-only /feed post."""
+    payload: dict[str, Any] = {"message": action.draft or ""}
+    if video_url:
+        payload["video_url"] = video_url
+    elif image_url:
+        payload["image_url"] = image_url
+    return payload
+
+
+def _resolve_fb_media(action: ActionRow) -> tuple[str | None, str | None, str, str | None]:
+    """Resolve the PER-ACTION media for a FACEBOOK page post; returns
+    ``(video_url, image_url, source, error)`` — at most one URL set, and both
+    ``None`` with no error meaning an honest TEXT-ONLY ``/feed`` post.
+
+    Priority (a staged video asset is the primary media):
+
+    1. an explicit staged VIDEO URL (``context.artwork.videoUrl``/``video_url``,
+       or top-level ``video_url``/``videoUrl``/``public_video_url`` — the same
+       vocabulary the IG reels resolver reads) → the ``/videos`` publish;
+    2. a staged IMAGE — an explicit public URL on the context, or a promised
+       artifact id + ``PUBLIC_ASSET_BASE_URL`` (reuses :func:`_resolve_ig_image_url`)
+       → the ``/photos`` publish;
+    3. a promised artifact with NO way to serve it publicly → the concrete
+       ``artifact_not_public`` refusal. A draft that promised specific media is
+       NEVER silently downgraded to a text post;
+    4. no per-action media at all → text-only ``/feed``. Deliberately NO
+       ``DEMO_IG_IMAGE_URL`` fallback: a page post never publishes the global demo
+       image in place of nothing."""
+    ctx = _action_context(action)
+    candidates: list[Any] = []
+    art = ctx.get("artwork")
+    if isinstance(art, dict):
+        candidates += [art.get(k) for k in ("videoUrl", "video_url")]
+    candidates += [ctx.get(k) for k in ("video_url", "videoUrl", "public_video_url")]
+    for v in candidates:
+        if isinstance(v, str) and v.strip().lower().startswith(("http://", "https://")):
+            return v.strip(), None, "context_video_url", None
+    image_url, source, err = _resolve_ig_image_url(action)
+    if source in ("context_url", "public_asset_base"):
+        return None, image_url, source, None
+    if source == "artifact_not_public":
+        # Promised media that cannot be served publicly — fail honestly (never a
+        # silent text downgrade); same contract as the IG artifact_not_public path.
+        return None, None, source, err
+    # source in ("demo_env", "none"): no media staged for THIS draft — text-only.
+    return None, None, "none", None
+
+
 def _publish_facebook(action: ActionRow, connector: Any | None, dsn: str | None) -> ActionRow:
+    video_url, image_url, media_source, media_err = _resolve_fb_media(action)
+    if media_err is not None:
+        _record_send_audit_row(
+            action, mode="live", result="failed", transport="facebook-graph",
+            detail=media_err, dsn=dsn,
+        )
+        return update_status(action.id, "failed", dsn=dsn, last_error=media_err)
+    _log.info(
+        "fb publish: action=%s media source=%s video=%s image=%s",
+        action.id, media_source, video_url, image_url,
+    )
     try:
         if connector is None:
             # REAL path with Meta credentials present (the credential gate already
-            # cleared): the Graph publish is a deliberate seam until the operator's
-            # credentials are verified — it raises, and the honest failure lands
-            # below. No real Graph call is attempted here.
-            result = publish_to_meta(action, channel="facebook")
+            # cleared): the operator-credentialed FacebookConnector publishes the
+            # page post (/videos, /photos, or /feed by staged media). A connector/
+            # Graph failure lands below honestly.
+            result = publish_to_meta(
+                action, channel="facebook", image_url=image_url, video_url=video_url
+            )
         else:
             _ensure_real(connector)  # real-only: a mock never live-sends
             raw = connector.send(
                 action.idempotency_key or action.id,
                 "facebook_feed",
-                {"message": action.draft},
+                _fb_payload(action, image_url=image_url, video_url=video_url),
             )
             result = _resolve(raw)
     except Exception as exc:  # noqa: BLE001 — surface the REAL reason, never fake success
         _record_send_audit_row(
             action, mode="live", result="failed", transport="facebook-graph",
-            detail=str(exc), dsn=dsn,
+            detail=f"{exc} (media source={media_source})", dsn=dsn,
         )
         return update_status(action.id, "failed", dsn=dsn, last_error=str(exc))
     _record_send_audit_row(
         action, mode="live", result="sent", transport="facebook-graph",
-        provider_id=getattr(result, "provider_id", None), dsn=dsn,
+        provider_id=getattr(result, "provider_id", None),
+        detail=f"media source={media_source}", dsn=dsn,
     )
     return update_status(
         action.id, "sent", dsn=dsn,

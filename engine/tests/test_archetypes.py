@@ -17,10 +17,29 @@ from archetypes.registry import ArchetypeId
 from archetypes.spec import ArchetypeSpec, Channel, GateSet, StepKind, TriggerClass
 
 
-def test_registry_has_three_anchor_types():
-    assert set(registry.ids()) == {"artist_spotlight", "holiday", "win_back"}
+def test_registry_has_the_anchor_types():
+    assert set(registry.ids()) == {
+        "artist_spotlight", "holiday", "win_back", "facebook_post",
+    }
     for spec in registry.REGISTRY.values():
         assert isinstance(spec, ArchetypeSpec)
+
+
+def test_facebook_post_spec_is_registered_with_a_valid_spine_path():
+    # The FB page-post archetype the channel router pins: FB-first channels, the
+    # approve-first core, and a spine path made only of pre-declared nodes
+    # (plan -> strategy -> draft fan-out -> critique -> route -> queue; B2 off).
+    spec = registry.get("facebook_post")
+    assert spec.channels[0] is Channel.FB and Channel.FB.value == "fb"
+    assert Channel.EMAIL in spec.channels
+    assert spec.gates.approval_tier == "hold"
+    assert spec.gates.consent_required is False  # organic page feed, never DMs
+    path = router.enabled_path(spec)
+    assert set(path) <= router.SPINE_NODES
+    assert "research" not in path  # B2 off by default (force_research still works)
+    for node in ("plan", "strategy", "draft_dispatch", "draft_one", "critique",
+                 "route", "queue"):
+        assert node in path
 
 
 def test_every_spec_composes_the_approve_first_core():

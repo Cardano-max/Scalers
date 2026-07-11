@@ -244,7 +244,7 @@ class CampaignPlan(BaseModel):
     # exactly these people" is a plan state, not a lucky cohort overlap.
     leads: list[str] = Field(default_factory=list)
     # --- multi-channel campaigns: ONE launch, PER-CHANNEL isolation ---------------- #
-    # Per-channel OVERRIDES keyed by channel id ('ig' | 'email' | 'sms'). Each value
+    # Per-channel OVERRIDES keyed by channel id ('ig' | 'fb' | 'email' | 'sms'). Each value
     # is that channel's own brief — collected by the per-channel interview blocks
     # (studio.interview.CHANNEL_QUESTIONS, so Instagram questions are not email
     # questions) and applied over the shared top-level fields when the launch fans
@@ -1302,7 +1302,7 @@ async def revise_plan(
 
     For a MULTI-channel campaign where a channel gets its OWN goal / audience /
     count / offer / tone, pass ``channel_plans`` keyed by channel id ('ig' |
-    'email' | 'sms') — merged PER CHANNEL onto the existing overrides, so setting
+    'fb' | 'email' | 'sms') — merged PER CHANNEL onto the existing overrides, so setting
     one channel never erases another's. The launch then runs one isolated child
     per channel with these overrides applied."""
     plan = ctx.deps.state
@@ -1721,9 +1721,10 @@ def _execute_campaign_sync(
 
     # CHANNEL ROUTING (nmh.9 / spec §16): pick the workflow from the operator's REQUEST
     # — 'send emails' → email, 'create an Instagram post' → the IG spine, 'Facebook
-    # campaign' / 'artist with attachments' → an HONEST "not built yet" (no fake run) —
-    # instead of always running the email agents. Runs BEFORE the lead-source branch so
-    # it fronts both the voice GO-gate and the /studio/run button.
+    # campaign' → the FB page-post spine, 'artist with attachments' → an HONEST "not
+    # built yet" (no fake run) — instead of always running the email agents. Runs
+    # BEFORE the lead-source branch so it fronts both the voice GO-gate and the
+    # /studio/run button.
     from studio.channel_router import Pipeline, not_built_summary, route_pipeline
 
     decision = route_pipeline(plan)
@@ -1753,10 +1754,15 @@ def _execute_campaign_sync(
 
     from studio.campaign_runner import run_and_trace
 
-    # Instagram pins the IG-first archetype so the traced run is genuinely the IG
-    # workflow (archetype + channels prove it), not the email path. Email/default keeps
-    # today's campaign_type-driven archetype selection.
-    force_archetype = decision.archetype_id if decision.pipeline is Pipeline.INSTAGRAM else None
+    # Instagram / Facebook pin their channel-first archetype so the traced run is
+    # genuinely the requested workflow (archetype + channels prove it — IG spine or
+    # FB page-post spine), not the email path. Email/default keeps today's
+    # campaign_type-driven archetype selection.
+    force_archetype = (
+        decision.archetype_id
+        if decision.pipeline in (Pipeline.INSTAGRAM, Pipeline.FACEBOOK)
+        else None
+    )
 
     brief = _brief_from_plan(plan)
     ig_artwork: dict[str, Any] | None = None

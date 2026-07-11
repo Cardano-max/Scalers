@@ -76,22 +76,50 @@ class FacebookConnector(GatedConnector):
                 "facebook connector missing key-from-pack page_token/app_secret/page_id"
             )
 
-        # FB Page feed post (the dev-smoke target): POST /{page_id}/feed with the
-        # message. appsecret_proof on EVERY Graph call; token + proof in the POST
-        # BODY, never the URL (sec req B/C). `key` is the idempotency token.
+        # FB Page publish: /feed for text, /photos when the payload stages an image
+        # URL, /videos when it stages a video URL (priority video > image > text —
+        # a staged video asset is the primary media). appsecret_proof on EVERY
+        # Graph call; token + proof in the POST BODY, never the URL (sec req B/C).
+        # `key` is the idempotency token.
         message = payload.get("message") or payload.get("caption") or ""
         if not message:
             raise RuntimeError("facebook feed post requires a 'message'")
         proof = appsecret_proof(self._app_secret, self._page_token)
-        fields = {
-            "message": message,
-            "access_token": self._page_token,   # body, not ?access_token=
-            "appsecret_proof": proof,
-        }
-        if payload.get("link"):
-            fields["link"] = payload["link"]
+        video_url = payload.get("video_url")
+        image_url = payload.get("image_url") or payload.get("photo_url")
+        if video_url:
+            # Page VIDEO post: Meta ingests the file server-side ASYNC — a 2xx
+            # returns the video id while transcoding continues. The honest contract
+            # is "accepted for processing, id X"; we never poll-fake a published
+            # permalink.
+            fields = {
+                "file_url": video_url,
+                "description": message,
+                "access_token": self._page_token,   # body, not ?access_token=
+                "appsecret_proof": proof,
+            }
+            endpoint = "videos"
+        elif image_url:
+            # Page PHOTO post: Graph pulls the image from the (public) URL and the
+            # caption rides alongside it.
+            fields = {
+                "url": image_url,
+                "caption": message,
+                "access_token": self._page_token,   # body, not ?access_token=
+                "appsecret_proof": proof,
+            }
+            endpoint = "photos"
+        else:
+            fields = {
+                "message": message,
+                "access_token": self._page_token,   # body, not ?access_token=
+                "appsecret_proof": proof,
+            }
+            if payload.get("link"):
+                fields["link"] = payload["link"]
+            endpoint = "feed"
         body = json.dumps(fields).encode("utf-8")
-        path = f"/{_GRAPH_VERSION}/{self._page_id}/feed"
+        path = f"/{_GRAPH_VERSION}/{self._page_id}/{endpoint}"
         resp = self._secure_request(
             api_base=GRAPH_API_BASE, host=_GRAPH_HOST, method="POST", path=path,
             headers={

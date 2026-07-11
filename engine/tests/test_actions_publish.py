@@ -202,6 +202,107 @@ def test_facebook_success_path_marks_published(patched_store):
     assert out.deep_link == "https://www.facebook.com/1789_456"
 
 
+# ── FB channel alias + staged-media resolution (page photo/video/text posts) ────
+
+
+def test_fb_alias_hits_facebook_credential_gate_not_unknown_channel(patched_store, monkeypatch):
+    # 'fb' rows (the campaign spine's Channel.FB value) must route to the FACEBOOK
+    # credential gate — never fall through to "unknown channel 'fb'".
+    for k in ("META_PAGE_TOKEN", "META_PAGE_ID"):
+        monkeypatch.delenv(k, raising=False)
+    patched_store(_pending(channel="fb", type="post", id="act_fbalias1"))
+    with pytest.raises(publish.MetaCredentialsMissingError) as exc:
+        approve_and_publish("act_fbalias1")
+    assert "META_PAGE_TOKEN" in str(exc.value)
+    assert "META_PAGE_ID" in str(exc.value)
+
+
+def test_fb_alias_success_path_posts_text_to_feed(patched_store, monkeypatch):
+    # An approved 'fb' draft with NO staged media publishes text-only through the
+    # facebook connector ('facebook_feed', message-only payload) and stages 'sent'.
+    monkeypatch.delenv("DEMO_IG_IMAGE_URL", raising=False)
+    patched_store(_pending(channel="fb", type="post", id="act_fbalias2"))
+    fb = _FakeFacebook(result=ProviderResult(
+        provider_id="1789_777", deep_link="https://www.facebook.com/1789_777"))
+    out = approve_and_publish("act_fbalias2", connectors={"facebook": fb})
+
+    assert out.status == "sent"
+    assert out.outcome_label == "Published"
+    key, channel, payload = fb.calls[0]
+    assert channel == "facebook_feed"
+    assert payload == {"message": "Hello from Ladies First"}  # text-only: no media keys
+
+
+def test_fb_with_staged_image_publishes_photo_payload(patched_store):
+    import json as _json
+
+    patched_store(_pending(
+        channel="fb", type="post", id="act_fbimg",
+        context=_json.dumps({"artwork": {"publicUrl": "https://img.example/peony.jpg"}}),
+    ))
+    fb = _FakeFacebook(result=ProviderResult(provider_id="1789_888"))
+    out = approve_and_publish("act_fbimg", connectors={"facebook": fb})
+
+    assert out.status == "sent"
+    _key, _channel, payload = fb.calls[0]
+    assert payload["image_url"] == "https://img.example/peony.jpg"
+    assert "video_url" not in payload
+    assert payload["message"] == "Hello from Ladies First"
+
+
+def test_fb_with_staged_video_wins_over_image(patched_store):
+    # Priority video > image: a reel-style staged asset is the primary media.
+    import json as _json
+
+    patched_store(_pending(
+        channel="fb", type="post", id="act_fbvid",
+        context=_json.dumps({"artwork": {
+            "videoUrl": "https://vid.example/session.mp4",
+            "publicUrl": "https://img.example/still.jpg",
+        }}),
+    ))
+    fb = _FakeFacebook(result=ProviderResult(provider_id="1789_999"))
+    out = approve_and_publish("act_fbvid", connectors={"facebook": fb})
+
+    assert out.status == "sent"
+    _key, _channel, payload = fb.calls[0]
+    assert payload["video_url"] == "https://vid.example/session.mp4"
+    assert "image_url" not in payload
+
+
+def test_fb_promised_artifact_without_public_base_fails_honestly(patched_store, monkeypatch):
+    # A draft that PROMISED specific artwork (artifact id) with no way to serve it
+    # publicly fails with the concrete reason — NEVER a silent text-only downgrade.
+    import json as _json
+
+    monkeypatch.delenv("PUBLIC_ASSET_BASE_URL", raising=False)
+    monkeypatch.delenv("DEMO_IG_IMAGE_URL", raising=False)
+    patched_store(_pending(
+        channel="fb", type="post", id="act_fbart",
+        context=_json.dumps({"attachment_artifact_id": "artf_123"}),
+    ))
+    fb = _FakeFacebook(result=ProviderResult(provider_id="nope"))
+    out = approve_and_publish("act_fbart", connectors={"facebook": fb})
+
+    assert out.status == "failed"
+    assert "artf_123" in (out.last_error or "")
+    assert "not publicly served" in (out.last_error or "")
+    assert fb.calls == []  # no publish attempted without the promised media
+
+
+def test_fb_never_uses_the_global_demo_image_fallback(patched_store, monkeypatch):
+    # DEMO_IG_IMAGE_URL is the IG demo fallback — a page post with no staged media
+    # posts TEXT, it never publishes the global demo image in place of nothing.
+    monkeypatch.setenv("DEMO_IG_IMAGE_URL", "https://demo.example/global.jpg")
+    patched_store(_pending(channel="fb", type="post", id="act_fbdemo"))
+    fb = _FakeFacebook(result=ProviderResult(provider_id="1789_000"))
+    out = approve_and_publish("act_fbdemo", connectors={"facebook": fb})
+
+    assert out.status == "sent"
+    _key, _channel, payload = fb.calls[0]
+    assert "image_url" not in payload and "video_url" not in payload
+
+
 def test_instagram_post_without_image_fails_honestly(patched_store, monkeypatch):
     # With operator Meta credentials present (the ready-queue credential gate
     # passes), a post with no public image source still fails HONESTLY with a
