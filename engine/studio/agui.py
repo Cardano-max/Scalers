@@ -1531,10 +1531,27 @@ def _summary_text(summary: dict[str, Any]) -> str:
 
 def _use_provided_leads(plan: CampaignPlan) -> bool:
     """The hard compliance branch: True iff the operator chose to use ONLY their own
-    leads (uploaded CSV / existing DB) rather than sourcing new ones from the web."""
+    leads (uploaded CSV / existing DB) rather than sourcing new ones from the web.
+
+    DETERMINISTIC, not model-dependent: besides the explicit interview answer
+    (``lead_source='provided'``), any plan state that can ONLY mean "my own
+    people" selects this path — the operator NAMED leads, asked for per-lead
+    messages, or asked the team to read their imported conversation threads.
+    A real operator said "pick them from the imported conversation threads,
+    use their real conversations" and the run still executed the generic
+    win_back TEMPLATE (one niche researcher, no analyst, recipientless drafts)
+    because the voice host had set every field EXCEPT lead_source."""
     from studio.interview import LEAD_SOURCE_PROVIDED
 
-    return (plan.lead_source or "").strip().lower() == LEAD_SOURCE_PROVIDED
+    if (plan.lead_source or "").strip().lower() == LEAD_SOURCE_PROVIDED:
+        return True
+    if [h for h in (plan.leads or []) if (h or "").strip()]:
+        return True  # operator-picked people — never a template blast
+    if plan.use_conversation_history is True:
+        return True  # "use their real conversations" = per-lead over MY threads
+    if plan.per_lead is True:
+        return True  # one personalized message per lead = per-lead executor
+    return False
 
 
 def plan_campaign(plan: CampaignPlan, tenant_id: str, dsn: str | None) -> Any:
@@ -1739,6 +1756,9 @@ def _execute_campaign_sync(
         force_research=bool(plan.deep_research),
         output_count=plan.output_count or 0,
         campaign_type=plan.campaign_type or None,
+        # The operator's answered channels constrain the archetype fan-out —
+        # 'email channel, three drafts' must never emit SMS from the spec menu.
+        plan_channels=list(plan.channels or []),
     )
     summary["routed_channel"] = decision.channel
     summary["pipeline_built"] = True

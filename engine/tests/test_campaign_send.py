@@ -306,3 +306,17 @@ def test_override_audits_then_sends_through_approve_path(monkeypatch):
 # Whole module needs a live Postgres (ENGINE_DATABASE_URL): it runs in the CI
 # integration lane (schema applied via initdb + bootstrap), not the DB-free unit lane.
 pytestmark = pytest.mark.integration
+
+
+def test_recipientless_sms_is_never_eligible():
+    """A staged SMS with no phone number read as 'safe to send' while the same
+    recipientless EMAIL was held — both must hold."""
+    from types import SimpleNamespace
+
+    from studio.campaign_send import eligibility
+
+    sms = SimpleNamespace(status="pending", conf=0.95, threshold=0.8,
+                          esc_kind="", channel="sms", target=None, id="a1")
+    ok, reason = eligibility(sms)
+    assert ok is False
+    assert "phone" in reason
