@@ -125,6 +125,11 @@ class CampaignState(BaseModel):
     # plan that asks for 10 drafts gets 10, not the per-channel default.
     force_research: bool = False
     output_count: int = 0
+    # The operator's ANSWERED channel list ('email channel' in the interview).
+    # When set, the draft fan-out is constrained to these channels — the spec's
+    # channel menu is a default, not an override of what the operator asked for
+    # (a real email-only ask produced 2 SMS + 1 email from the win_back spec).
+    plan_channels: list[str] = Field(default_factory=list)
     # Per-worker channel, set on the Send payload for a draft_one worker. Workers
     # never write it back, so there is no concurrent-write conflict at fan-in.
     channel: str = ""
@@ -308,12 +313,36 @@ def _planned_channels(state: CampaignState) -> list[str]:
     in the interview): exactly N drafts, round-robined across the spec's channels and
     bounded by :func:`output_hard_cap` (default :data:`_OUTPUT_HARD_CAP`, env-
     overridable via ``SCALERS_OUTPUT_HARD_CAP``). So "10 emails" on an email-only
-    plan yields 10 email drafts; "10" across IG+email yields 5 + 5."""
+    plan yields 10 email drafts; "10" across IG+email yields 5 + 5.
+
+    The OPERATOR'S answered channels constrain the menu: 'email channel, three
+    drafts' on the win_back spec (SMS+EMAIL) must yield 3 EMAIL drafts, never a
+    2-SMS/1-email mix. An operator channel outside the spec's menu is ignored
+    (the spec still bounds what this archetype can produce); an empty
+    intersection falls back to the spec so the run never dies channel-less."""
     spec = registry.get(state.archetype_id)
     chosen = [c.value for c in spec.channels[: spec.fanout_cap]] or ["ig"]
+    wanted = {
+        _ALIAS.get(w.strip().lower(), w.strip().lower())
+        for w in (state.plan_channels or []) if (w or "").strip()
+    }
+    if wanted:
+        constrained = [c for c in chosen if _ALIAS.get(c, c) in wanted]
+        if constrained:
+            chosen = constrained
     n = state.output_count if (state.output_count and state.output_count > 0) else len(chosen)
     n = max(1, min(int(n), output_hard_cap()))
     return [chosen[i % len(chosen)] for i in range(n)]
+
+
+#: Channel-name folding for the operator's spoken/typed channel words vs the
+#: spec's Channel enum values ('gmail'/'email', 'ig'/'instagram').
+_ALIAS: dict[str, str] = {
+    "gmail": "email", "email": "email",
+    "instagram": "ig", "ig": "ig",
+    "reels": "reels", "sms": "sms", "tiktok": "tiktok", "fb": "fb",
+    "facebook": "fb",
+}
 
 
 def _draft_dispatch_node(state: CampaignState) -> dict[str, Any]:
@@ -678,6 +707,7 @@ def run_campaign(
     *, archetype_id: str, tenant_id: str, brief: str = "",
     campaign_id: str | None = None, dsn: str | None = None, persist: bool = True,
     run_id: str | None = None, force_research: bool = False, output_count: int = 0,
+    plan_channels: list[str] | None = None,
     checkpointer=None,
 ) -> CampaignState:
     """Classify-free direct run for a KNOWN archetype id, in-process to completion.
@@ -716,6 +746,7 @@ def run_campaign(
         campaign_id=campaign_id, run_id=run_id, tenant_id=tenant_id,
         archetype_id=archetype_id, brief=brief,
         force_research=force_research, output_count=output_count,
+        plan_channels=[c for c in (plan_channels or []) if (c or "").strip()],
     )
 
     # A caller-supplied checkpointer owns its own lifecycle (don't manage it here).

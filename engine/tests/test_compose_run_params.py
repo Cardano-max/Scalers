@@ -71,3 +71,36 @@ def test_output_count_is_hard_capped() -> None:
     assert len(capped) == _OUTPUT_HARD_CAP
     # and never goes below 1
     assert len(_planned_channels(_state("artist_spotlight", output_count=-5))) >= 1
+
+
+def test_operator_channels_constrain_the_archetype_menu():
+    """'email channel, three drafts' on the win_back spec (SMS+EMAIL) must yield
+    3 EMAIL drafts — a real run produced 2 SMS + 1 email for an email-only ask."""
+    from archetypes.compose import CampaignState, _planned_channels
+
+    st = CampaignState(
+        campaign_id="c", run_id="r", tenant_id="t", archetype_id="win_back",
+        output_count=3, plan_channels=["email"],
+    )
+    assert _planned_channels(st) == ["email", "email", "email"]
+
+
+def test_unknown_operator_channel_falls_back_to_spec_menu():
+    from archetypes.compose import CampaignState, _planned_channels
+
+    st = CampaignState(
+        campaign_id="c", run_id="r", tenant_id="t", archetype_id="win_back",
+        output_count=2, plan_channels=["carrier-pigeon"],
+    )
+    # Empty intersection -> the spec menu still drives (never a channel-less run).
+    assert len(_planned_channels(st)) == 2
+
+
+def test_gmail_alias_matches_spec_email_channel():
+    from archetypes.compose import CampaignState, _planned_channels
+
+    st = CampaignState(
+        campaign_id="c", run_id="r", tenant_id="t", archetype_id="win_back",
+        output_count=2, plan_channels=["gmail"],
+    )
+    assert _planned_channels(st) == ["email", "email"]

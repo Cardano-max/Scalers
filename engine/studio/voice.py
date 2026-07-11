@@ -221,6 +221,23 @@ def voice_run_status_snapshot(
     out["runId"] = run_id
     if run_id:
         try:
+            from studio.live_state import get_runs_registry
+
+            reg = get_runs_registry().get(run_id) or {}
+            out["runStatus"] = str(reg.get("status") or "unknown")
+        except Exception:
+            out["runStatus"] = "unknown"
+        if out["runStatus"] not in ("completed", "failed", "error", "not_built"):
+            # A real operator was told "run completed, no drafts staged" while the
+            # run was still writing its drafts — the snapshot must carry the truth
+            # that counts can still GROW so the narrator never reads a mid-write
+            # zero as a final zero.
+            out["stagingNote"] = (
+                "The run is still executing — drafts may still be staging. Say the "
+                "team is still working; NEVER state a final draft count until "
+                "runStatus is 'completed'."
+            )
+        try:
             out["drafts"] = finalized_leads(tenant_id, run_id, dsn=dsn)
         except Exception as exc:
             out["drafts"] = {"error": f"{type(exc).__name__}: {exc}"}
@@ -265,6 +282,14 @@ VOICE_INSTRUCTIONS = (
     "operator changes a field, call update_plan with ONLY the changed fields. "
     "Treat 'go ahead and add X', 'also include Y', 'change it to Z' as EDITS — "
     "call update_plan, never request_orchestration.\n"
+    "PER-LEAD MODE IS A FIELD, NOT A VIBE: when the operator wants THEIR OWN "
+    "people — 'pick them from the imported conversations', 'use their real "
+    "conversations', 'these three customers', names/emails, 'one message per "
+    "person' — you MUST set lead_source='provided', per_lead=true and "
+    "use_conversation_history=true on update_plan (plus leads=[...] when they "
+    "name people, and lead_count/output_count for a stated number). Capturing "
+    "it only in the audience TEXT routes the run to a generic template blast "
+    "with no real recipients — a real operator hit exactly that.\n"
     "PLAN READBACK: once you have at least goal, audience, and channels, read the "
     "whole plan back out loud in one or two sentences, then ask: 'Should I run "
     "this?'\n"

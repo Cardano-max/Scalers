@@ -434,7 +434,7 @@ def _materialize_runs_row(
 def run_and_trace(
     *, brief: str, tenant_id: str, dsn: str | None = None, archetype_id: str | None = None,
     run_id: str | None = None, force_research: bool = False, output_count: int = 0,
-    campaign_type: str | None = None,
+    campaign_type: str | None = None, plan_channels: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run the real, traced Phase-A campaign for ``brief`` and return a structured
     summary (NOTHING sends; all outputs are HELD/PENDING).
@@ -462,6 +462,7 @@ def run_and_trace(
     state = _compose_run(
         archetype_id=aid, tenant_id=tenant_id, brief=brief, dsn=dsn, persist=True,
         run_id=run_id, force_research=force_research, output_count=output_count,
+        plan_channels=plan_channels,
     )
 
     # Read back the per-role traces the spine just wrote (authoritative source).

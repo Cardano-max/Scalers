@@ -58,12 +58,20 @@ def eligibility(action: Any) -> tuple[bool, str]:
     esc = (getattr(action, "esc_kind", "") or "").lower()
     if esc in BLOCKING_ESC_KINDS:
         return False, f"escalation: {esc}"
-    # Recipient validity (defense-in-depth): an email draft must have a real address.
+    # Recipient validity (defense-in-depth): a PERSON-directed draft must have a
+    # real destination. An email needs a valid address; SMS needs a non-empty
+    # number. A recipientless SMS previously read as "safe to send" while the
+    # matching recipientless email was held — same defect, one channel checked.
+    # Posts (ig/reels/fb) are recipientless by design and stay exempt.
     channel = (getattr(action, "channel", "") or "").lower()
     if channel in ("gmail", "email"):
         target = (getattr(action, "target", "") or "").strip()
         if not _EMAIL_RE.match(target):
             return False, "recipient address is missing or invalid"
+    if channel == "sms":
+        target = (getattr(action, "target", "") or "").strip()
+        if not target:
+            return False, "recipient phone number is missing"
     return True, f"confidence {conf:.2f} >= {threshold:.2f}"
 
 

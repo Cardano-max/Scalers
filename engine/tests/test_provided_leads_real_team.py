@@ -481,3 +481,17 @@ def test_campaign_plan_persists_operator_picked_leads():
     rt = CampaignPlan.model_validate(p.model_dump())
     assert rt.leads == ["ava@x.example", "Ben Busy"]
     assert rt.lead_source == "provided" and rt.lead_count == 2
+
+
+def test_conversation_history_ask_routes_to_provided_leads():
+    """'Use their real conversations' / per-lead / named leads MUST select the
+    per-lead executor — a real operator's ask executed the generic win_back
+    TEMPLATE (recipientless drafts) because only lead_source was checked."""
+    from studio.agui import CampaignPlan, _use_provided_leads
+
+    assert _use_provided_leads(CampaignPlan(lead_source="provided"))
+    assert _use_provided_leads(CampaignPlan(leads=["oscar@x.example"]))
+    assert _use_provided_leads(CampaignPlan(use_conversation_history=True))
+    assert _use_provided_leads(CampaignPlan(per_lead=True))
+    assert not _use_provided_leads(CampaignPlan())  # template path stays default
+    assert not _use_provided_leads(CampaignPlan(per_lead=False, use_conversation_history=False))
