@@ -259,9 +259,11 @@ def test_pause_then_resume_state_machine():
         assert 1 <= len(options) <= 6
         assert all(
             set(o.keys()) == {"postId", "handle", "caption", "url", "metrics",
-                              "totalScore", "whyItWorked", "visualTags"}
+                              "totalScore", "whyItWorked", "visualTags", "source"}
             for o in options
         )
+        # Every option names where the row came from (upload seam here).
+        assert all(o["source"] == "upload" for o in options)
         # The operator reviews the REAL post: caption verbatim, evidence attached.
         assert options[0]["caption"] == _CAPTION_TOP
         assert options[0]["metrics"] == {"likes": 1000, "views": 10000}
@@ -561,6 +563,10 @@ def test_competitor_research_with_empty_table_continues_normal_path(monkeypatch)
 
     monkeypatch.setenv("SCALERS_EMBEDDER", "deterministic")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    # Hermetic: with competitor_research on + an empty table the gate now
+    # ATTEMPTS live discovery first — keyless it degrades to the honest skip
+    # instantly (no network in tests).
+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
     tenant = "test_cmpempty_" + uuid.uuid4().hex[:8]
     campaign_id = f"camp_{uuid.uuid4().hex[:12]}"
     run_id = f"team-{campaign_id}-{uuid.uuid4().hex[:12]}"

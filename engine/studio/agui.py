@@ -378,7 +378,11 @@ _SYSTEM = (
     "has, or what changed recently for an artist — call the matching live-state "
     "tool (`get_run_leads`, `get_agent_activity`, `get_uploaded_files`, "
     "`get_artist_artworks`, `get_artist_memory`). These read the database fresh "
-    "on every call; NEVER answer such questions from memory or guess.\n"
+    "on every call; NEVER answer such questions from memory or guess. When the "
+    "operator asks to research/find/score COMPETITORS in our niche or city, call "
+    "`discover_competitors` — it runs LIVE, ToS-compliant discovery (public-web "
+    "search + Meta's official Business Discovery API, never scraping) and you "
+    "report ONLY the counts/handles/misses it returns.\n"
     "6. After acting, reply in 2-4 sentences: reflect the current plan and ask 1 "
     "high-leverage clarifying question. Be honest — never claim a tool ran that "
     "did not, never claim anything was sent, and never claim a customer fact the "
@@ -4423,6 +4427,59 @@ async def schedule_draft(
         f"scheduled for {out['scheduledFor']} ({'LIVE' if out['live'] else 'safe redirect'}). "
         "The scheduler publishes it through the gated approve path at that time."
     )
+
+
+@studio_agent.tool
+async def discover_competitors(
+    ctx: RunContext[StudioDeps], topic: str = "", limit: int = 10
+) -> str:
+    """LIVE competitor discovery (ToS-compliant): find competitor Instagram
+    accounts in our niche/city via PUBLIC web search (Firecrawl), read each
+    profile's recent posts via Meta's OFFICIAL Business Discovery API, store +
+    score them with the existing deterministic scorer, and return the honest
+    counts + ranked handles + per-handle misses. Never scrapes instagram.com.
+    ``topic`` optionally overrides the niche terms ('fine-line tattoo las vegas').
+    The scored posts feed the competitor-pick pause on the next IG run."""
+    from studio.competitor_discovery import run_discovery
+
+    lim = max(1, min(int(limit or 10), 20))
+    try:
+        out = await asyncio.to_thread(
+            lambda: run_discovery(
+                ctx.deps.tenant_id,
+                plan=ctx.deps.state,
+                topic=(topic or "").strip(),
+                limit_handles=lim,
+                dsn=ctx.deps.dsn,
+            )
+        )
+    except Exception as exc:  # honest failure — never a fabricated summary
+        return f"Competitor discovery failed: {type(exc).__name__}: {exc}"
+    lines = [
+        out.get("note") or "competitor discovery ran.",
+        f"candidates={out.get('candidates', 0)}, profiles read={out.get('fetched', 0)}, "
+        f"posts stored+scored={out.get('posts', 0)}.",
+    ]
+    if out.get("top"):
+        lines.append("Top scored competitor posts (best first):")
+        for t in out["top"][:6]:
+            score = t.get("totalScore")
+            lines.append(
+                f"- @{t.get('handle')} — "
+                f"{f'{score:g}/10' if score is not None else 'unscored'} — "
+                f"{t.get('url') or '(no url)'}"
+            )
+    if out.get("misses"):
+        lines.append(f"Misses ({len(out['misses'])}), each with its real reason:")
+        for m in out["misses"][:6]:
+            lines.append(f"- @{m.get('handle')}: {m.get('reason')}")
+    if out.get("posts"):
+        lines.append(
+            "Ask the operator which competitor is most relevant, then run the IG "
+            "campaign with competitor research on to mold that pattern — the "
+            "wording, artwork and offers stay OURS (never copied)."
+        )
+    return "\n".join(lines)
 
 
 @studio_agent.tool

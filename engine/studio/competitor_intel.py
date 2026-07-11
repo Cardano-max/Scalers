@@ -1,8 +1,9 @@
 """Competitor creative intelligence (Social Growth) — inspiration to MOLD, never copy.
 
 The operator uploads competitor posts (CSV/JSON with handle/url/caption/metrics —
-NO scraping; the official-API fetch lands later when the Meta token arrives). This
-module turns those rows into a pattern the IG drafting crew can mold:
+NO scraping; the live official-API path is :mod:`studio.competitor_discovery`,
+which upserts into the same table with ``source='discovery'``). This module
+turns those rows into a pattern the IG drafting crew can mold:
 
   * :func:`ingest_competitor_csv` stores the rows in ``competitor_posts``,
     idempotent on (tenant, url) via a deterministic id. ``metrics`` carries ONLY

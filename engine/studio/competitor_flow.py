@@ -14,8 +14,14 @@ When the Instagram channel plan turns competitor research on
      (``selected``, the chosen option snapshotted in ``choice``) and re-invokes
      the executor, which finds the choice here and proceeds — the durable
      replay-skip prevents re-drafting;
-  4. if NO competitor posts are on file the run does NOT pause: the gate returns
-     ``('skip', note)`` with the honest note and the normal IG path continues.
+  4. if NO competitor posts are on file the run does NOT pause: with
+     ``competitor_research`` on the gate first attempts ONE bounded LIVE
+     discovery pass (:func:`studio.competitor_discovery.run_discovery` —
+     ToS-compliant: Firecrawl public-web search + Meta's OFFICIAL Business
+     Discovery API only, never logged-in scraping) and pauses over the freshly
+     scored posts when it lands anything; a failed/keyless/empty discovery
+     returns ``('skip', note)`` with the honest note and the normal IG path
+     continues.
 
 The chosen post is a MOLD REFERENCE, never material to copy (hard product/safety
 rule): :func:`mold_competitor_pattern` deconstructs its SHAPE
@@ -25,10 +31,11 @@ tenant pack's voice — with a deterministic verbatim guard
 (:func:`copies_verbatim`) so no competitor sentence survives into the molded
 output, cell-refined or not.
 
-HONESTY: options come only from real ``competitor_posts`` rows the operator
-uploaded (the ONLY data source — no scraping); every score/why is the persisted
-deterministic breakdown; an empty table yields a 'skip' with a visible note,
-never a fabricated post or metric.
+HONESTY: options come only from real ``competitor_posts`` rows — operator
+uploads or official-API live discovery, each labeled with its ``source``
+(never scraping); every score/why is the persisted deterministic breakdown; an
+empty table yields a 'skip' with a visible note, never a fabricated post or
+metric.
 """
 
 from __future__ import annotations
@@ -98,9 +105,11 @@ def top_competitor_options(
     (:func:`studio.competitor_intel.score_posts` — highest total_score first,
     unscorable rows last), each carrying the operator-facing evidence:
     ``[{postId, handle, caption, url, metrics, totalScore, whyItWorked,
-    visualTags}]``. The caption is VERBATIM here because the OPERATOR reviews
-    the real post to pick a pattern — the drafter never sees it un-molded.
-    ``[]`` when no competitor posts are on file (the caller skips honestly)."""
+    visualTags, source}]`` (``source`` says where the row came from —
+    ``'upload'`` or ``'discovery'``). The caption is VERBATIM here because the
+    OPERATOR reviews the real post to pick a pattern — the drafter never sees
+    it un-molded. ``[]`` when no competitor posts are on file (the caller
+    skips honestly)."""
     from studio.competitor_intel import score_posts
 
     scored = score_posts(tenant_id, artist=artist, dsn=dsn)
@@ -116,6 +125,7 @@ def top_competitor_options(
                 "totalScore": p.get("total_score"),
                 "whyItWorked": p.get("why_it_worked"),
                 "visualTags": [str(t) for t in (p.get("visual_tags") or [])],
+                "source": p.get("source") or "upload",
             }
         )
     return options
@@ -273,6 +283,14 @@ def competitor_gate(
     * ``("skip", note)`` — no competitor posts on file (or the store failed):
       proceed on the normal IG path and record the honest note — never a pause
       the operator can't answer, never an invented post.
+
+    When the table is EMPTY and the ig channel plan set ``competitor_research``,
+    ONE bounded (~60s) LIVE discovery pass runs FIRST
+    (:func:`studio.competitor_discovery.run_discovery` — ToS-compliant:
+    Firecrawl public-web search + Meta's official Business Discovery API only).
+    Whatever it lands is scored by the existing scorer and pauses normally
+    (options carry ``source='discovery'`` and the payload an honest ``note``);
+    a keyless/empty/failed discovery degrades to today's honest skip.
     """
     sel = get_selection(run_id, dsn=dsn)
     if sel and sel.get("status") == "selected":
@@ -292,7 +310,25 @@ def competitor_gate(
         return "pause", selection_request_payload(sel)
 
     options = top_competitor_options(tenant_id, artist=artist, k=k, dsn=dsn)
+    discovery_note: str | None = None
+    if not options and bool(ig_channel_plan(plan).get("competitor_research")):
+        # LIVE DISCOVERY (ToS-compliant, bounded ~60s): the operator turned
+        # competitor research ON and nothing is on file — go find real posts via
+        # Firecrawl public-web search + the official Business Discovery API,
+        # then pause over them exactly like uploaded rows. Any failure (no keys,
+        # no candidates, all misses) falls through to the honest skip below.
+        try:
+            from studio.competitor_discovery import run_discovery
+
+            disc = run_discovery(tenant_id, plan=plan, dsn=dsn, time_budget_s=60.0)
+            discovery_note = str(disc.get("note") or "") or None
+            if disc.get("posts"):
+                options = top_competitor_options(tenant_id, artist=artist, k=k, dsn=dsn)
+        except Exception as exc:  # noqa: BLE001 — discovery must never wedge the run
+            discovery_note = f"live competitor discovery failed: {type(exc).__name__}"
     if not options:
+        if discovery_note:
+            return "skip", f"{NO_COMPETITOR_NOTE} ({discovery_note})"
         return "skip", NO_COMPETITOR_NOTE
     question = (
         f"I scored {len(options)} competitor post{'s' if len(options) != 1 else ''} "
@@ -316,7 +352,10 @@ def competitor_gate(
             "competitor options could not be persisted for selection — "
             "proceeding without competitor intel"
         )
-    return "pause", {"kind": "competitor_pick", "question": question, "options": options}
+    payload = {"kind": "competitor_pick", "question": question, "options": options}
+    if discovery_note:
+        payload["note"] = discovery_note  # the honest live-discovery step note
+    return "pause", payload
 
 
 # --------------------------------------------------------------------------- #
@@ -590,8 +629,17 @@ def awaiting_competitor_summary(
 ) -> dict[str, Any]:
     """The run summary returned when the executor PAUSES for the competitor pick
     (pause #1) — the registry marks the run ``awaiting_selection`` and the poller
-    surfaces the request. Nothing was molded, drafted, staged, or sent."""
+    surfaces the request. Nothing was molded, drafted, staged, or sent. A
+    ``note`` on the request (the live-discovery honest counts) surfaces as an
+    extra step note."""
     n = len(selection_request.get("options") or [])
+    step_notes = [
+        f"paused before molding/drafting: {n} scored competitor post(s) "
+        "surfaced for the operator's choice (POST "
+        "/studio/campaign/{run_id}/select-competitor resumes)"
+    ]
+    if selection_request.get("note"):
+        step_notes.insert(0, str(selection_request["note"]))
     return {
         "run_id": run_id,
         "campaign_id": campaign_id,
@@ -607,10 +655,6 @@ def awaiting_competitor_summary(
         "selection_request": selection_request,
         "message": selection_request.get("question")
         or f"{n} competitor post option(s) await your pick before drafting.",
-        "step_notes": [
-            f"paused before molding/drafting: {n} scored competitor post(s) "
-            "surfaced for the operator's choice (POST "
-            "/studio/campaign/{run_id}/select-competitor resumes)"
-        ],
+        "step_notes": step_notes,
         "failure_summary": [],
     }
