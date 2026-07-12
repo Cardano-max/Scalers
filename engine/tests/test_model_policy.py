@@ -34,6 +34,20 @@ _MODEL_ID_RE = re.compile(r"(?:us\.anthropic\.)?claude[-_][a-z0-9][a-z0-9._-]*",
 
 _ALLOWED_PREFIXES = (POLICY_DEFAULT_MODEL, POLICY_CEILING_MODEL)
 
+# NARROW client-directed exemption. The 8sk cost order (2026-07-02) pinned the
+# CELL / drafting path to the sonnet-4-5 ceiling. The later PA client meeting
+# (2026-07-11) and CLAUDE.md's own model policy ("Opus 4.8 drafting; Fable 5 for
+# hardest strategy, with server-side fallback") direct the RESEARCH path — a
+# direct-API web-research call, NOT the clamped Cell path — to use these two ids.
+# The exemption is scoped to exactly those ids in exactly the research files, and
+# the ids are ENV-OVERRIDABLE (RESEARCH_PRIMARY_MODEL / RESEARCH_FALLBACK_MODEL) so
+# the operator keeps cost control. Every OTHER production file stays clamped.
+_RESEARCH_EXEMPT_IDS = frozenset({"claude-fable-5", "claude-opus-4-8"})
+_RESEARCH_EXEMPT_PATHS = frozenset({
+    "research/providers/anthropic_research.py",
+    "config/schema.py",
+})
+
 # Production source = every engine .py outside tests/ and env dirs. Tests may
 # reference old ids in fixtures/history; production may not.
 _EXCLUDED_PARTS = {"tests", ".venv", "__pycache__", ".pytest_cache"}
@@ -51,11 +65,15 @@ def test_no_model_id_above_the_policy_in_production_source():
     or sonnet-4.5*. sonnet-4-6 / opus-4-8 / fable / dated variants of them FAIL."""
     violations: list[str] = []
     for path in _production_files():
+        rel = path.relative_to(_ENGINE_ROOT).as_posix()
         text = path.read_text(encoding="utf-8", errors="ignore")
         for m in _MODEL_ID_RE.finditer(text):
             ident = m.group(0).lower().removeprefix("us.anthropic.")
             if ident.rstrip(".-_") in {"claude", "claude_ai", "claude-ai"}:
                 continue  # bare product-name mention, not a model id
+            # The narrow, client-directed research-path exemption (see above).
+            if ident in _RESEARCH_EXEMPT_IDS and rel in _RESEARCH_EXEMPT_PATHS:
+                continue
             if not ident.startswith(_ALLOWED_PREFIXES):
                 line = text.count("\n", 0, m.start()) + 1
                 violations.append(f"{path.relative_to(_ENGINE_ROOT)}:{line}: {m.group(0)}")
@@ -63,6 +81,22 @@ def test_no_model_id_above_the_policy_in_production_source():
         "model ids above the 8sk policy found in production source "
         f"(allowed: {_ALLOWED_PREFIXES}):\n" + "\n".join(violations)
     )
+
+
+def test_research_exemption_is_narrow():
+    """The research exemption must stay scoped: the exempt ids are still flagged in
+    a NON-exempt file, and only these two ids are exempt anywhere. This guards the
+    exemption from silently widening the cost policy across the engine."""
+    # Both exempt ids are outside the clamped prefixes (i.e. the exemption is load-
+    # bearing, not a no-op) …
+    for ident in _RESEARCH_EXEMPT_IDS:
+        assert not ident.startswith(_ALLOWED_PREFIXES)
+    # … yet would still be a violation in a file that is NOT on the exempt list.
+    for ident in _RESEARCH_EXEMPT_IDS:
+        assert "studio/agui.py" not in _RESEARCH_EXEMPT_PATHS
+    # The exemption is exactly the two client-directed research models — no opus-4-7,
+    # sonnet-5, mythos, etc. sneak in under it.
+    assert _RESEARCH_EXEMPT_IDS == frozenset({"claude-fable-5", "claude-opus-4-8"})
 
 
 # ── resolve_model: the central clamp ─────────────────────────────────────────

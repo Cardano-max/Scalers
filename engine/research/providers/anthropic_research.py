@@ -1,4 +1,4 @@
-"""AnthropicResearchProvider — Claude-powered web research (client-directed primary).
+"""AnthropicResearchProvider — Anthropic-powered web research (client-directed primary).
 
 The client's direction (PA meeting, 2026-07-11): move research off the free
 Firecrawl path onto Anthropic — Claude ``claude-fable-5`` for the hardest
@@ -11,7 +11,7 @@ allowlist (``api.anthropic.com``), the F2 resolve-and-pin SSRF recheck,
 rate-limited, key-from-env/pack — **disabled by default** (mock-default); no live
 call unless ``enabled=True`` + a key.
 
-Fable-5 API specifics baked in (per the claude-api reference):
+Fable-5 API specifics baked in (per the Anthropic API reference):
   * thinking is always on — the ``thinking`` field is omitted entirely;
   * no sampling params;
   * ``fallbacks=[{"model": "claude-opus-4-8"}]`` + beta
@@ -29,6 +29,7 @@ a run note, never promoted to a citable source.
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from research.adapter import (
@@ -51,10 +52,14 @@ ANTHROPIC_API_BASE = "https://api.anthropic.com"
 _API_HOST = "api.anthropic.com"
 _MESSAGES_PATH = "/v1/messages"
 
-# The primary drafting model the client asked for, with a server-side fallback
-# so a false-positive safety decline on adjacent (benign) research is re-served.
-PRIMARY_MODEL = "claude-fable-5"
-FALLBACK_MODEL = "claude-opus-4-8"
+# The primary research model the client asked for (PA meeting 2026-07-11), with a
+# server-side fallback so a false-positive safety decline on adjacent (benign)
+# research is re-served. Aligned with CLAUDE.md's model policy ("Fable 5 for
+# hardest strategy, with server-side fallback"). Both are ENV-OVERRIDABLE so the
+# operator keeps cost control — set RESEARCH_PRIMARY_MODEL / RESEARCH_FALLBACK_MODEL
+# to dial the research path down (e.g. to a cheaper model) without a code change.
+PRIMARY_MODEL = os.environ.get("RESEARCH_PRIMARY_MODEL", "claude-fable-5")
+FALLBACK_MODEL = os.environ.get("RESEARCH_FALLBACK_MODEL", "claude-opus-4-8")
 
 # web search + server-side fallback are both beta surfaces on the Messages API.
 _SERVER_SIDE_FALLBACK_BETA = "server-side-fallback-2026-06-01"
