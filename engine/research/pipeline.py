@@ -21,6 +21,7 @@ import os
 from collections.abc import Mapping
 
 from research.adapter import ResearchQuery, ResearchResult, SourceProvider
+from research.providers.anthropic_research import AnthropicResearchProvider
 from research.providers.exa import ExaProvider
 from research.providers.firecrawl import FirecrawlProvider
 from research.providers.fixture import FixtureProvider
@@ -35,17 +36,25 @@ def live_registry(
 ) -> dict[str, SourceProvider]:
     """The LIVE vetted provider registry, keyed by pack ``[research].sources`` name.
 
-    Keys come from ``env`` (defaults to ``os.environ``) — ``FIRECRAWL_API_KEY`` /
-    ``EXA_API_KEY``; never a vendored ``.env`` read by the provider itself. A
-    provider is ``enabled=True`` only when its key is present (so an absent key
-    degrades honestly rather than half-arming a live call). ``include_fixture``
-    adds the offline fixture under the ``fixture`` name (NOT a live source) for
-    callers that want a deterministic fallback in the same router.
+    Keys come from ``env`` (defaults to ``os.environ``) — ``ANTHROPIC_API_KEY`` /
+    ``FIRECRAWL_API_KEY`` / ``EXA_API_KEY``; never a vendored ``.env`` read by the
+    provider itself. A provider is ``enabled=True`` only when its key is present
+    (so an absent key degrades honestly rather than half-arming a live call).
+    ``include_fixture`` adds the offline fixture under the ``fixture`` name (NOT a
+    live source) for callers that want a deterministic fallback in the same router.
+
+    The client-directed PRIMARY is ``anthropic`` (PA meeting 2026-07-11): Claude
+    web research, armed from ``ANTHROPIC_API_KEY`` — the same key the drafting
+    cells already read.
     """
     e = env if env is not None else os.environ
+    anthropic_key = e.get("ANTHROPIC_API_KEY") or None
     fc_key = e.get("FIRECRAWL_API_KEY") or None
     exa_key = e.get("EXA_API_KEY") or None
     reg: dict[str, SourceProvider] = {
+        "anthropic": AnthropicResearchProvider(
+            api_key=anthropic_key, enabled=bool(anthropic_key)
+        ),
         "firecrawl": FirecrawlProvider(api_key=fc_key, enabled=bool(fc_key)),
         "exa": ExaProvider(api_key=exa_key, enabled=bool(exa_key)),
     }

@@ -24,6 +24,7 @@ from research.adapter import (
     UnsupportedIntent,
 )
 from research.providers import (
+    AnthropicResearchProvider,
     ExaProvider,
     FirecrawlProvider,
     FixtureProvider,
@@ -52,8 +53,9 @@ def default_registry(*, use_fixture: bool = True) -> dict[str, SourceProvider]:
     """
     if use_fixture:
         fx = FixtureProvider()
-        return {"firecrawl": fx, "meta_ad_library": fx, "fixture": fx}
+        return {"anthropic": fx, "firecrawl": fx, "meta_ad_library": fx, "fixture": fx}
     return {
+        "anthropic": AnthropicResearchProvider(),
         "firecrawl": FirecrawlProvider(),
         "meta_ad_library": MetaAdLibraryProvider(),
         "fixture": FixtureProvider(),
@@ -76,6 +78,7 @@ __all__ = [
     "FixtureProvider",
     "FirecrawlProvider",
     "ExaProvider",
+    "AnthropicResearchProvider",
     "MetaAdLibraryProvider",
     "default_registry",
     "live_registry",

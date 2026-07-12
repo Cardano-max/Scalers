@@ -162,11 +162,129 @@ class ScheduleConfig(BaseModel):
 
 
 class ResearchConfig(BaseModel):
-    """Which external research sources are enabled for a tenant."""
+    """Which external research sources are enabled for a tenant, and which
+    provider leads the research fan-out.
+
+    ``provider`` is the PRIMARY research backend the engine reaches for first —
+    the client (PA meeting, 2026-07-11) directed us onto Anthropic-powered
+    research (Claude ``claude-fable-5`` for the hardest strategy, with a
+    server-side fallback) instead of the free Firecrawl path, so it defaults to
+    ``"anthropic"``. It must name a provider registered in
+    ``research.default_registry`` / ``research.pipeline.live_registry``; an
+    unknown name is dropped by the router with a note (never a silent live call),
+    so the fan-out simply degrades to the other enabled ``sources``.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     sources: tuple[str, ...] = ()
+    provider: str = Field(
+        default="anthropic",
+        description=(
+            "Primary research provider name (must match a registered SourceProvider). "
+            "'anthropic' leads with Claude web research; the other 'sources' remain "
+            "available as the router's fan-out set."
+        ),
+    )
+
+
+class CompetitorDiscoveryConfig(BaseModel):
+    """How competitor-post discovery selects and scores who to mold from.
+
+    The client's core note (PA meeting, 2026-07-11): the old discovery was
+    HASHTAG-driven and surfaced small accounts (~100 likes) instead of the real
+    top performers (20k–50k+ likes). This config drives the broader, ToS-compliant
+    discovery + the deterministic scorer:
+
+    * ``styles`` — the visual styles that define the niche ("black and grey
+      realism", "fine line botanical", "color realism"). Discovery matches on
+      these + location, NOT on hashtag presence, so a strong post with no tags
+      still qualifies.
+    * ``location`` — the geography to bias discovery toward (studio city or a
+      broader market); empty falls back to the pack positioning / plan.
+    * ``min_followers`` / ``min_engagement_rate`` — floors that keep tiny accounts
+      out of the mold set; ``None`` means "no floor" (honest: an absent metric is
+      never treated as a zero that fails the floor).
+    * ``hashtag_gated`` — kept for the legacy behavior; defaults ``False`` (the new
+      broader logic). Set ``True`` only to pin the old hashtag-first matching.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    styles: tuple[str, ...] = ()
+    location: str | None = None
+    min_followers: int | None = Field(default=None, ge=0)
+    min_engagement_rate: float | None = Field(default=None, ge=0.0)
+    limit_handles: int = Field(default=10, ge=1)
+    time_budget_s: float = Field(default=60.0, gt=0.0)
+    hashtag_gated: bool = False
+
+
+class BrandStudyConfig(BaseModel):
+    """Cross-industry marketing intelligence: study top brands BEYOND the niche.
+
+    The client asked us to keep tattooing as the base but "go far beyond that" —
+    study how the hottest brands in the US/EU (he named Skims) win attention:
+    their hooks, theories, philosophies, and which objective they optimize for
+    (follower growth vs engagement vs sales). The molder blends these
+    cross-industry hooks into its angle/hook selection.
+
+    Disabled by default so an un-configured tenant keeps the tattoo-only behavior;
+    ``industries`` / ``seed_brands`` scope the study when enabled.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool = False
+    industries: tuple[str, ...] = ()
+    seed_brands: tuple[str, ...] = ()
+    objectives: tuple[str, ...] = ("followers", "engagement", "sales")
+    max_brands: int = Field(default=8, ge=1)
+
+
+class InkPulseConfig(BaseModel):
+    """Ingestion source for Ink Pulse leads — the pre-CRM conversation platform.
+
+    The client's studio talks to prospects in "Ink Pulse" before they ever reach
+    the CRM (the CRM only holds booked / deposit-pending clients). Those
+    consultation leads (name / email / phone / instagram / conversation history)
+    are lost to the campaign engine today. This config points the ingestion
+    connector at that feed; disabled by default. The secret (API key) is NOT
+    inlined — it rides the pack's ``[secrets.*]`` table via a ``SecretRef``.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool = False
+    source: str | None = Field(
+        default=None,
+        description="Ref/URI or feed id for the Ink Pulse export (CSV/JSON/API).",
+    )
+    api_key: SecretRef | None = Field(
+        default=None,
+        description="Secret ref for the Ink Pulse API key (env var name), never inlined.",
+    )
+
+
+class MetaPixelConfig(BaseModel):
+    """Meta Pixel / Conversions-API groundwork — audience-commonality signals.
+
+    The client wants Pixel-style tracking of where the audience goes and what they
+    buy/like, to inform targeting — a DIFFERENT layer from the per-lead deep
+    research. This is scaffolding + feasibility (confirm with Muaraf before the
+    next meeting): disabled by default, ``pixel_id`` optional, token via
+    ``SecretRef`` (per-tenant ``<TENANT>_META_PIXEL_TOKEN`` convention), never
+    inlined. No live Pixel call fires while ``enabled`` is False.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool = False
+    pixel_id: str | None = None
+    access_token: SecretRef | None = Field(
+        default=None,
+        description="Secret ref for the Meta Pixel / Conversions-API token (env var name).",
+    )
 
 
 class TenantPack(BaseModel):
@@ -189,6 +307,14 @@ class TenantPack(BaseModel):
     )
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     research: ResearchConfig = Field(default_factory=ResearchConfig)
+    # Client-directed additions (PA meeting 2026-07-11). All optional-with-defaults
+    # so existing packs validate unchanged; a tenant opts in by adding the table.
+    competitor_discovery: CompetitorDiscoveryConfig = Field(
+        default_factory=CompetitorDiscoveryConfig
+    )
+    brand_study: BrandStudyConfig = Field(default_factory=BrandStudyConfig)
+    ink_pulse: InkPulseConfig = Field(default_factory=InkPulseConfig)
+    meta_pixel: MetaPixelConfig | None = None
     secrets: dict[str, SecretRef] = Field(default_factory=dict)
 
     # -- convenience accessors the engine uses at run start ------------------ #
