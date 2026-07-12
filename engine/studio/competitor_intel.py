@@ -290,6 +290,17 @@ WEIGHTS: dict[str, float] = {
     # so an untargeted scoring is byte-identical to before.
     "theme_relevance": 0.40,   # niche+caption+visual_tags vs the CAMPAIGN theme
     "engagement_rate": 0.25,   # interactions/views — the strongest performance signal
+    # FOLLOWER REACH (client's core note, PA meeting 2026-07-11): the old scorer
+    # let a tiny account with a catchy caption out-rank a real top performer
+    # (~100 likes vs the 20k–50k-like accounts the client actually wants to mold
+    # from). For discovered posts the interactions/views rate is usually absent
+    # (the Business Discovery API returns no view count), so raw REACH — account
+    # size + absolute like volume — carries the "who is actually winning" signal.
+    # Both log-scaled (10 ≈ 10k) and None (excluded) when the number is absent, so
+    # nothing is fabricated; the config floors (min_followers / min_engagement_rate)
+    # additionally hard-exclude tiny accounts before they ever reach this scorer.
+    "follower_reach": 0.20,    # account size — big accounts rank above tiny ones
+    "likes_weight": 0.15,      # absolute like volume (log scale) — the "50k likes"
     "comments_weight": 0.10,   # conversation volume (log scale)
     "shares_saves_weight": 0.10,  # amplification/bookmark intent (log scale)
     "niche_match": 0.15,       # niche+caption tokens vs OUR artist style tags
@@ -425,6 +436,14 @@ def score_components(
     else:
         out["engagement_rate"] = None  # honest: no views (or no interactions) reported
 
+    # REACH signals — raw account size + absolute like volume, log-scaled (10 ≈
+    # 10k). These separate the real top performers from the tiny accounts the old
+    # scorer over-rewarded on caption alone. None (excluded) when the number is
+    # absent — never a fabricated zero.
+    followers = metrics.get("followers")
+    out["follower_reach"] = _log_scale(followers) if followers is not None else None
+    out["likes_weight"] = _log_scale(likes) if likes is not None else None
+
     out["comments_weight"] = _log_scale(comments) if comments is not None else None
 
     provided_amp = [v for v in (shares, saves) if v is not None]
@@ -484,6 +503,35 @@ def score_components(
         out["cta_strength"] = None
         out["hook_strength"] = None
     return out
+
+
+def meets_reach_floor(
+    metrics: dict[str, Any] | None,
+    *,
+    min_followers: int | None = None,
+    min_engagement_rate: float | None = None,
+) -> bool:
+    """Whether a post's PROVIDED metrics clear the tenant's reach floors — the
+    hard gate that keeps tiny accounts out of the mold set (client's core note,
+    PA meeting 2026-07-11: stop surfacing ~100-like accounts).
+
+    HONESTY: a floor only rejects when the underlying metric is actually present
+    AND below it. An ABSENT metric is never treated as a failing zero (we can't
+    prove a real account is tiny just because the API didn't return the number),
+    so a post with no follower count still passes the follower floor — it is the
+    *scorer* that then ranks it below accounts with proven reach. ``None`` floors
+    are inactive. ``engagement_rate`` here is the discovery-stored
+    ``(likes+comments)/followers`` ratio, not the views-based score component."""
+    m = metrics or {}
+    if min_followers is not None:
+        f = m.get("followers")
+        if isinstance(f, (int, float)) and not isinstance(f, bool) and f < min_followers:
+            return False
+    if min_engagement_rate is not None:
+        er = m.get("engagement_rate")
+        if isinstance(er, (int, float)) and not isinstance(er, bool) and er < min_engagement_rate:
+            return False
+    return True
 
 
 def weighted_total(components: dict[str, float | None]) -> float | None:
