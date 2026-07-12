@@ -620,6 +620,17 @@ def build_ig_brief_block(
     ]
     if competitor_block:
         parts.append(competitor_block)
+    # Cross-industry marketing intelligence (client direction, PA meeting
+    # 2026-07-11): blend how top brands beyond tattoo win attention. Gated by the
+    # tenant's [brand_study] config; absent/disabled -> no block (tattoo-only).
+    try:
+        from studio.brand_study import render_brand_study_block, study_for_tenant
+
+        study_block = render_brand_study_block(study_for_tenant(tenant_id))
+        if study_block:
+            parts.append(study_block)
+    except Exception:
+        pass  # grounding never breaks the run; block simply absent
     parts.append(render_broll_block(broll))
     if artwork:
         parts.append(
