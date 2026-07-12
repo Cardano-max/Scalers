@@ -202,7 +202,7 @@ export function PostPreview({
             </div>
           ) : null}
           <div style={{ fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>
-            Only the pattern's shape was reused — the wording, the artwork and the offer are ours.
+            Only the pattern&apos;s shape was reused — the wording, the artwork and the offer are ours.
           </div>
         </div>
       ) : null}

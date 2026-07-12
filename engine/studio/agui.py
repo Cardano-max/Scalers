@@ -3981,6 +3981,8 @@ def _supersede_pending_for(
     try:
         import psycopg
 
+        from obsapi.db import get_dsn
+
         with psycopg.connect(get_dsn() if dsn is None else dsn, autocommit=True) as conn:
             row = conn.execute(
                 "SELECT id FROM actions WHERE tenant_id=%s AND target=%s AND status='pending' "
@@ -5373,7 +5375,6 @@ def mount_studio_agui(app) -> None:
         # thing the operator most needs to see: without it the run is unanswerable, so it
         # hangs forever and every channel behind it looks "queued". Find this tenant's
         # newest still-awaiting pause and hand back the PARENT id that owns it.
-        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
         try:
             import psycopg
 

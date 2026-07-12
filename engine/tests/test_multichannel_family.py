@@ -141,9 +141,11 @@ def test_run_narration_numbers_within_each_channel_leg() -> None:
     steps = []
     seq = 0
     for ch in ("email", "fb", "ig"):
-        steps.append(step(seq, "strategist", ch, n_leads=3)); seq += 1
+        steps.append(step(seq, "strategist", ch, n_leads=3))
+        seq += 1
         for _ in range(3):
-            steps.append(step(seq, "researcher", ch)); seq += 1
+            steps.append(step(seq, "researcher", ch))
+            seq += 1
     lines = run_narration(steps)
     assert len(lines) == len(steps)
     researcher_lines = [

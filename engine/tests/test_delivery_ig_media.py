@@ -111,6 +111,11 @@ def _pending(context=None, **kw) -> ActionRow:
 
 
 # ── resolution order ─────────────────────────────────────────────────────────────
+# These exercise IG media-URL resolution + connector behavior, which live AFTER the
+# server-side public-post TEST-MODE gate (actions/publish.py): a public post — type
+# "post", no recipient — publishes only under explicit operator ``live=True``. So each
+# call passes live=True to authorize past that gate and reach the logic under test;
+# ``live`` is otherwise inert for a non-gmail channel, so it changes nothing else here.
 
 
 def test_context_public_url_wins(patched_store, monkeypatch, audit_rows):
@@ -127,7 +132,7 @@ def test_context_public_url_wins(patched_store, monkeypatch, audit_rows):
     })
     patched_store(_pending(context=ctx))
     ig = _FakeInstagram()
-    out = approve_and_publish("act_ig1", connectors={"instagram": ig})
+    out = approve_and_publish("act_ig1", connectors={"instagram": ig}, live=True)
 
     assert out.status == "sent"
     assert ig.calls == [("https://cdn.example/rose.jpg", "Fresh flash drop — link in bio")]
@@ -142,7 +147,7 @@ def test_artifact_id_plus_public_asset_base_builds_raw_url(patched_store, monkey
     ctx = json.dumps({"artwork": {"artifactId": "art_42"}})
     patched_store(_pending(context=ctx))
     ig = _FakeInstagram()
-    out = approve_and_publish("act_ig1", connectors={"instagram": ig})
+    out = approve_and_publish("act_ig1", connectors={"instagram": ig}, live=True)
 
     assert out.status == "sent"
     assert ig.calls[0][0] == "https://tunnel.example/studio/artifacts/art_42/raw"
@@ -155,7 +160,7 @@ def test_artifact_without_public_serving_fails_with_the_concrete_reason(patched_
     ctx = json.dumps({"attachment_artifact_id": "art_7"})
     patched_store(_pending(context=ctx))
     ig = _FakeInstagram()
-    out = approve_and_publish("act_ig1", connectors={"instagram": ig})
+    out = approve_and_publish("act_ig1", connectors={"instagram": ig}, live=True)
 
     assert out.status == "failed"
     assert ig.calls == []  # nothing published
@@ -170,7 +175,7 @@ def test_no_per_action_media_falls_back_to_demo_env_with_honest_log(
     patched_store(_pending(context=None))
     ig = _FakeInstagram()
     with caplog.at_level(logging.WARNING, logger="actions.publish"):
-        out = approve_and_publish("act_ig1", connectors={"instagram": ig})
+        out = approve_and_publish("act_ig1", connectors={"instagram": ig}, live=True)
 
     assert out.status == "sent"
     assert ig.calls[0][0] == "https://demo.example/global.jpg"
@@ -181,7 +186,7 @@ def test_no_per_action_media_falls_back_to_demo_env_with_honest_log(
 def test_no_media_at_all_fails_honestly(patched_store):
     patched_store(_pending(context=None))
     ig = _FakeInstagram()
-    out = approve_and_publish("act_ig1", connectors={"instagram": ig})
+    out = approve_and_publish("act_ig1", connectors={"instagram": ig}, live=True)
     assert out.status == "failed"
     assert ig.calls == []
     assert "public image" in out.last_error
@@ -193,7 +198,7 @@ def test_non_http_context_url_is_ignored_not_published(patched_store):
     ctx = json.dumps({"artwork": {"artifactId": "art_9", "publicUrl": "/var/artifacts/a.png"}})
     patched_store(_pending(context=ctx))
     ig = _FakeInstagram()
-    out = approve_and_publish("act_ig1", connectors={"instagram": ig})
+    out = approve_and_publish("act_ig1", connectors={"instagram": ig}, live=True)
     assert out.status == "failed"
     assert _IG_NO_PUBLIC_URL_ERROR in out.last_error
 
@@ -205,7 +210,7 @@ def test_graph_error_with_per_action_media_marks_failed_with_real_error(
     ctx = json.dumps({"attachment_artifact_id": "art_5"})
     patched_store(_pending(context=ctx))
     ig = _FakeInstagram(exc=RuntimeError("Graph OAuthException code 190 (expired)"))
-    out = approve_and_publish("act_ig1", connectors={"instagram": ig})
+    out = approve_and_publish("act_ig1", connectors={"instagram": ig}, live=True)
 
     assert out.status == "failed"
     assert "190" in out.last_error
