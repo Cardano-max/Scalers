@@ -79,8 +79,15 @@ def resolve_customer_location(facts: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _parse_location_string(loc: str) -> tuple[str, str]:
-    """('Austin', 'TX') from 'Austin, TX'; ('Austin', '') from 'Austin'. A bare
-    2-letter state with no city yields ('', 'TX'). Pure, tolerant."""
+    """('Austin', 'TX') from 'Austin, TX' OR 'Austin TX'; ('Austin', '') from
+    'Austin'. A bare 2-letter state with no city yields ('', 'TX'). Pure, tolerant.
+
+    A real Ink Pulse / CRM export writes a location as ``"Austin, TX"`` OR
+    (just as often) space-separated ``"Austin TX"`` / ``"Lake Charles LA"`` with no
+    comma. When there is no delimiter but the string ENDS in a whitespace-separated
+    2-letter US state code, split on that state honestly (the trailing token IS a
+    real state code — never a guess), so the state lands in its own field instead of
+    being buried in the city string."""
     parts = [p.strip() for p in re.split(r"[,/|]", loc) if p.strip()]
     if not parts:
         return "", ""
@@ -88,6 +95,9 @@ def _parse_location_string(loc: str) -> tuple[str, str]:
         one = parts[0]
         if one.upper() in _US_STATES:
             return "", one.upper()
+        toks = one.split()
+        if len(toks) >= 2 and toks[-1].upper() in _US_STATES:
+            return " ".join(toks[:-1]), toks[-1].upper()
         return one, ""
     city = parts[0]
     state = parts[1]

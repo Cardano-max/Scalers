@@ -86,6 +86,19 @@ def test_location_parses_combined_string_from_ink_pulse():
     assert bare["city"] == "" and bare["state"] == "TX" and bare["confident"] is False
 
 
+def test_location_parses_space_separated_city_state():
+    # A real export just as often writes "Austin TX" (no comma) — the trailing
+    # 2-letter state code must still land in its own field, not the city string.
+    r = resolve_customer_location({"location": "Austin TX"})
+    assert (r["city"], r["state"], r["confident"]) == ("Austin", "TX", True)
+    # Multi-word city, space-separated state.
+    multi = resolve_customer_location({"location": "Lake Charles LA"})
+    assert (multi["city"], multi["state"]) == ("Lake Charles", "LA")
+    # A multi-word name whose last token is NOT a state stays intact as the city.
+    ny = resolve_customer_location({"location": "New York"})
+    assert (ny["city"], ny["state"]) == ("New York", "")
+
+
 def test_location_honest_empty_when_unknown_never_defaults_to_studio():
     r = resolve_customer_location({"name": "Amanda"})
     assert r["source"] == "none" and r["confident"] is False and r["display"] == ""

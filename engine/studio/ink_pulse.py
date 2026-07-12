@@ -127,13 +127,9 @@ def parse_ink_pulse_export(content: str) -> list[dict[str, Any]]:
         if not any(norm.get(k) for k in _CONTACT_KEYS):
             continue  # unreachable lead — dropped, never fabricated
         conversation = norm.pop("conversation", "")
-        note_bits = []
-        if conversation:
-            note_bits.append(f"Ink Pulse consultation: {conversation}")
-        if norm.get("ig_handle"):
-            note_bits.append(f"instagram: {norm['ig_handle'].lstrip('@')}")
-        if norm.get("phone"):
-            note_bits.append(f"phone: {norm['phone']}")
+        # The verbatim consultation thread is the note (contact fields land in
+        # their own columns via the upsert, so they are NOT duplicated here).
+        notes = f"Ink Pulse consultation: {conversation}" if conversation else ""
         row: dict[str, Any] = {
             "name": norm.get("name", ""),
             "email": norm.get("email", ""),
@@ -143,7 +139,7 @@ def parse_ink_pulse_export(content: str) -> list[dict[str, Any]]:
             "interests": norm.get("interests", ""),
             "artist": norm.get("artist", ""),
             "shop": norm.get("shop", ""),
-            "notes": " | ".join(note_bits),
+            "notes": notes,
             "lead_stage": SOURCE_INK_PULSE,
             "source": SOURCE_INK_PULSE,
         }
@@ -151,23 +147,126 @@ def parse_ink_pulse_export(content: str) -> list[dict[str, Any]]:
     return out
 
 
+def _upsert_ink_pulse_lead(
+    tenant_id: str, row: dict[str, Any], *, dsn: str | None = None
+) -> dict[str, Any]:
+    """UPSERT one Ink Pulse lead into ``customers``, idempotent on ANY provided
+    contact handle — (tenant, email) OR (tenant, phone) OR (tenant, ig_handle).
+
+    The generic :func:`studio.customer_research.upsert_lead` dedups on email ONLY
+    and never persists phone / ig_handle — wrong for Ink Pulse, whose pre-CRM
+    consultation leads are frequently phone/Instagram-only (re-ingesting one would
+    duplicate it, and its number/handle would be lost). This writes the real
+    contact columns, stamps ``source`` + ``lead_stage`` = ``"ink_pulse"``, and
+    backfills NULLs on a match without clobbering existing ground truth. Consent is
+    conservative: ``email_opt_in`` only when an email is present, ``sms_opt_in``
+    always False (SMS needs an explicit opt-in) — the send-safety gates still apply
+    downstream regardless."""
+    import uuid
+
+    import psycopg
+    from psycopg.rows import dict_row
+
+    from studio.customer_research import _dsn, ensure_lead_columns
+    from studio.location import resolve_customer_location
+
+    email = (row.get("email") or "").strip() or None
+    phone = (row.get("phone") or "").strip() or None
+    ig = (row.get("ig_handle") or "").strip().lstrip("@") or None
+    name = (row.get("name") or "").strip() or None
+    loc = resolve_customer_location({"location": row.get("location")})
+    city, state = (loc["city"] or None), (loc["state"] or None)
+    interests_raw = row.get("interests") or ""
+    interests = [s.strip() for s in interests_raw.replace(",", ";").split(";") if s.strip()]
+    notes = (row.get("notes") or "").strip() or None
+
+    ensure_lead_columns(dsn)
+    with psycopg.connect(_dsn(dsn), autocommit=True, row_factory=dict_row) as conn:
+        # Match on any handle the lead actually carries (tenant-scoped) so a
+        # re-ingest of the same person — by email, phone, OR instagram — never
+        # duplicates. Absent handles contribute no clause (never a false match).
+        clauses: list[str] = []
+        params: list[Any] = [tenant_id]
+        if email:
+            clauses.append("lower(email) = lower(%s)")
+            params.append(email)
+        if phone:
+            clauses.append("phone = %s")
+            params.append(phone)
+        if ig:
+            clauses.append("ig_handle = %s")
+            params.append(ig)
+        existing = None
+        if clauses:
+            existing = conn.execute(
+                f"SELECT id FROM customers WHERE tenant_id = %s AND ({' OR '.join(clauses)}) LIMIT 1",
+                tuple(params),
+            ).fetchone()
+        if existing is not None:
+            conn.execute(
+                """
+                UPDATE customers SET
+                    name       = COALESCE(NULLIF(name, ''), %s),
+                    phone      = COALESCE(phone, %s),
+                    ig_handle  = COALESCE(ig_handle, %s),
+                    city       = COALESCE(city, %s),
+                    state      = COALESCE(state, %s),
+                    interests  = CASE WHEN interests IS NULL OR cardinality(interests) = 0
+                                      THEN %s ELSE interests END,
+                    notes      = COALESCE(notes, %s),
+                    source     = COALESCE(source, %s),
+                    lead_stage = COALESCE(lead_stage, %s)
+                WHERE id = %s
+                """,
+                (name, phone, ig, city, state, interests, notes,
+                 SOURCE_INK_PULSE, SOURCE_INK_PULSE, existing["id"]),
+            )
+            return {"customer_id": existing["id"], "created": False}
+
+        cust_id = "cust_" + uuid.uuid4().hex[:16]
+        conn.execute(
+            """
+            INSERT INTO customers
+                (id, tenant_id, name, email, phone, ig_handle, city, state,
+                 interests, preferred_channels, email_opt_in, sms_opt_in,
+                 source, notes, lead_stage)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """,
+            (cust_id, tenant_id, name, email, phone, ig, city, state,
+             interests, [], bool(email), False,
+             SOURCE_INK_PULSE, notes, SOURCE_INK_PULSE),
+        )
+        return {"customer_id": cust_id, "created": True}
+
+
 def ingest_ink_pulse(
     tenant_id: str, content: str, *, dsn: str | None = None
 ) -> dict[str, Any]:
-    """Parse + UPSERT an Ink Pulse export into ``customers`` (delegating to the
-    existing, idempotent lead ingest). Returns honest counts:
+    """Parse + idempotently UPSERT an Ink Pulse export into ``customers``. Returns
+    honest counts:
 
         {"ok", "rows", "ingested", "created", "matched", "customer_ids"}
 
-    An export with no reachable rows returns zero counts (nothing invented)."""
+    Idempotent on any contact handle (email / phone / instagram), so re-ingesting
+    the same export creates nothing new. An export with no reachable rows returns
+    zero counts (nothing invented)."""
     rows = parse_ink_pulse_export(content)
     if not rows:
         return {"ok": True, "rows": 0, "ingested": 0, "created": 0,
                 "matched": 0, "customer_ids": []}
-    from studio.customer_research import ingest_leads
-
-    res = ingest_leads(tenant_id, rows, dsn=dsn)
-    return {"ok": True, "rows": len(rows), **res}
+    created = matched = 0
+    ids: list[str] = []
+    for row in rows:
+        res = _upsert_ink_pulse_lead(tenant_id, row, dsn=dsn)
+        ids.append(res["customer_id"])
+        if res["created"]:
+            created += 1
+        else:
+            matched += 1
+    return {
+        "ok": True, "rows": len(rows), "ingested": len(ids),
+        "created": created, "matched": matched, "customer_ids": ids,
+    }
 
 
 def ink_pulse_enabled(tenant_id: str) -> bool:
