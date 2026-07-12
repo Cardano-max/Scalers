@@ -17,8 +17,10 @@ Two honest layers:
     ``source="ink_pulse"`` so a pre-CRM consultation lead is always distinguishable
     from a booked CRM client downstream (a named-cohort / consent gate can key on
     it).
-  * :func:`ingest_ink_pulse` — thin DB-backed wrapper that delegates the UPSERT to
-    the existing, tested lead ingest (idempotent on tenant+email).
+  * :func:`ingest_ink_pulse` — DB-backed UPSERT (:func:`_upsert_ink_pulse_lead`) that
+    dedups on ANY contact handle the lead carries — (tenant,email) OR (tenant,phone)
+    OR (tenant,ig_handle) — persisting phone/Instagram and the ``ink_pulse`` source so
+    a phone/IG-only quiet lead is neither dropped nor duplicated on re-ingest.
 
 Location: the export's city/location flows straight into ``customers.city`` so the
 campaign can target by CUSTOMER location, not just the studio — the exact gap the
@@ -52,6 +54,15 @@ _FIELD_ALIASES: dict[str, str] = {
 # A row must carry at least one of these to be reachable — else it is dropped.
 _CONTACT_KEYS = ("email", "phone", "ig_handle")
 
+# The consultation-specific HEADERS that separate an Ink Pulse export from a plain
+# customer list. Deliberately excludes the ambiguous "notes" (a generic CRM column):
+# detection keys on an unmistakable consultation-thread / interests header so a
+# name,email,phone,notes customer CSV is never stolen into the ink-pulse path.
+_CONSULTATION_HEADERS = frozenset({
+    "conversation", "messages", "thread", "history", "last_message",
+    "interests", "interest", "style",
+})
+
 
 def _norm_header(h: str) -> str:
     return (h or "").strip().lstrip("﻿").lower().replace(" ", "_")
@@ -78,13 +89,19 @@ def _header_keys(content: str) -> set[str]:
 
 def looks_like_ink_pulse(content: str) -> bool:
     """Header-shape detection: an Ink Pulse export names a contact field
-    (email/phone/instagram) AND a conversation/interest signal — enough to tell it
-    from a competitor export (handle+metrics) or a bare address list."""
+    (email/phone/instagram) AND a CONSULTATION signal (a conversation/thread column
+    or an interests/style note).
+
+    The consultation signal is the load-bearing discriminator: it separates an Ink
+    Pulse export from a plain ``name,email,phone,city`` customer list (which also has
+    a contact field and a name, but no consultation thread) — so this detector NEVER
+    steals a generic customer upload into the ink-pulse path. It also excludes a
+    competitor export (handle+metrics, no contact) and a bare address list."""
     cols = _header_keys(content)
     mapped = {_FIELD_ALIASES.get(c) for c in cols}
     has_contact = bool(mapped & {"email", "phone", "ig_handle"})
-    has_context = bool(mapped & {"conversation", "interests", "name", "location"})
-    return has_contact and has_context
+    has_consultation = bool(cols & _CONSULTATION_HEADERS)
+    return has_contact and has_consultation
 
 
 def _raw_rows(content: str) -> list[dict[str, str]]:
@@ -159,9 +176,11 @@ def _upsert_ink_pulse_lead(
     duplicate it, and its number/handle would be lost). This writes the real
     contact columns, stamps ``source`` + ``lead_stage`` = ``"ink_pulse"``, and
     backfills NULLs on a match without clobbering existing ground truth. Consent is
-    conservative: ``email_opt_in`` only when an email is present, ``sms_opt_in``
-    always False (SMS needs an explicit opt-in) — the send-safety gates still apply
-    downstream regardless."""
+    conservative: BOTH ``email_opt_in`` and ``sms_opt_in`` default False. An Ink Pulse
+    lead is a pre-CRM prospect who went QUIET — merely having emailed the studio once
+    is NOT marketing consent, so the lead is ingested/enriched/targetable but a real
+    email or SMS send still requires an explicit opt-in (the send-safety + named-cohort
+    gates enforce this downstream regardless)."""
     import uuid
 
     import psycopg
@@ -172,7 +191,11 @@ def _upsert_ink_pulse_lead(
 
     email = (row.get("email") or "").strip() or None
     phone = (row.get("phone") or "").strip() or None
-    ig = (row.get("ig_handle") or "").strip().lstrip("@") or None
+    # Instagram handles are case-insensitive, so normalize to lowercase for BOTH the
+    # stored value and the dedup match — else "@Keebs" then "keebs" is the same person
+    # ingested twice. (Email already dedups case-insensitively; phone is exact/best-
+    # effort since formats — "+1 555…" vs "555…" — can't be canonicalized safely.)
+    ig = (row.get("ig_handle") or "").strip().lstrip("@").lower() or None
     name = (row.get("name") or "").strip() or None
     loc = resolve_customer_location({"location": row.get("location")})
     city, state = (loc["city"] or None), (loc["state"] or None)
@@ -194,7 +217,7 @@ def _upsert_ink_pulse_lead(
             clauses.append("phone = %s")
             params.append(phone)
         if ig:
-            clauses.append("ig_handle = %s")
+            clauses.append("lower(ig_handle) = %s")  # ig already lowercased above
             params.append(ig)
         existing = None
         if clauses:
@@ -233,7 +256,7 @@ def _upsert_ink_pulse_lead(
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """,
             (cust_id, tenant_id, name, email, phone, ig, city, state,
-             interests, [], bool(email), False,
+             interests, [], False, False,  # opt-ins default OFF — quiet lead, no consent
              SOURCE_INK_PULSE, notes, SOURCE_INK_PULSE),
         )
         return {"customer_id": cust_id, "created": True}

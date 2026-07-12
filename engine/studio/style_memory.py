@@ -5,8 +5,9 @@ The client called the drafts "generic" and framed the system as "a trainable
 agent … we can start training it." The training signal we already have is the
 operator's EDITS: when they change a draft before approving, the delta between the
 draft and the edited version is a preference. This module distills that delta into
-reusable style preferences and feeds them back into the next draft's brief — so
-the copy stops being generic and starts sounding like the operator's own edits.
+reusable style preferences and renders the brief block that ORDERS the next draft
+to honor them — so the copy stops being generic and starts sounding like the
+operator's own edits.
 
 Two honest layers:
 
@@ -20,8 +21,22 @@ Two honest layers:
     does it repeatedly) and render the brief block that ORDERS the next draft to
     honor them.
 
-Persistence (a ``style`` subject on the memories table) is a thin wiring step; the
-distillation + accumulation intelligence here is the trainable core.
+STATUS — GROUNDWORK (like Meta Pixel): the distillation + accumulation intelligence
+above is COMPLETE and unit-tested (the trainable core). Two wiring steps remain, and
+they are deliberately NOT shipped here because the trigger they need does not exist
+in the locked console yet:
+
+  1. a draft-EDIT-CAPTURE hook — the console must send the (original, edited) caption
+     pair when an operator edits-then-approves a draft; there is no backend endpoint
+     that receives an edited draft body today (approve/override carry a reason, not
+     revised text), so nothing produces the training signal yet; and
+  2. persistence — a ``style`` subject on the ``memories`` table (its subject_type
+     CHECK would be widened the same way :mod:`studio.artist_memory` widens it for
+     ``'artist'``), read back into :func:`studio.ig_pipeline.build_ig_brief_block`.
+
+Both steps are specified in ``docs/style-memory-feasibility.md``. Until the capture
+hook lands, wiring the brief read alone would render nothing (no captured edits),
+so it is honestly deferred rather than shipped as an always-empty block.
 """
 
 from __future__ import annotations

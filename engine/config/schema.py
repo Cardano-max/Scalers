@@ -204,7 +204,10 @@ class CompetitorDiscoveryConfig(BaseModel):
       broader market); empty falls back to the pack positioning / plan.
     * ``min_followers`` / ``min_engagement_rate`` — floors that keep tiny accounts
       out of the mold set; ``None`` means "no floor" (honest: an absent metric is
-      never treated as a zero that fails the floor).
+      never treated as a zero that fails the floor). ``min_engagement_rate`` is a
+      FRACTION in ``[0, 1]`` — ``0.02`` means 2% — matching the discovery-stored
+      ``(likes+comments)/followers`` ratio; a value above 1 is rejected at load so a
+      "2.0 meaning 2%" slip fails LOUD instead of silently dropping every account.
     * ``hashtag_gated`` — kept for the legacy behavior; defaults ``False`` (the new
       broader logic). Set ``True`` only to pin the old hashtag-first matching.
     """
@@ -214,7 +217,7 @@ class CompetitorDiscoveryConfig(BaseModel):
     styles: tuple[str, ...] = ()
     location: str | None = None
     min_followers: int | None = Field(default=None, ge=0)
-    min_engagement_rate: float | None = Field(default=None, ge=0.0)
+    min_engagement_rate: float | None = Field(default=None, ge=0.0, le=1.0)
     limit_handles: int = Field(default=10, ge=1)
     time_budget_s: float = Field(default=60.0, gt=0.0)
     hashtag_gated: bool = False

@@ -222,6 +222,13 @@ class AnthropicResearchProvider:
         communities: list[Community] = []
         creatives: list[Creative] = []
         for rank, s in enumerate(raw_sources):
+            # ``conf`` is a transparent POSITIONAL search-rank prior (earlier hit →
+            # higher), NOT a measured confidence — it only orders results; the real
+            # ground truth is the verbatim url/title/snippet. ``kind="demand"`` below
+            # is the honest default for the map_market intent (generic web results are
+            # demand-side market signals); pain/angle need intent-aware LLM
+            # classification, deliberately not added here to keep this a single
+            # search call with no extra model spend.
             conf = max(0.4, round(0.85 - 0.05 * rank, 2))
             text = s["snippet"] or s["title"] or s["url"]
             if query.intent == "find_communities":

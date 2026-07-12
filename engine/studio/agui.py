@@ -6135,6 +6135,73 @@ def mount_studio_agui(app) -> None:
                 }
             )
 
+        # INK PULSE exports (contact handle + a consultation thread / interests) are
+        # the pre-CRM consultation feed: name/email/phone/instagram/conversation for
+        # prospects who went quiet before booking. They take a dedicated intake so
+        # phone/Instagram-only leads are PERSISTED (not stripped), stamped
+        # source="ink_pulse", deduped on ANY handle, and located by the CUSTOMER's own
+        # city — the exact gaps the generic customers path leaves. Checked before the
+        # conversation/appointment/customers branches: the consultation-signal
+        # discriminator keeps it from stealing a speaker+text thread, an appointment
+        # export, or a plain customer list.
+        from studio.ink_pulse import ingest_ink_pulse, looks_like_ink_pulse
+
+        if looks_like_ink_pulse(content):
+            try:
+                ink = await asyncio.to_thread(
+                    lambda: ingest_ink_pulse(tenant_id, content, dsn=dsn)
+                )
+            except Exception as exc:
+                return JSONResponse(
+                    {"ok": False, "kind": "ink_pulse",
+                     "error": f"{type(exc).__name__}: {exc}"},
+                    status_code=400,
+                )
+            # Attach the cohort so a provided-leads run can target EXACTLY these
+            # pre-CRM leads and the supervisor reads back real counts. Opt-ins are
+            # OFF at ingest — a real send still needs explicit consent downstream.
+            try:
+                from studio.ink_pulse import parse_ink_pulse_export
+
+                def _attach_ink_pulse() -> None:
+                    parsed = parse_ink_pulse_export(content)
+                    sample = [
+                        {"name": r.get("name", ""), "location": r.get("location", "")}
+                        for r in parsed[:5]
+                    ]
+                    plan = _load_plan(session_id, dsn)
+                    plan.customers = {
+                        "filename": filename,
+                        "rows": int(ink.get("rows") or 0),
+                        "columns": ["ink pulse consultation lead"],
+                        "sample": sample,
+                        "ingested": True,
+                        "customer_ids": list(ink.get("customer_ids") or []),
+                        "profile": {"kind": "ink_pulse",
+                                    "created": int(ink.get("created") or 0),
+                                    "matched": int(ink.get("matched") or 0)},
+                        "summary": (
+                            f"{ink.get('ingested')} Ink Pulse consultation lead(s) "
+                            f"imported ({ink.get('created')} new, {ink.get('matched')} "
+                            "already on file); consent opt-ins default OFF"
+                        ),
+                    }
+                    if ink.get("ingested"):
+                        plan.lead_count = int(ink["ingested"])
+                    _persist_plan(dsn, session_id, plan)
+
+                await asyncio.to_thread(_attach_ink_pulse)
+                ink["attachedToPlan"] = True
+            except Exception as exc:
+                ink["attachedToPlan"] = False
+                ink["attach_error"] = f"{type(exc).__name__}: {exc}"
+            return JSONResponse({
+                "ok": True, "kind": "ink_pulse", "filename": filename, **ink,
+                "note": "Pre-CRM consultation leads stored (phone/Instagram-only leads "
+                        "kept, deduped on any handle, located by the customer's own "
+                        "city). Consent opt-ins default OFF — nothing was sent.",
+            })
+
         # CONVERSATION CSVs (speaker + text columns) take the reactivation intake:
         # verbatim threads land in lead_conversations, customers are upserted, and
         # the cohort attaches to the plan — same operator gesture, richer evidence.

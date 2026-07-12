@@ -125,6 +125,12 @@ def test_competitor_discovery_rejects_negative_floors():
         CompetitorDiscoveryConfig(min_followers=-1)
     with pytest.raises(ValidationError):
         CompetitorDiscoveryConfig(min_engagement_rate=-0.1)
+    # min_engagement_rate is a FRACTION in [0,1]; a value above 1 (the "2.0 meaning
+    # 2%" slip) is rejected at load — else it would silently drop every account, since
+    # the discovery-stored engagement_rate is a 0-1 ratio.
+    with pytest.raises(ValidationError):
+        CompetitorDiscoveryConfig(min_engagement_rate=2.0)
+    assert CompetitorDiscoveryConfig(min_engagement_rate=0.02).min_engagement_rate == 0.02
     with pytest.raises(ValidationError):
         CompetitorDiscoveryConfig(limit_handles=0)
     # Valid values are accepted and preserved.

@@ -1188,8 +1188,11 @@ def mount_studio_voice(app) -> None:
 
 def _readback_text(plan: CampaignPlan) -> str:
     chans = ", ".join(c for c in (plan.channels or []) if c) or "no channels yet"
+    # Audience mirrors the arming rule: an unstated audience reads back as the honest
+    # "general audience" broadcast default (not a bare "—"), so the readback matches
+    # what will actually run.
     return (
-        f"Goal: {plan.goal or '—'}. Audience: {plan.audience or '—'}. "
+        f"Goal: {plan.goal or '—'}. Audience: {effective_audience(plan)}. "
         f"Channels: {chans}."
     )
 

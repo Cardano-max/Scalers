@@ -353,7 +353,10 @@ def resolve_niche_city(
             break
     # A configured location wins over the positioning-derived city.
     city = cfg_location or " ".join(city_parts)
-    city_words = {w.lower() for w in city.split()}
+    # Filter set for the niche terms: BOTH the returned city AND the positioning's
+    # OWN city parts, so an override ("Austin") never lets the positioning's city
+    # ("Brooklyn") leak in as a bogus style/search term while we target Austin.
+    city_words = {w.lower() for w in city.split()} | {w.lower() for w in city_parts}
 
     # Configured styles lead the niche terms (deduped, order-preserving) — the
     # STYLE-first, non-hashtag matching the client asked for.

@@ -98,6 +98,13 @@ def study_cross_industry(
     principles = principles_for(objectives)
 
     if provider is None:
+        # Go-live posture is TWO explicit gates, both required before any egress:
+        #   (1) the tenant's [brand_study] enabled=true (default OFF) — the only caller,
+        #       study_for_tenant, returns None otherwise, so reaching here already means
+        #       the operator opted this tenant into live enrichment; and
+        #   (2) an armed ANTHROPIC_API_KEY.
+        # enabled=True is therefore correct at this point (the opt-in is upstream). No
+        # key -> principle library only, honestly noted; nothing is ever fabricated.
         key = (e.get("ANTHROPIC_API_KEY") or "").strip()
         if key:
             from research.providers.anthropic_research import AnthropicResearchProvider

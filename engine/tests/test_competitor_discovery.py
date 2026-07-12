@@ -286,6 +286,10 @@ def test_resolve_niche_city_folds_in_configured_styles_and_location(monkeypatch)
     assert terms[:3] == ["black", "grey", "realism"]
     assert "fine-line" in terms  # positioning still contributes
     assert "pack styles" in evidence
+    # The positioning's OWN city ("brooklyn") must NOT leak in as a bogus style/search
+    # term just because an override city is configured — else discovery searches the
+    # wrong city's name while targeting Austin.
+    assert "brooklyn" not in terms
 
 
 def test_run_discovery_reach_floor_excludes_tiny_accounts(monkeypatch):

@@ -58,7 +58,9 @@ def resolve_customer_location(facts: dict[str, Any] | None) -> dict[str, Any]:
     if not city:
         loc = _clean(f.get("location"))
         if loc:
-            city, state = _parse_location_string(loc)
+            p_city, p_state = _parse_location_string(loc)
+            city = p_city
+            state = state or p_state  # never clobber an explicitly-provided state
             source = "on_file" if city else source
 
     # A location a research pass already extracted into persona traits.
@@ -72,9 +74,13 @@ def resolve_customer_location(facts: dict[str, Any] | None) -> dict[str, Any]:
 
     state = state.upper() if state.upper() in _US_STATES else state
     display = ", ".join(x for x in (city, state) if x)
+    # ``confident`` is on-file ground truth ONLY — a research-*inferred* persona city
+    # (source="persona") is a real signal for skipping a re-search, but it must NOT be
+    # labelled confident, or a downstream copy guard would surface a guessed city as
+    # grounded fact. Honest labelling; the caller skips search on city presence, below.
     return {
         "city": city, "state": state, "display": display,
-        "source": source or "none", "confident": bool(city),
+        "source": source or "none", "confident": bool(city) and source == "on_file",
     }
 
 
@@ -112,8 +118,8 @@ def location_search_query(facts: dict[str, Any] | None) -> str | None:
     Built ONLY from real handles the customer provided (name + instagram) — the
     honest, consented signal, not name-discovery of a stranger."""
     resolved = resolve_customer_location(facts)
-    if resolved["confident"]:
-        return None
+    if resolved["city"]:
+        return None  # already have a city (on-file OR persona-inferred) — no search
     f = facts or {}
     name = _clean(f.get("name"))
     ig = _clean(f.get("ig_handle")).lstrip("@")
