@@ -1,0 +1,103 @@
+"""Ink Pulse ingestion + per-customer location tests (PA meeting 2026-07-11).
+
+The parser and location resolver are PURE (no DB, no network), so these run
+hermetically. Covers: contact-required drop, verbatim conversation → notes,
+ink_pulse markers, CSV + JSON shapes, header detection, and location resolution
+(on-file first, never the studio city, honest-empty otherwise).
+"""
+
+from __future__ import annotations
+
+from studio.ink_pulse import (
+    SOURCE_INK_PULSE,
+    looks_like_ink_pulse,
+    parse_ink_pulse_export,
+)
+from studio.location import (
+    location_search_query,
+    resolve_customer_location,
+)
+
+_CSV = (
+    "name,email,phone,instagram,city,conversation\n"
+    "Amanda Cool,amanda@x.com,555-1000,@amandacool,Austin,Loved the flash but timing was off\n"
+    "Lauren,,555-2000,laurenink,Dallas,Asked about half-sleeve pricing\n"
+    "NoContact,,,,Reno,just browsing\n"          # no email/phone/ig -> dropped
+)
+
+_JSON = (
+    '[{"customer_name": "Todd", "email": "todd@x.com", "style": "black and grey",'
+    ' "last_message": "Wants a cover-up, went quiet on price"}]'
+)
+
+
+def test_parse_drops_unreachable_rows_and_keeps_contactable():
+    rows = parse_ink_pulse_export(_CSV)
+    names = [r["name"] for r in rows]
+    assert names == ["Amanda Cool", "Lauren"]        # NoContact dropped
+    assert all(r["lead_stage"] == SOURCE_INK_PULSE for r in rows)
+    assert all(r["source"] == SOURCE_INK_PULSE for r in rows)
+
+
+def test_parse_keeps_conversation_verbatim_in_notes_and_normalizes_handle():
+    rows = parse_ink_pulse_export(_CSV)
+    amanda = rows[0]
+    assert "Loved the flash but timing was off" in amanda["notes"]  # verbatim
+    assert amanda["ig_handle"] == "amandacool"       # @ stripped
+    assert amanda["location"] == "Austin"            # customer location flows through
+    # A lead reachable only by phone/ig (no email) still ingests.
+    lauren = rows[1]
+    assert lauren["email"] == "" and lauren["phone"] == "555-2000"
+    assert lauren["ig_handle"] == "laurenink"
+
+
+def test_parse_json_shape_and_style_to_interests():
+    rows = parse_ink_pulse_export(_JSON)
+    assert len(rows) == 1
+    todd = rows[0]
+    assert todd["email"] == "todd@x.com"
+    assert todd["interests"] == "black and grey"     # 'style' alias -> interests
+    assert "went quiet on price" in todd["notes"]
+
+
+def test_looks_like_ink_pulse_detects_shape():
+    assert looks_like_ink_pulse(_CSV) is True
+    assert looks_like_ink_pulse(_JSON) is True
+    # A competitor export (handle + metrics, no contact) is NOT an ink-pulse feed.
+    assert looks_like_ink_pulse("handle,url,likes,comments\n@x,u,100,5\n") is False
+    assert looks_like_ink_pulse("") is False
+
+
+# -- per-customer location: on-file first, never the studio city -------------- #
+
+
+def test_location_resolves_from_on_file_city_and_state():
+    r = resolve_customer_location({"city": "Austin", "state": "tx"})
+    assert r["city"] == "Austin" and r["state"] == "TX"
+    assert r["display"] == "Austin, TX"
+    assert r["source"] == "on_file" and r["confident"] is True
+
+
+def test_location_parses_combined_string_from_ink_pulse():
+    r = resolve_customer_location({"location": "Dallas, TX"})
+    assert (r["city"], r["state"], r["confident"]) == ("Dallas", "TX", True)
+    # A bare state with no city is honest — state only, not confident on city.
+    bare = resolve_customer_location({"location": "TX"})
+    assert bare["city"] == "" and bare["state"] == "TX" and bare["confident"] is False
+
+
+def test_location_honest_empty_when_unknown_never_defaults_to_studio():
+    r = resolve_customer_location({"name": "Amanda"})
+    assert r["source"] == "none" and r["confident"] is False and r["display"] == ""
+    # It NEVER invents a city (the studio's or otherwise).
+    assert r["city"] == ""
+
+
+def test_location_search_query_built_from_consented_handles_only():
+    # Resolved -> no search needed.
+    assert location_search_query({"city": "Austin"}) is None
+    # Unresolved but has a name + instagram -> a real, consented query.
+    q = location_search_query({"name": "Amanda Cool", "ig_handle": "@amandacool"})
+    assert q is not None and "Amanda Cool" in q and "amandacool" in q and "location" in q
+    # Nothing to search on -> None (never a fabricated query).
+    assert location_search_query({}) is None
