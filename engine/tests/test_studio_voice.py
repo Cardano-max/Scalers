@@ -117,13 +117,26 @@ def test_persona_is_senior_executive_not_flight_attendant() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_plan_is_runnable_requires_goal_audience_channels() -> None:
+def test_plan_is_runnable_requires_goal_and_channel_audience_optional() -> None:
+    # Client direction (PA meeting 2026-07-11): a goal + a channel is enough to
+    # arm; audience is optional (defaults to general) — the demo stalled by
+    # re-demanding it. Goal and channels are still both required.
     assert not plan_is_runnable(CampaignPlan())
     assert not plan_is_runnable(CampaignPlan(goal="g", audience="a"))  # no channel
-    assert not plan_is_runnable(CampaignPlan(goal="g", channels=["instagram"]))  # no audience
+    assert not plan_is_runnable(CampaignPlan(channels=["instagram"]))  # no goal
+    # Goal + channel, NO audience -> now runnable (audience defaults to general).
+    assert plan_is_runnable(CampaignPlan(goal="g", channels=["instagram"]))
     assert plan_is_runnable(
         CampaignPlan(goal="book consults", audience="lapsed clients", channels=["instagram"])
     )
+
+
+def test_effective_audience_defaults_to_general_when_unstated() -> None:
+    from studio.voice import GENERIC_AUDIENCE, effective_audience
+
+    assert effective_audience(CampaignPlan(goal="g", channels=["instagram"])) == GENERIC_AUDIENCE
+    assert effective_audience(CampaignPlan(audience="  ")) == GENERIC_AUDIENCE
+    assert effective_audience(CampaignPlan(audience="lapsed clients")) == "lapsed clients"
 
 
 # --------------------------------------------------------------------------- #

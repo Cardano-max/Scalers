@@ -466,9 +466,13 @@ VOICE_INSTRUCTIONS = (
     "name people, and lead_count/output_count for a stated number). Capturing "
     "it only in the audience TEXT routes the run to a generic template blast "
     "with no real recipients — a real operator hit exactly that.\n"
-    "PLAN READBACK: once you have at least goal, audience, and channels, read the "
-    "whole plan back out loud in one or two sentences, then ask: 'Should I run "
-    "this?'\n"
+    "PLAN READBACK: as soon as you have a goal and at least one channel, give a "
+    "ONE-LINE recap — the channels and the goal — then ask 'Should I run this?'. Do "
+    "NOT re-read the whole plan or keep re-asking for fields the operator already "
+    "gave. AUDIENCE IS OPTIONAL: if they haven't named one, treat it as a general "
+    "audience and say so in the recap ('...to a general audience') — never stall the "
+    "launch demanding an audience or a fuller readback. If they say the audience is "
+    "'generic'/'general'/'everyone'/'all', that IS the answer; move on.\n"
     "GO-GATE: only if the operator answers with an explicit launch word (go / run "
     "it / let's go / do it / kick it off) do you call request_orchestration. If the "
     "server refuses or the tool returns an error, report that refusal/error VERBATIM "
@@ -810,13 +814,28 @@ def classify_utterance(transcript: str | None) -> str:
     return "other"
 
 
+# The honest default when the operator runs a broadcast campaign without naming a
+# specific audience — the client explicitly wants a "generic" audience to be fine
+# (PA meeting 2026-07-11), so an unstated audience is a general one, not a blocker.
+GENERIC_AUDIENCE = "general audience"
+
+
+def effective_audience(plan: CampaignPlan) -> str:
+    """The audience for the readback: the operator's stated audience, or the honest
+    ``general audience`` default when they didn't name one (a broadcast)."""
+    return (plan.audience or "").strip() or GENERIC_AUDIENCE
+
+
 def plan_is_runnable(plan: CampaignPlan) -> bool:
     """Server-side arming predicate. The GO-gate may only arm (AWAITING_GO=true) once
-    the plan is readback-ready: it has a goal, an audience, and at least one channel.
-    A plan missing any of these can NEVER be launched, regardless of what is said."""
+    the plan has a goal and at least one channel — the two things the team truly
+    needs to aim a run. Audience is NO LONGER a hard gate (client direction, PA
+    meeting 2026-07-11: an unstated audience is 'generic', not a reason to refuse to
+    launch — the demo stalled repeatedly re-demanding it); it defaults to
+    :data:`GENERIC_AUDIENCE` via :func:`effective_audience`. The send-safety guards
+    (test mode, jury confidence, idempotency) are separate and unchanged."""
     return bool(
         (plan.goal or "").strip()
-        and (plan.audience or "").strip()
         and [c for c in (plan.channels or []) if (c or "").strip()]
     )
 
@@ -831,7 +850,8 @@ def evaluate_go_gate(*, awaiting_go: bool, transcript: str | None) -> dict[str, 
     if launch:
         reason = "armed + explicit go-phrase"
     elif not awaiting_go:
-        reason = "not armed: plan readback not complete (goal/audience/channels required)"
+        reason = ("not armed: plan not runnable yet (a goal and at least one channel "
+                  "are required; audience defaults to general)")
     elif classification == "edit":
         reason = "utterance is an EDIT/instruction, not a launch"
     else:
