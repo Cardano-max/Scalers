@@ -188,6 +188,29 @@ def main() -> None:
     assert int(mem.get("customers_total") or 0) >= 20, (
         f"seeded customers missing: {mem.get('customers_total')}")
 
+    # 2c. competitor post IMAGE research (meeting ask): upload a screenshot as
+    #     kind=competitor → the VLM analyzes the IMAGE and it is filed as a
+    #     competitor_posts row for creative-intelligence scoring — and it must
+    #     NOT land in the artwork library.
+    _shot_b64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAE"
+        "hQGAhKmMIQAAAABJRU5ErkJggg=="
+    )
+    shot = call("POST", "/studio/upload/image", {
+        "name": "verify-competitor-shot.png", "contentBase64": _shot_b64,
+        "mediaType": "image/png", "kind": "competitor",
+        "prompt": "@verify_rival probe screenshot (verification run)",
+    })
+    cp = shot.get("competitorPost") or {}
+    assert cp.get("post_id"), f"competitor screenshot not filed: {json.dumps(shot)[:400]}"
+    assert cp.get("handle") == "verify_rival"
+    assert shot.get("assetId") is None, "competitor screenshot leaked into artwork library"
+    # A 1×1 probe pixel may honestly yield no facts — any of these is a REAL,
+    # non-fabricated outcome; what matters is the row + the analysis attempt.
+    assert shot.get("vlmStatus") in ("ok", "no_facts", "unavailable")
+    print(f"competitor screenshot OK: post={cp.get('post_id')} handle={cp.get('handle')} "
+          f"vlm={shot.get('vlmStatus')} tags={cp.get('visual_tags')}")
+
     # 3. launch a REAL 3-lead win-back run (console 'Run campaign' button path).
     #    drafts_only + approve-first: NOTHING can send; test-mode is server-gated.
     plan = {

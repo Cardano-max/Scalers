@@ -257,6 +257,9 @@ export async function uploadArtworkImage(args: {
   mediaType?: string;
   artist: string;
   prompt?: string;
+  /** 'competitor' files the image as a competitor post (VLM-analyzed for
+   *  creative intelligence) instead of our artwork library. */
+  kind?: string;
 }): Promise<UploadImageResult> {
   const res = await fetch('/studio/upload/image', {
     method: 'POST',
@@ -267,6 +270,7 @@ export async function uploadArtworkImage(args: {
       ...(args.mediaType ? { mediaType: args.mediaType } : {}),
       artist: args.artist,
       ...(args.prompt ? { prompt: args.prompt } : {}),
+      ...(args.kind ? { kind: args.kind } : {}),
     }),
   });
   const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;

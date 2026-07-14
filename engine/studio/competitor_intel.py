@@ -276,6 +276,77 @@ def ingest_competitor_csv(
     }
 
 
+SOURCE_SCREENSHOT = "screenshot_upload"
+
+# Leading "@handle" in the operator's prompt names the competitor; the rest is
+# treated as the caption they transcribed (both optional, never invented).
+_SHOT_PROMPT_RE = re.compile(r"^@([A-Za-z0-9._]{2,60})\b[\s:,—-]*(.*)$", re.S)
+
+
+def record_screenshot_post(
+    tenant_id: str,
+    *,
+    name: str,
+    prompt: str | None,
+    vlm: dict[str, Any],
+    artifact_id: str,
+    sha: str,
+    dsn: str | None = None,
+) -> dict[str, Any]:
+    """File an uploaded competitor-post SCREENSHOT as a real ``competitor_posts``
+    row whose ``visual_tags`` come from the VLM's image analysis — the image
+    itself is researched, not just operator-typed metadata.
+
+    * handle/caption parse from the operator prompt ("@inkhaus their spring flash
+      drop" → handle=inkhaus, caption=the rest); absent → handle falls back to the
+      filename stem, caption stays empty. Nothing is invented.
+    * metrics stay ABSENT (a screenshot proves content, not engagement numbers) —
+      scoring's None-exclusion renormalizes honestly.
+    * idempotent on the image bytes: the same screenshot re-uploaded refreshes
+      tags/caption on its ONE row (id from the content sha).
+    """
+    ensure_schema(dsn)
+    text = (prompt or "").strip()
+    handle, caption = "", text
+    m = _SHOT_PROMPT_RE.match(text)
+    if m:
+        handle, caption = m.group(1), m.group(2).strip()
+    if not handle:
+        handle = re.sub(r"\.[A-Za-z0-9]+$", "", (name or "").strip()) or "unknown"
+
+    buckets = (vlm or {}).get("tags") or {}
+    visual_tags: list[str] = []
+    for key in ("styles", "motifs", "color_mode", "mood", "complexity"):
+        val = buckets.get(key)
+        if isinstance(val, list):
+            visual_tags.extend(str(t).strip() for t in val if str(t).strip())
+        elif val and str(val).strip():
+            visual_tags.append(str(val).strip())
+
+    post_id = "cmp_" + hashlib.sha1(f"{tenant_id}|shot|{sha}".encode()).hexdigest()[:16]
+    with _connect(dsn) as conn:
+        cur = conn.execute(
+            "INSERT INTO competitor_posts "
+            "(id, tenant_id, handle, url, platform, caption, visual_tags, "
+            " metrics, niche, posted_at, source) "
+            "VALUES (%s,%s,%s,NULL,NULL,%s,%s::jsonb,'{}'::jsonb,NULL,NULL,%s) "
+            "ON CONFLICT (id) DO UPDATE SET "
+            "  handle = EXCLUDED.handle, caption = EXCLUDED.caption, "
+            "  visual_tags = EXCLUDED.visual_tags",
+            (post_id, tenant_id, handle, caption or None,
+             json.dumps(visual_tags), SOURCE_SCREENSHOT),
+        )
+    return {
+        "post_id": post_id,
+        "handle": handle,
+        "caption": caption or None,
+        "visual_tags": visual_tags,
+        "vlm_status": (vlm or {}).get("status"),
+        "artifact_id": artifact_id,
+        "ingested": bool(cur.rowcount),
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Deterministic 0–10 scoring. WEIGHTS below are the documented weighted sum;
 # a component with no underlying data is None and EXCLUDED (renormalized).
