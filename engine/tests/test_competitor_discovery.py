@@ -253,6 +253,77 @@ def test_resolve_niche_city_fallbacks_topic_goal_and_none():
 
 
 # --------------------------------------------------------------------------- #
+# Client direction (PA meeting 2026-07-11): pack [competitor_discovery] drives
+# STYLE-first (non-hashtag) niche terms + a location override + reach floors.
+# --------------------------------------------------------------------------- #
+def _stub_pack(**cd_kwargs):
+    from config.schema import (
+        CompetitorDiscoveryConfig,
+        TenantPack,
+        VoiceRef,
+    )
+
+    return TenantPack(
+        tenant_id="stub",
+        display_name="Stub Studio",
+        voice=VoiceRef(skill="v", positioning="a Brooklyn fine-line tattoo studio"),
+        competitor_discovery=CompetitorDiscoveryConfig(**cd_kwargs),
+    )
+
+
+def test_resolve_niche_city_folds_in_configured_styles_and_location(monkeypatch):
+    import config.loader as loader
+    from studio.competitor_discovery import resolve_niche_city
+
+    monkeypatch.setattr(
+        loader, "load_pack",
+        lambda tid, **k: _stub_pack(styles=("black and grey realism",), location="Austin"),
+    )
+    terms, city, evidence = resolve_niche_city("stub")
+    # Configured location overrides the positioning-derived city ("Brooklyn").
+    assert city == "Austin"
+    # Configured styles LEAD the niche terms (style-first, no hashtags).
+    assert terms[:3] == ["black", "grey", "realism"]
+    assert "fine-line" in terms  # positioning still contributes
+    assert "pack styles" in evidence
+    # The positioning's OWN city ("brooklyn") must NOT leak in as a bogus style/search
+    # term just because an override city is configured — else discovery searches the
+    # wrong city's name while targeting Austin.
+    assert "brooklyn" not in terms
+
+
+def test_run_discovery_reach_floor_excludes_tiny_accounts(monkeypatch):
+    import config.loader as loader
+    import studio.competitor_discovery as cd
+
+    monkeypatch.setattr(
+        loader, "load_pack", lambda tid, **k: _stub_pack(min_followers=5000)
+    )
+    # score_posts returns a big account and a tiny one; the floor must drop the tiny.
+    scored = [
+        {"id": "cmp_big", "handle": "bigstudio", "url": "https://ig/p/big",
+         "total_score": 8.0, "why_it_worked": "reach", "metrics": {"followers": 90000}},
+        {"id": "cmp_tiny", "handle": "tinystudio", "url": "https://ig/p/tiny",
+         "total_score": 9.5, "why_it_worked": "caption", "metrics": {"followers": 200}},
+    ]
+    monkeypatch.setattr(cd, "resolve_niche_city",
+                        lambda *a, **k: (["realism"], "Austin", "pack styles"))
+    monkeypatch.setattr(cd, "discover_candidate_handles",
+                        lambda *a, **k: [{"handle": "bigstudio", "evidence_url": "u",
+                                          "evidence_title": None}])
+    monkeypatch.setattr(cd, "upsert_discovered_posts", lambda *a, **k: 2)
+    monkeypatch.setattr("studio.competitor_intel.score_posts", lambda *a, **k: scored)
+
+    out = cd.run_discovery(
+        "stub",
+        fetch=lambda h: {"username": h, "followers_count": 90000, "media": []},
+    )
+    top_ids = [t["postId"] for t in out["top"]]
+    assert top_ids == ["cmp_big"]           # the tiny account is excluded
+    assert "below the reach floor" in out["note"]
+
+
+# --------------------------------------------------------------------------- #
 # Pure: the ONE Graph GET — request SHAPE, parse, honest errors, scrubbing.
 # --------------------------------------------------------------------------- #
 class _Resp:

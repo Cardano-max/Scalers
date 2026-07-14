@@ -1,0 +1,42 @@
+# Verify the DEPLOYED stack end-to-end the way a client would use it:
+# wait for the new build, check roster/memory seeds, launch a REAL 3-lead
+# win-back campaign through POST /studio/run (the console button path),
+# watch the multi-agent spine execute, and assert every staged draft is
+# HELD (PENDING) with a full Agent Contributions trail. Prints the trail
+# as evidence. Runs from Actions because the engine host is only
+# reachable from there.
+#
+# Trigger: push touching deploy/VERIFY_TRIGGER, or workflow_dispatch.
+
+name: verify-production
+
+on:
+  push:
+    paths: ["deploy/VERIFY_TRIGGER"]
+  workflow_dispatch:
+    inputs:
+      engine_url:
+        description: "Deployed engine base URL"
+        required: false
+        default: "https://scalers-engine.onrender.com"
+
+concurrency:
+  group: verify-production
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify via the engine's real endpoints
+        env:
+          ENGINE_URL: ${{ inputs.engine_url || 'https://scalers-engine.onrender.com' }}
+          TENANT_ID: ladies8391
+          # Gate on Render reporting THIS commit live before running the
+          # scenario — otherwise the probe passes against the previous build
+          # and the deploy swap 502s mid-run.
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          EXPECT_COMMIT_SHA: ${{ github.sha }}
+        run: python3 scripts/verify_production.py

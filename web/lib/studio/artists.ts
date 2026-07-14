@@ -216,12 +216,50 @@ export function artifactRawUrl(artifactId: string): string {
  * Returns the engine's HONEST result — a VLM summary only when the engine
  * really produced one; otherwise its own status/note.
  */
+export interface CreateArtistResult {
+  ok: boolean;
+  slug?: string;
+  created?: boolean;
+  error?: string;
+}
+
+/** Create (or idempotently match) a roster artist via POST /studio/artists. */
+export async function createArtist(args: {
+  name: string;
+  studio?: string;
+  instagram?: string;
+  brandVoice?: string;
+  persona?: string;
+}): Promise<CreateArtistResult> {
+  const res = await fetch('/studio/artists', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(args),
+  });
+  const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok || data.ok !== true) {
+    return {
+      ok: false,
+      error:
+        (typeof data.error === 'string' && data.error) || `create failed (HTTP ${res.status})`,
+    };
+  }
+  return {
+    ok: true,
+    slug: typeof data.slug === 'string' ? data.slug : undefined,
+    created: data.created === true,
+  };
+}
+
 export async function uploadArtworkImage(args: {
   name: string;
   contentBase64: string;
   mediaType?: string;
   artist: string;
   prompt?: string;
+  /** 'competitor' files the image as a competitor post (VLM-analyzed for
+   *  creative intelligence) instead of our artwork library. */
+  kind?: string;
 }): Promise<UploadImageResult> {
   const res = await fetch('/studio/upload/image', {
     method: 'POST',
@@ -232,6 +270,7 @@ export async function uploadArtworkImage(args: {
       ...(args.mediaType ? { mediaType: args.mediaType } : {}),
       artist: args.artist,
       ...(args.prompt ? { prompt: args.prompt } : {}),
+      ...(args.kind ? { kind: args.kind } : {}),
     }),
   });
   const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;

@@ -1,0 +1,111 @@
+# Seed the DEPLOYED engine with the starter dataset through its REAL HTTP
+# endpoints (the same routes the console uses) — no direct DB access needed:
+#   1. the Kaps roster artist (with studio + brand-voice memory)
+#   2. 20 Kaps consultation conversations (test-safe synthetic identities)
+#   3. the competitor-posts intel set
+# Idempotent: the artist endpoint matches by name, the conversation/competitor
+# ingests dedup on their natural keys — re-running seeds nothing twice.
+#
+# Trigger: push touching deploy/SEED_TRIGGER, or workflow_dispatch post-merge.
+
+name: seed-production
+
+on:
+  push:
+    paths: ["deploy/SEED_TRIGGER"]
+  workflow_dispatch:
+    inputs:
+      engine_url:
+        description: "Deployed engine base URL"
+        required: false
+        default: "https://scalers-engine.onrender.com"
+
+concurrency:
+  group: seed-production
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Seed via the engine's real endpoints
+        env:
+          ENGINE_URL: ${{ inputs.engine_url || 'https://scalers-engine.onrender.com' }}
+        run: |
+          python3 - << 'PY'
+          import json, os, time, urllib.error, urllib.request
+
+          BASE = os.environ["ENGINE_URL"].rstrip("/")
+
+          def post(path, body, timeout=180, retries=8):
+              # Render answers 502/503 from its proxy while a deploy swaps
+              # instances — retry through the window instead of dying on it.
+              for attempt in range(retries):
+                  req = urllib.request.Request(
+                      BASE + path, data=json.dumps(body).encode(),
+                      headers={"content-type": "application/json"})
+                  try:
+                      with urllib.request.urlopen(req, timeout=timeout) as r:
+                          return json.loads(r.read() or b"{}")
+                  except urllib.error.HTTPError as e:
+                      if e.code in (502, 503, 504) and attempt < retries - 1:
+                          print(f"  {path}: HTTP {e.code} (deploy window) — retry {attempt+1}")
+                          time.sleep(20)
+                          continue
+                      raise
+                  except (urllib.error.URLError, TimeoutError) as e:
+                      if attempt < retries - 1:
+                          print(f"  {path}: {e} — retry {attempt+1}")
+                          time.sleep(20)
+                          continue
+                      raise
+
+          # Wait for the engine — and specifically for a build that HAS the
+          # artists route (an empty POST returns 400 "name required" on new code;
+          # 404/405 = stale build, 5xx = deploy window — keep waiting on all).
+          for i in range(60):
+              try:
+                  with urllib.request.urlopen(BASE + "/healthz", timeout=15) as r:
+                      pass
+                  try:
+                      post("/studio/artists", {}, timeout=20, retries=1)
+                      print("artists route live"); break
+                  except urllib.error.HTTPError as he:
+                      if he.code == 400:
+                          print("artists route live (400 name-required)"); break
+                      print(f"waiting for new build ({i}): HTTP {he.code}")
+              except Exception as e:
+                  print(f"waiting for engine ({i}): {e}")
+              time.sleep(15)
+          else:
+              raise SystemExit("engine never became ready with the artists route")
+
+          # 1. Kaps on the roster (idempotent by name).
+          out = post("/studio/artists", {
+              "name": "Kaps",
+              "studio": "Skin Design Tattoos",
+              "persona": "Black and grey realism specialist — bold geometry, "
+                         "lettering, cover-ups.",
+              "brandVoice": "confident, direct, craft-first; never discount-led",
+          })
+          print("artist:", out)
+
+          # 2. The 20 Kaps consultation conversations.
+          convo = open("deploy/seed/kaps_conversations.csv").read()
+          out = post("/studio/upload", {"sessionId": "studio-live-session",
+                                        "filename": "kaps_conversations.csv",
+                                        "content": convo})
+          print("conversations:", {k: out.get(k) for k in
+                ("ok", "kind", "customers", "turns", "attachedToPlan")})
+
+          # 3. Competitor intel posts.
+          comp = open("deploy/seed/competitors.csv").read()
+          out = post("/studio/upload", {"sessionId": "studio-live-session",
+                                        "filename": "competitors.csv",
+                                        "content": comp})
+          print("competitors:", {k: out.get(k) for k in
+                ("ok", "kind", "ingested", "handles")})
+          print("SEED COMPLETE")
+          PY

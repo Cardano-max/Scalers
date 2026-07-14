@@ -41,6 +41,8 @@ from typing import Any
 from fastapi import Request
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, DeferredToolRequests, RunContext
+
+from harness.config import POLICY_CEILING_MODEL as _POLICY_CEILING
 from pydantic_ai.ui import StateDeps  # noqa: F401  (re-exported for callers/tests)
 
 from studio.campaign_plan_store import latest_plans, upsert_plan
@@ -55,8 +57,66 @@ from studio.chat_store import VALID_ROLES, PostgresChatStore
 HOST_AGUI_MODEL = "anthropic:claude-haiku-4-5"
 # The REAL model the compose/brainstorm jury runs (Agent(JURY_MODEL).run). The
 # provided-leads staged-count check is pure code and records DETERMINISTIC_JURY_MODEL
-# from autonomy.jury instead (65w.15) — never this id.
-JURY_MODEL = "anthropic:claude-sonnet-4-5"
+# from autonomy.jury instead (65w.15) — never this id. Derived from the policy
+# ceiling (haiku under the operator's 2026-07-14 cost order; ENGINE_MODEL_CEILING
+# lifts it) instead of a literal that could silently outspend the policy.
+JURY_MODEL = f"anthropic:{_POLICY_CEILING}"
+
+
+def _revise_and_rejudge(
+    critic_cell: Any,
+    draft: dict[str, Any],
+    crit_rationale: str,
+    crit_confidence: float | None,
+    *,
+    objective: str,
+    tenant_id: str | None,
+    revise: Any,
+) -> dict[str, Any] | None:
+    """One bounded critic→copywriter→critic round for a drafted email.
+
+    ``revise`` is the revision seam (``studio.customer_research.
+    revise_outreach_draft`` in production; injectable for tests). Returns
+    ``None`` when no revision was produced, else a dict with the rewrite, the
+    re-judgement, and ``kept`` — True only when the rewrite judged BETTER
+    (approve, or revise at strictly higher confidence). An unjudged rewrite is
+    never kept over a judged original.
+    """
+    revised = revise(tenant_id, draft, crit_rationale)
+    if revised is None:
+        return None
+    re_verdict: str | None = None
+    re_conf: float | None = None
+    try:
+        re_prompt = "\n".join(
+            p
+            for p in [
+                f"Campaign objective: {objective}",
+                f"Channel: {draft.get('channel')}",
+                f"ASSET TO JUDGE (the outreach copy):\n{revised['draft']}",
+                f"Subject/headline: {revised['subject']}",
+                "Judge whether this is ship-quality outreach for this lead; flag "
+                "any off-voice phrasing, unsupported claim, or weak/absent call "
+                "to action as a concrete issue. Do not invent praise.",
+            ]
+            if p
+        )
+        recrit = critic_cell.run_sync(re_prompt)
+        re_verdict = recrit.verdict.value
+        re_conf = float(recrit.confidence)
+    except Exception:
+        pass  # unjudged rewrite is never kept over a judged original
+    kept = re_verdict == "approve" or (
+        re_verdict == "revise" and (re_conf or 0.0) > (crit_confidence or 0.0)
+    )
+    return {
+        "kept": kept,
+        "subject": revised["subject"],
+        "body": revised["draft"],
+        "copy_model": revised["copy_model"],
+        "re_verdict": re_verdict,
+        "re_conf": re_conf,
+    }
 
 
 def _draft_quality_conf(verdict: str | None, confidence: float | None) -> float | None:
@@ -2531,27 +2591,47 @@ def _execute_provided_leads_sync(
     strat_cell = build_strategy_cell()
     strat_model = _cell_model(strat_cell)
     campaign_angle: str | None = None
-    try:
-        strategy = strat_cell.run_sync(
-            build_strategy_prompt(describe_tenant(tenant_id), _brief_from_plan(plan))
-        )
-        campaign_angle = (strategy.target_angle or "").strip() or None
+    # LLM cells (strategist/critic) follow the SAME switch as the copywriter: no
+    # Anthropic key (or SCALERS_OUTREACH_LLM=0) → an honest SKIP, never a network
+    # attempt. A keyless run used to attempt-and-error here anyway, which was
+    # both slow (per-lead retry time) and FLAKY: whether the error classified as
+    # a "model error" depended on how the network refused, so the failure
+    # breaker sometimes tripped a keyless CI run at exactly 5 drafts.
+    from studio.customer_research import _llm_copy_enabled as _llm_cells_enabled
+
+    _cells_on = _llm_cells_enabled()
+    if not _cells_on:
         _rec(
             "strategist",
             strat_model,
             {"goal": goal, "n_leads": len(leads), "lead_source": "provided"},
-            strategy.model_dump(),
+            {"status": "skipped",
+             "note": "LLM cells disabled (no Anthropic key or SCALERS_OUTREACH_LLM=0)"
+                     " — drafting deterministically from the goal"},
             id_=f"ar_strategist_{hashlib.sha1(str(run_id).encode()).hexdigest()[:16]}",
         )
-    except Exception as exc:  # honest failed run, never a fabricated strategy
-        _strategist_failed = True
-        _rec(
-            "strategist",
-            strat_model,
-            {"goal": goal, "lead_source": "provided"},
-            {"status": "failed", "error": f"{type(exc).__name__}: {exc}"},
-            id_=f"ar_strategist_{hashlib.sha1(str(run_id).encode()).hexdigest()[:16]}",
-        )
+    else:
+        try:
+            strategy = strat_cell.run_sync(
+                build_strategy_prompt(describe_tenant(tenant_id), _brief_from_plan(plan))
+            )
+            campaign_angle = (strategy.target_angle or "").strip() or None
+            _rec(
+                "strategist",
+                strat_model,
+                {"goal": goal, "n_leads": len(leads), "lead_source": "provided"},
+                strategy.model_dump(),
+                id_=f"ar_strategist_{hashlib.sha1(str(run_id).encode()).hexdigest()[:16]}",
+            )
+        except Exception as exc:  # honest failed run, never a fabricated strategy
+            _strategist_failed = True
+            _rec(
+                "strategist",
+                strat_model,
+                {"goal": goal, "lead_source": "provided"},
+                {"status": "failed", "error": f"{type(exc).__name__}: {exc}"},
+                id_=f"ar_strategist_{hashlib.sha1(str(run_id).encode()).hexdigest()[:16]}",
+            )
 
     # ARTWORK ATTACH GATE (engine-core item 3, spec §9/10/22) — AFTER strategy, BEFORE
     # any drafting. When the operator asked for artwork on this cohort, surface the TOP
@@ -2819,7 +2899,16 @@ def _execute_provided_leads_sync(
             if _prior_aid:
                 pending.append(_prior_aid)
             continue
-        research = research_studio(facts, enabled=deep)  # real Firecrawl about THIS studio
+        # Per-lead web hits, GATED by the Identity Guardian before anything reads
+        # them: research_studio searches by the lead's NAME, so its raw hits can be
+        # strangers (a real prod run surfaced an actress's Wikipedia page for a
+        # common-name lead). Only confirmed/likely hits may reach the copywriter
+        # or count as "cited"; the set-asides are recorded with their reason.
+        from studio.identity_guardian import partition_verified as _partition_identity
+
+        _raw_hits = research_studio(facts, enabled=deep)
+        _hits_gate = _partition_identity(facts, _raw_hits)
+        research = _hits_gate["verified"]
         # PER-LEAD PUBLIC ENRICHMENT (deep research on): the cited public-web read
         # of THIS lead (their business/professional/social presence — every stored
         # fact carries its source URL; sensitive traits are suppressed and counted;
@@ -2835,6 +2924,19 @@ def _execute_provided_leads_sync(
                 _enr = enrich_lead(tenant_id, cust_id, dsn=dsn)
                 public_enrichment = {
                     "found": len(_enr.get("found") or []),
+                    # Identity Guardian verdicts: how many candidates were verified
+                    # as THIS customer vs surfaced-unverified vs rejected strangers.
+                    "identity": _enr.get("identity_counts"),
+                    "unverified": len(_enr.get("unverified") or []),
+                    # The uncertain candidates THEMSELVES (url + why they were not
+                    # used) so the operator can see exactly what was set aside —
+                    # shown, never personalized on.
+                    "unverified_detail": [
+                        {"url": u.get("url"),
+                         "reason": ((u.get("identity") or {}).get("concerns")
+                                    or ["unverified"])[-1]}
+                        for u in (_enr.get("unverified") or [])[:3]
+                    ],
                     "suppressed": int(_enr.get("suppressed") or 0),
                     "misses": len(_enr.get("misses") or []),
                     "memory_id": _enr.get("memory_id"),
@@ -2849,6 +2951,12 @@ def _execute_provided_leads_sync(
                 }
         th = facts.get("tattoo_history", []) or []
         traits = facts.get("persona_traits", {}) or {}
+        # OSINT location signal from IDENTITY-VERIFIED hits ONLY (a stranger's
+        # city is worse than no city). Evidence URL + verbatim excerpt ride
+        # along; None → key absent from the record, nothing invented.
+        from studio.location import location_from_verified_research as _loc_osint
+
+        _loc_sig = _loc_osint(research)
         sources = [
             {
                 "url": r.get("url"),
@@ -2867,9 +2975,21 @@ def _execute_provided_leads_sync(
             {
                 "cited": len(sources),
                 "sources": sources,
+                # The guardian's read of the RAW name-search hits: how many were
+                # verified as this lead vs set aside (with the reason) vs rejected.
+                "sources_identity": {
+                    "counts": _hits_gate["counts"],
+                    "set_aside": [
+                        {"url": u.get("url"),
+                         "reason": ((u.get("identity") or {}).get("concerns")
+                                    or ["unverified"])[-1]}
+                        for u in _hits_gate["unverified"][:3]
+                    ],
+                },
                 "lead": facts.get("name"),
                 "customer_id": cust_id,
                 "public_enrichment": public_enrichment,
+                **({"location_signal": _loc_sig} if _loc_sig else {}),
                 "db_history": {
                     "city": facts.get("city"),
                     "past_tattoos": len(th),
@@ -3056,14 +3176,56 @@ def _execute_provided_leads_sync(
             f"{draft.get('subject') or ''}\n{draft.get('draft') or ''}", _pers_facts
         )
         if _pers_viol:
-            skipped.append(
-                {
-                    "row": _row,
-                    "lead": facts.get("name") or cust_id,
-                    "reason": f"fake personalization: {_pers_viol[0]}",
-                }
-            )
-            continue
+            # FIX THE FAKE at the source instead of dropping the lead: ONE bounded
+            # rewrite whose critique is the exact ungrounded claims, re-checked by
+            # the SAME guard. Only a still-dirty rewrite (or no LLM to rewrite
+            # with) skips the lead — the guard never weakens, the lead keeps its
+            # draft when the fake is removable, and the repair is recorded as a
+            # real `reviser` agent_run either way.
+            _fixed = False
+            if _cells_on and not _breaker_tripped:
+                from studio.customer_research import revise_outreach_draft as _rv
+
+                _fix_critique = (
+                    "The draft makes claims about this customer that are NOT on "
+                    "file (fake personalization). Remove or rephrase EXACTLY these "
+                    "ungrounded claims — and do NOT replace them with any other "
+                    "claim about the customer:\n- " + "\n- ".join(_pers_viol)
+                )
+                _rw = _rv(tenant_id, draft, _fix_critique)
+                if _rw is not None:
+                    _viol2 = personalization_violations(
+                        f"{_rw.get('subject') or ''}\n{_rw.get('draft') or ''}",
+                        _pers_facts,
+                    )
+                    _fixed = not _viol2
+                    _rec(
+                        "reviser",
+                        _rw["copy_model"],
+                        {"customer_id": cust_id, "channel": draft["channel"],
+                         "critic_issues": f"personalization guard: {'; '.join(_pers_viol)[:400]}"},
+                        {"applied": _fixed,
+                         "before_subject": draft.get("subject") or "",
+                         "after_subject": _rw["subject"],
+                         "note": ("ungrounded claim removed — guard re-check clean, "
+                                  "draft saved" if _fixed else
+                                  "rewrite still failed the guard — lead skipped "
+                                  "honestly")},
+                    )
+                    if _fixed:
+                        draft["subject"] = _rw["subject"]
+                        draft["draft"] = _rw["draft"]
+                        draft.setdefault("grounding", []).append(
+                            "copy=degrounded_after_guard")
+            if not _fixed:
+                skipped.append(
+                    {
+                        "row": _row,
+                        "lead": facts.get("name") or cust_id,
+                        "reason": f"fake personalization: {_pers_viol[0]}",
+                    }
+                )
+                continue
 
         # First-class per-lead DOSSIER (P2-C, 65w.7): assemble the evidence-linked record
         # from the REAL facts already gathered (identity/contact, persona, the grounded
@@ -3155,39 +3317,53 @@ def _execute_provided_leads_sync(
         # both None -> honest unknown conf, never a fabricated score.
         crit_verdict: str | None = None
         crit_confidence: float | None = None
-        try:
-            crit = critic_cell.run_sync(crit_prompt)
-            crit_verdict, crit_confidence = crit.verdict.value, float(crit.confidence)
-            # A REAL model call succeeded for this lead — the failure streak breaks.
-            _model_fail_streak = 0
+        crit_rationale: str = ""
+        if not _cells_on:
+            # Same switch as the strategist: keyless/LLM-off is a SKIP, not a
+            # per-lead network error that could feed the failure breaker.
             _rec(
                 "critic",
                 _cell_model(critic_cell),
                 {"customer_id": cust_id, "channel": draft["channel"]},
-                {
-                    "verdict": crit_verdict,
-                    "confidence": crit_confidence,
-                    "rationale": crit.rationale,
-                },
+                {"verdict": "skipped", "confidence": None,
+                 "rationale": "LLM cells disabled (no Anthropic key or "
+                              "SCALERS_OUTREACH_LLM=0) — no critic verdict"},
             )
-        except Exception as exc:  # honest failed verdict, never fabricated praise
-            # Circuit-breaker signal: this lead hit a REAL model/HTTP error (in the
-            # critic, or already in the draft cell whose copy fell back to template).
-            if _is_model_error(exc) or _draft_model_fallback(draft):
-                _model_fail_streak += 1
-                _last_model_error = f"{type(exc).__name__}: {exc}"
-            else:
+        else:
+            try:
+                crit = critic_cell.run_sync(crit_prompt)
+                crit_verdict, crit_confidence = crit.verdict.value, float(crit.confidence)
+                crit_rationale = (crit.rationale or "").strip()
+                # A REAL model call succeeded for this lead — the failure streak breaks.
                 _model_fail_streak = 0
-            _rec(
-                "critic",
-                _cell_model(critic_cell),
-                {"customer_id": cust_id, "channel": draft["channel"]},
-                {
-                    "verdict": "error",
-                    "confidence": 0.0,
-                    "rationale": f"critic cell failed: {type(exc).__name__}: {exc}",
-                },
-            )
+                _rec(
+                    "critic",
+                    _cell_model(critic_cell),
+                    {"customer_id": cust_id, "channel": draft["channel"]},
+                    {
+                        "verdict": crit_verdict,
+                        "confidence": crit_confidence,
+                        "rationale": crit.rationale,
+                    },
+                )
+            except Exception as exc:  # honest failed verdict, never fabricated praise
+                # Circuit-breaker signal: this lead hit a REAL model/HTTP error (in the
+                # critic, or already in the draft cell whose copy fell back to template).
+                if _is_model_error(exc) or _draft_model_fallback(draft):
+                    _model_fail_streak += 1
+                    _last_model_error = f"{type(exc).__name__}: {exc}"
+                else:
+                    _model_fail_streak = 0
+                _rec(
+                    "critic",
+                    _cell_model(critic_cell),
+                    {"customer_id": cust_id, "channel": draft["channel"]},
+                    {
+                        "verdict": "error",
+                        "confidence": 0.0,
+                        "rationale": f"critic cell failed: {type(exc).__name__}: {exc}",
+                    },
+                )
 
         # MODEL-FAILURE CIRCUIT BREAKER trip check: strategist failed AND the last
         # MODEL_FAILURE_BREAKER_THRESHOLD leads ALL hit real model errors. This lead's
@@ -3199,6 +3375,51 @@ def _execute_provided_leads_sync(
             and _model_fail_streak >= MODEL_FAILURE_BREAKER_THRESHOLD
         ):
             _breaker_tripped = True
+
+        # REVISE LOOP (one bounded pass): a 'revise' verdict with concrete issues is
+        # ACTED ON, not just filed — the copywriter fixes exactly the named issues
+        # (hard anti-fabrication contract), the critic re-judges the rewrite, and the
+        # BETTER version stages. Recorded as a real `reviser` agent_run either way,
+        # so the evidence panel shows whether the revision was kept or honestly
+        # discarded. Any failure inside keeps the original — never a crash.
+        if (
+            _cells_on
+            and not _breaker_tripped
+            and crit_verdict == "revise"
+            and crit_rationale
+        ):
+            from studio.customer_research import revise_outreach_draft
+
+            outcome = _revise_and_rejudge(
+                critic_cell,
+                draft,
+                crit_rationale,
+                crit_confidence,
+                objective=campaign_angle or goal,
+                tenant_id=tenant_id,
+                revise=revise_outreach_draft,
+            )
+            if outcome is not None:
+                _rec(
+                    "reviser",
+                    outcome["copy_model"],
+                    {"customer_id": cust_id, "channel": draft["channel"],
+                     "critic_issues": crit_rationale[:500]},
+                    {"applied": outcome["kept"],
+                     "before_subject": draft.get("subject") or "",
+                     "after_subject": outcome["subject"],
+                     "reverdict": outcome["re_verdict"],
+                     "reconfidence": outcome["re_conf"],
+                     "note": ("revision fixed the critic's issues — revised draft staged"
+                              if outcome["kept"] else
+                              "revision did not judge better — original kept honestly")},
+                )
+                if outcome["kept"]:
+                    draft["subject"] = outcome["subject"]
+                    draft["draft"] = outcome["body"]
+                    draft.setdefault("grounding", []).append("copy=revised_after_critic")
+                    crit_verdict = outcome["re_verdict"]
+                    crit_confidence = outcome["re_conf"]
 
         # Land the critic's quality score on the draft so the Review Queue shows REAL,
         # varying confidence (a generic draft the critic flags scores lower than a
@@ -3980,6 +4201,8 @@ def _supersede_pending_for(
         return None
     try:
         import psycopg
+
+        from obsapi.db import get_dsn
 
         with psycopg.connect(get_dsn() if dsn is None else dsn, autocommit=True) as conn:
             row = conn.execute(
@@ -5373,7 +5596,6 @@ def mount_studio_agui(app) -> None:
         # thing the operator most needs to see: without it the run is unanswerable, so it
         # hangs forever and every channel behind it looks "queued". Find this tenant's
         # newest still-awaiting pause and hand back the PARENT id that owns it.
-        tenant_id = os.environ.get("STUDIO_TENANT_ID", "demo")
         try:
             import psycopg
 
@@ -6134,6 +6356,73 @@ def mount_studio_agui(app) -> None:
                     "Nothing was sent.",
                 }
             )
+
+        # INK PULSE exports (contact handle + a consultation thread / interests) are
+        # the pre-CRM consultation feed: name/email/phone/instagram/conversation for
+        # prospects who went quiet before booking. They take a dedicated intake so
+        # phone/Instagram-only leads are PERSISTED (not stripped), stamped
+        # source="ink_pulse", deduped on ANY handle, and located by the CUSTOMER's own
+        # city — the exact gaps the generic customers path leaves. Checked before the
+        # conversation/appointment/customers branches: the consultation-signal
+        # discriminator keeps it from stealing a speaker+text thread, an appointment
+        # export, or a plain customer list.
+        from studio.ink_pulse import ingest_ink_pulse, looks_like_ink_pulse
+
+        if looks_like_ink_pulse(content):
+            try:
+                ink = await asyncio.to_thread(
+                    lambda: ingest_ink_pulse(tenant_id, content, dsn=dsn)
+                )
+            except Exception as exc:
+                return JSONResponse(
+                    {"ok": False, "kind": "ink_pulse",
+                     "error": f"{type(exc).__name__}: {exc}"},
+                    status_code=400,
+                )
+            # Attach the cohort so a provided-leads run can target EXACTLY these
+            # pre-CRM leads and the supervisor reads back real counts. Opt-ins are
+            # OFF at ingest — a real send still needs explicit consent downstream.
+            try:
+                from studio.ink_pulse import parse_ink_pulse_export
+
+                def _attach_ink_pulse() -> None:
+                    parsed = parse_ink_pulse_export(content)
+                    sample = [
+                        {"name": r.get("name", ""), "location": r.get("location", "")}
+                        for r in parsed[:5]
+                    ]
+                    plan = _load_plan(session_id, dsn)
+                    plan.customers = {
+                        "filename": filename,
+                        "rows": int(ink.get("rows") or 0),
+                        "columns": ["ink pulse consultation lead"],
+                        "sample": sample,
+                        "ingested": True,
+                        "customer_ids": list(ink.get("customer_ids") or []),
+                        "profile": {"kind": "ink_pulse",
+                                    "created": int(ink.get("created") or 0),
+                                    "matched": int(ink.get("matched") or 0)},
+                        "summary": (
+                            f"{ink.get('ingested')} Ink Pulse consultation lead(s) "
+                            f"imported ({ink.get('created')} new, {ink.get('matched')} "
+                            "already on file); consent opt-ins default OFF"
+                        ),
+                    }
+                    if ink.get("ingested"):
+                        plan.lead_count = int(ink["ingested"])
+                    _persist_plan(dsn, session_id, plan)
+
+                await asyncio.to_thread(_attach_ink_pulse)
+                ink["attachedToPlan"] = True
+            except Exception as exc:
+                ink["attachedToPlan"] = False
+                ink["attach_error"] = f"{type(exc).__name__}: {exc}"
+            return JSONResponse({
+                "ok": True, "kind": "ink_pulse", "filename": filename, **ink,
+                "note": "Pre-CRM consultation leads stored (phone/Instagram-only leads "
+                        "kept, deduped on any handle, located by the customer's own "
+                        "city). Consent opt-ins default OFF — nothing was sent.",
+            })
 
         # CONVERSATION CSVs (speaker + text columns) take the reactivation intake:
         # verbatim threads land in lead_conversations, customers are upserted, and

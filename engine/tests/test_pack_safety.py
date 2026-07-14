@@ -15,7 +15,11 @@ from pydantic import ValidationError
 from config.loader import PackLoader, PackValidationError
 from config.schema import (
     AutonomyConfig,
+    BrandStudyConfig,
     ChannelConfig,
+    CompetitorDiscoveryConfig,
+    InkPulseConfig,
+    MetaPixelConfig,
     RateLimits,
     ResearchConfig,
     ScheduleConfig,
@@ -47,6 +51,12 @@ def test_autonomy_typo_threshold_raises_not_silently_ignored():
         (SuppressionConfig, {"source": "s", "kind": "x"}),
         (ScheduleConfig, {"timezne": "UTC"}),
         (ResearchConfig, {"sourcs": []}),
+        (ResearchConfig, {"provded": "anthropic"}),
+        (CompetitorDiscoveryConfig, {"stiles": ["black and grey"]}),
+        (CompetitorDiscoveryConfig, {"min_folowers": 1000}),
+        (BrandStudyConfig, {"indistries": ["fashion"]}),
+        (InkPulseConfig, {"enabld": True}),
+        (MetaPixelConfig, {"pixel_idd": "123"}),
     ],
 )
 def test_all_nested_models_forbid_extra_keys(model, kwargs):
@@ -93,6 +103,56 @@ def test_quiet_hours_out_of_range_raises():
 def test_empty_tenant_id_raises():
     with pytest.raises(ValidationError):
         TenantPack(tenant_id="", display_name="X", voice=VoiceRef(skill="v"))
+
+
+# -- Client-directed additions (PA meeting 2026-07-11): defaults + validators - #
+
+
+def test_new_configs_default_cleanly_on_a_bare_pack():
+    # A pack that predates these tables must still validate and expose sane
+    # defaults — additive fields never break an existing tenant.
+    pack = TenantPack(tenant_id="acme", display_name="Acme", voice=VoiceRef(skill="v"))
+    assert pack.research.provider == "anthropic"
+    assert pack.competitor_discovery.hashtag_gated is False
+    assert pack.competitor_discovery.limit_handles == 10
+    assert pack.brand_study.enabled is False
+    assert pack.ink_pulse.enabled is False
+    assert pack.meta_pixel is None
+
+
+def test_brand_study_rejects_unknown_objectives_loud():
+    # The principle library silently drops unknown objective names, so a typo like
+    # "grow_followers" in an ENABLED pack would render an empty study block with no
+    # error. Reject at load instead (same fail-loud posture as the engagement bound).
+    from config import BrandStudyConfig
+
+    with pytest.raises(ValidationError):
+        BrandStudyConfig(enabled=True, objectives=["grow_followers"])
+    # Valid names pass, and case/whitespace are normalized.
+    cfg = BrandStudyConfig(enabled=True, objectives=[" Followers ", "SALES"])
+    assert cfg.objectives == ("followers", "sales")
+
+
+def test_competitor_discovery_rejects_negative_floors():
+    with pytest.raises(ValidationError):
+        CompetitorDiscoveryConfig(min_followers=-1)
+    with pytest.raises(ValidationError):
+        CompetitorDiscoveryConfig(min_engagement_rate=-0.1)
+    # min_engagement_rate is a FRACTION in [0,1]; a value above 1 (the "2.0 meaning
+    # 2%" slip) is rejected at load — else it would silently drop every account, since
+    # the discovery-stored engagement_rate is a 0-1 ratio.
+    with pytest.raises(ValidationError):
+        CompetitorDiscoveryConfig(min_engagement_rate=2.0)
+    assert CompetitorDiscoveryConfig(min_engagement_rate=0.02).min_engagement_rate == 0.02
+    with pytest.raises(ValidationError):
+        CompetitorDiscoveryConfig(limit_handles=0)
+    # Valid values are accepted and preserved.
+    cfg = CompetitorDiscoveryConfig(
+        styles=["black and grey realism"], location="Austin", min_followers=5000
+    )
+    assert cfg.styles == ("black and grey realism",)
+    assert cfg.location == "Austin"
+    assert cfg.min_followers == 5000
 
 
 PACK_WITH_BAD_QUIET_HOURS = """

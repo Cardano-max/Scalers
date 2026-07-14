@@ -83,6 +83,10 @@ class _FakeMemory:
 def _wire(monkeypatch, *, strat_exc=None, crit_exc=None):
     """Fake every DB + cell seam under ``_execute_provided_leads_sync`` so it runs
     offline; return the list that captures the goal each draft was built with."""
+    # These suites TEST the strategist/critic mechanics with FAKED cells — opt
+    # into the LLM lane explicitly, since a keyless environment now SKIPS those
+    # cells honestly instead of attempting (and flaking on) network calls.
+    monkeypatch.setenv("SCALERS_OUTREACH_LLM", "1")
     monkeypatch.setattr(memory_mod, "MemoryStore", _FakeMemory)
     monkeypatch.setattr(team_store_mod, "TeamStore", _FakeTeamStore)
     monkeypatch.setattr(store_mod, "ensure_schema", lambda dsn=None: None)

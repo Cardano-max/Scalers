@@ -235,8 +235,10 @@ def test_approve_without_meta_credentials_stays_pending_with_reason(monkeypatch)
             (action_id, tenant),
         )
     try:
+        # live=True authorizes past the public-post TEST-MODE gate so the META
+        # CREDENTIAL gate downstream is what's actually exercised here.
         with pytest.raises(MetaCredentialsMissingError) as ei:
-            approve_and_publish(action_id, dsn=dsn)
+            approve_and_publish(action_id, dsn=dsn, live=True)
         assert str(ei.value) == _BLOCKED_IG
         row = get_action(action_id, dsn=dsn)
         assert row.status == "pending"  # never claimed, never sent, never failed-silent
@@ -271,18 +273,22 @@ def test_scheduler_publish_due_blocks_credentialless_ig_and_clears_schedule(monk
             (action_id, tenant),
         )
     # Scope the sweep to OUR row only (the shared DB may hold other due drafts);
-    # the publish itself runs the REAL approve_and_publish + credential gate.
+    # the publish itself runs the REAL approve_and_publish path. A background sweep
+    # does NOT (and must not) auto-authorize a live send, so a public IG post is held
+    # at the earlier public-post TEST-MODE gate — the point stands: the sweep blocks
+    # it and clears the schedule (no silent retry), it just never reaches the credential
+    # gate. The credential gate itself is covered by the live=True test above.
     monkeypatch.setattr(sched, "due_actions", lambda dsn=None, limit=10: [action_id])
     try:
         swept = sched.publish_due(dsn=dsn)
         blocked = [b for b in swept["blocked"] if b["actionId"] == action_id]
         assert blocked, f"expected a blocked entry, got {swept}"
-        assert blocked[0]["reason"] == _BLOCKED_IG
+        assert "TEST MODE" in blocked[0]["reason"]   # held at the public-post gate
         assert swept["failed"] == [] and swept["published"] == []
         row = get_action(action_id, dsn=dsn)
         assert row.status == "pending"          # still waiting in the ready queue
         assert row.scheduled_for is None        # schedule cleared — no silent retry
-        assert row.last_error == _BLOCKED_IG    # reason recorded on the row
+        assert "TEST MODE" in (row.last_error or "")  # reason recorded on the row
     finally:
         with psycopg.connect(dsn, autocommit=True) as conn:
             conn.execute("DELETE FROM actions WHERE id = %s", (action_id,))
@@ -378,6 +384,8 @@ def test_load_broll_is_tenant_scoped():
             conn.execute("DELETE FROM assets WHERE id = %s", (vid,))
 
 
+@pytest.mark.integration
+@_pg
 def test_load_broll_theme_match_drops_off_theme_reel():
     """A fine-line-botanical post must never carry an off-theme (Marvel) b-roll: with
     a theme, load_broll surfaces only videos whose OWN subject overlaps the theme —

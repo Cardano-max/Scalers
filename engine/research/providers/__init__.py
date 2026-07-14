@@ -6,9 +6,16 @@ that do official-API, TLS-verified I/O — they raise ``NotImplementedError`` un
 wired, and the router degrades to the fixture cleanly.
 """
 
+from research.providers.anthropic_research import AnthropicResearchProvider
 from research.providers.exa import ExaProvider
 from research.providers.firecrawl import FirecrawlProvider
 from research.providers.fixture import FixtureProvider
 from research.providers.meta_ad_library import MetaAdLibraryProvider
 
-__all__ = ["FixtureProvider", "FirecrawlProvider", "ExaProvider", "MetaAdLibraryProvider"]
+__all__ = [
+    "FixtureProvider",
+    "FirecrawlProvider",
+    "ExaProvider",
+    "AnthropicResearchProvider",
+    "MetaAdLibraryProvider",
+]

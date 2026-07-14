@@ -319,14 +319,26 @@ def resolve_niche_city(
 
     ``evidence`` names which source resolved, so the run note is traceable.
     Honest-empty ``([], "", "none")`` when nothing is on file — the caller skips
-    discovery rather than inventing a niche."""
+    discovery rather than inventing a niche.
+
+    The tenant's ``[competitor_discovery]`` pack config (client direction, PA
+    meeting 2026-07-11) sharpens this: configured ``styles`` (e.g. "black and grey
+    realism") are folded into the niche terms so discovery matches on STYLE, not
+    hashtags, and a configured ``location`` overrides the city derived from
+    positioning."""
     positioning = display = ""
+    cfg_styles: list[str] = []
+    cfg_location = ""
     try:
         from config.loader import load_pack
 
         pack = load_pack(tenant_id)
         positioning = (pack.voice.positioning or "").strip()
         display = (pack.display_name or "").strip()
+        cfg = getattr(pack, "competitor_discovery", None)
+        if cfg is not None:
+            cfg_styles = [s.strip() for s in (cfg.styles or ()) if str(s or "").strip()]
+            cfg_location = (cfg.location or "").strip()
     except Exception:  # no/corrupt pack degrades to plan-only grounding
         pass
 
@@ -339,22 +351,41 @@ def resolve_niche_city(
             city_parts.append(w)
         elif city_parts:
             break
-    city = " ".join(city_parts)
-    city_words = {w.lower() for w in city_parts}
+    # A configured location wins over the positioning-derived city.
+    city = cfg_location or " ".join(city_parts)
+    # Filter set for the niche terms: BOTH the returned city AND the positioning's
+    # OWN city parts, so an override ("Austin") never lets the positioning's city
+    # ("Brooklyn") leak in as a bogus style/search term while we target Austin.
+    city_words = {w.lower() for w in city.split()} | {w.lower() for w in city_parts}
+
+    # Configured styles lead the niche terms (deduped, order-preserving) — the
+    # STYLE-first, non-hashtag matching the client asked for.
+    style_terms: list[str] = []
+    seen_style: set[str] = set()
+    for style in cfg_styles:
+        for t in _terms(style):
+            if t not in seen_style and t not in city_words:
+                seen_style.add(t)
+                style_terms.append(t)
+
+    def _lead(terms: list[str], evidence: str) -> tuple[list[str], str, str]:
+        merged = style_terms + [t for t in terms if t not in seen_style]
+        ev = f"pack styles + {evidence}" if style_terms else evidence
+        return (merged or style_terms), city, (ev if merged else "none")
 
     topic_terms = _terms(topic)
     if topic_terms:
-        return topic_terms, city, "operator topic"
+        return _lead(topic_terms, "operator topic")
     if positioning:
         niche = [t for t in _terms(positioning) if t not in city_words]
-        if niche:
-            return niche, city, "tenant pack positioning"
+        if niche or style_terms:
+            return _lead(niche, "tenant pack positioning")
     goal_terms = _terms(str(getattr(plan, "goal", "") or ""))
-    if goal_terms:
-        return goal_terms[:6], city, "plan goal keywords"
+    if goal_terms or style_terms:
+        return _lead(goal_terms[:6], "plan goal keywords")
     if display:
-        return _terms(display), city, "tenant display name"
-    return [], city, "none"
+        return _lead(_terms(display), "tenant display name")
+    return (style_terms, city, "pack styles" if style_terms else "none")
 
 
 # --------------------------------------------------------------------------- #
@@ -549,13 +580,28 @@ def run_discovery(
     )
     out["posts"] = n_posts
 
-    from studio.competitor_intel import score_posts
+    from studio.competitor_intel import meets_reach_floor, score_posts
 
     scored = score_posts(
         tenant_id,
         artist=(str(getattr(plan, "artist", "") or "").strip() or None),
         dsn=dsn,
     )
+
+    # Reach floors (client direction, PA meeting 2026-07-11): hard-exclude tiny
+    # accounts from the operator's mold set. An ABSENT metric never fails a floor
+    # (we don't assume tiny from missing data) — it is the scorer that ranks such
+    # a post below accounts with proven reach. None floors are inactive.
+    min_followers, min_engagement_rate = _reach_floors(tenant_id)
+    eligible = [
+        p for p in scored
+        if meets_reach_floor(
+            p.get("metrics") or {},
+            min_followers=min_followers,
+            min_engagement_rate=min_engagement_rate,
+        )
+    ]
+    dropped = len(scored) - len(eligible)
     out["top"] = [
         {
             "postId": p["id"],
@@ -566,11 +612,31 @@ def run_discovery(
             ),
             "whyItWorked": p.get("why_it_worked"),
         }
-        for p in scored[:6]
+        for p in eligible[:6]
     ]
     out["ok"] = n_posts > 0
+    floor_note = ""
+    if dropped and (min_followers is not None or min_engagement_rate is not None):
+        floor_note = (
+            f", {dropped} below the reach floor "
+            f"(min_followers={min_followers}, min_engagement_rate={min_engagement_rate})"
+        )
     out["note"] = (
         f"discovering competitors live: {len(candidates)} handles found, "
-        f"{len(profiles)} profiles read, {n_posts} posts scored"
+        f"{len(profiles)} profiles read, {n_posts} posts scored{floor_note}"
     )
     return out
+
+
+def _reach_floors(tenant_id: str) -> tuple[int | None, float | None]:
+    """The tenant's competitor reach floors from the pack, or ``(None, None)`` when
+    unconfigured / no pack (best-effort — a broken pack never blocks discovery)."""
+    try:
+        from config.loader import load_pack
+
+        cfg = getattr(load_pack(tenant_id), "competitor_discovery", None)
+        if cfg is not None:
+            return cfg.min_followers, cfg.min_engagement_rate
+    except Exception:  # no/corrupt pack → no floors
+        pass
+    return None, None

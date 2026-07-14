@@ -85,29 +85,6 @@ function splitHook(caption: string): { hook: string; body: string } {
   return { hook, body };
 }
 
-/** A labelled anatomy chip (angle · CTA · a keyword). */
-function Chip({ label, value }: { label: string; value: string }) {
-  return (
-    <span
-      style={{
-        display: 'inline-flex',
-        gap: 5,
-        alignItems: 'baseline',
-        fontSize: 10.5,
-        fontFamily: MONO,
-        border: '1px solid var(--border, #E5E1D8)',
-        borderRadius: 999,
-        padding: '1px 8px',
-        color: 'var(--text, #38342C)',
-        background: 'var(--surface, #FBFAF7)',
-      }}
-    >
-      <span style={{ color: '#A8A299', letterSpacing: '0.4px' }}>{label}</span>
-      <span style={{ fontWeight: 600 }}>{value}</span>
-    </span>
-  );
-}
-
 /** Social Ready Queue — every pending IG/FB post rendered as the REAL post the
  * operator is approving: the image, the hook-led caption, the post anatomy
  * (angle · CTA · keywords) and the competitor pattern it was molded from
@@ -202,7 +179,6 @@ export function ReadyQueueBoard({ onOpen }: { onOpen?: (actionId: string) => voi
 function PostCard({ post: p, onOpen }: { post: ReadyPost; onOpen?: (actionId: string) => void }) {
   const [imgFailed, setImgFailed] = useState(false);
   const { hook, body } = splitHook(p.caption);
-  const a = p.anatomy;
   const badge = CHANNEL_BADGE[p.channel] ?? '#6B675F';
   const showImage = p.artwork?.found && p.artwork.media === 'image' && p.artwork.image_url && !imgFailed;
 

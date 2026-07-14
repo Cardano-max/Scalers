@@ -87,6 +87,23 @@ async def _announce_studio_tenant() -> None:
             "(artwork library, artists, review counts) would have missed and read EMPTY.",
             flush=True,
         )
+
+    # Same boundary-normalization for credential/endpoint vars. A CRLF operator
+    # .env (Windows editors, or `source .env` of a CRLF file) leaves a trailing
+    # '\r' on every value; HTTP clients then reject the header outright and every
+    # model cell fails with a bare "Connection error" that looks like an outage,
+    # not like a line-ending. Strip once here so all consumers read clean values.
+    import re as _re
+
+    _cred = _re.compile(r"(API_KEY|_TOKEN|_SECRET|_URL|_DSN|_KEY)$")
+    for _name, _val in list(os.environ.items()):
+        if _cred.search(_name) and _val != _val.strip():
+            os.environ[_name] = _val.strip()
+            print(
+                f"[studio] {_name} carried stray whitespace/CR — normalized "
+                "(unnormalized it fails as an illegal HTTP header: 'Connection error').",
+                flush=True,
+            )
     tenant = os.environ.get("STUDIO_TENANT_ID")
     if tenant:
         print(f"[studio] serving tenant: {tenant}", flush=True)

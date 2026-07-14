@@ -320,13 +320,20 @@ def enrich_lead(
 
     Returns the honest result::
 
-        {"found": [{quote, url, query, angle, source_type, login_walled}, ...],
+        {"found":      [verified facts + identity {verdict, confidence, evidence}],
+         "unverified": [uncertain candidates — shown with concerns, NEVER used],
          "misses": [{query, note}, ...],
          "suppressed": <n facts dropped by the sensitive-trait filter>,
+         "identity_counts": {"confirmed": n, "likely": n, "uncertain": n, "rejected": n},
          "memory_id": "mem_..." | None}
 
-    Zero surviving facts → no memory write and ``memory_id=None`` (an honest miss,
-    never a fabricated profile). Raises ``LookupError`` for an unknown customer."""
+    Every fact in ``found`` passed the IDENTITY GUARDIAN — its source matched a
+    first-party identifier (IG handle / email / phone / business domain) or the
+    full name plus independent corroboration (city / stated interest). A name-only
+    hit is returned in ``unverified`` and never reaches the dossier; a conflicting
+    profile (different account than the handle on file) is rejected outright.
+    Zero verified facts → no memory write and ``memory_id=None`` (an honest miss,
+    never a stranger's profile). Raises ``LookupError`` for an unknown customer."""
     from studio.customer_research import lookup_lead
 
     facts = lookup_lead(tenant_id, customer_id=customer_id, dsn=dsn)
@@ -342,11 +349,26 @@ def enrich_lead(
         }
     found, misses = _collect_cited_facts(queries)
     kept, suppressed = suppress_sensitive(found)
-    memory_id = _write_enrichment_memory(tenant_id, facts, kept, dsn=dsn) if kept else None
+
+    # IDENTITY GUARDIAN (the "not a random stranger" gate): every surviving fact is
+    # scored against the customer's FIRST-PARTY identifiers. Only confirmed/likely
+    # matches may enter the dossier memory; an uncertain (name-only) candidate is
+    # returned as `unverified` with its concerns — visible, never used; a rejected
+    # candidate (hard identifier conflict) is counted and dropped. Personalization
+    # from someone else's public life can no longer happen.
+    from studio.identity_guardian import partition_verified
+
+    identity = partition_verified(facts, kept)
+    verified = identity["verified"]
+    memory_id = (
+        _write_enrichment_memory(tenant_id, facts, verified, dsn=dsn) if verified else None
+    )
     return {
-        "found": kept,
+        "found": verified,
+        "unverified": identity["unverified"],
         "misses": misses,
         "suppressed": suppressed,
+        "identity_counts": identity["counts"],
         "memory_id": memory_id,
     }
 

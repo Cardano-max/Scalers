@@ -276,6 +276,77 @@ def ingest_competitor_csv(
     }
 
 
+SOURCE_SCREENSHOT = "screenshot_upload"
+
+# Leading "@handle" in the operator's prompt names the competitor; the rest is
+# treated as the caption they transcribed (both optional, never invented).
+_SHOT_PROMPT_RE = re.compile(r"^@([A-Za-z0-9._]{2,60})\b[\s:,—-]*(.*)$", re.S)
+
+
+def record_screenshot_post(
+    tenant_id: str,
+    *,
+    name: str,
+    prompt: str | None,
+    vlm: dict[str, Any],
+    artifact_id: str,
+    sha: str,
+    dsn: str | None = None,
+) -> dict[str, Any]:
+    """File an uploaded competitor-post SCREENSHOT as a real ``competitor_posts``
+    row whose ``visual_tags`` come from the VLM's image analysis — the image
+    itself is researched, not just operator-typed metadata.
+
+    * handle/caption parse from the operator prompt ("@inkhaus their spring flash
+      drop" → handle=inkhaus, caption=the rest); absent → handle falls back to the
+      filename stem, caption stays empty. Nothing is invented.
+    * metrics stay ABSENT (a screenshot proves content, not engagement numbers) —
+      scoring's None-exclusion renormalizes honestly.
+    * idempotent on the image bytes: the same screenshot re-uploaded refreshes
+      tags/caption on its ONE row (id from the content sha).
+    """
+    ensure_schema(dsn)
+    text = (prompt or "").strip()
+    handle, caption = "", text
+    m = _SHOT_PROMPT_RE.match(text)
+    if m:
+        handle, caption = m.group(1), m.group(2).strip()
+    if not handle:
+        handle = re.sub(r"\.[A-Za-z0-9]+$", "", (name or "").strip()) or "unknown"
+
+    buckets = (vlm or {}).get("tags") or {}
+    visual_tags: list[str] = []
+    for key in ("styles", "motifs", "color_mode", "mood", "complexity"):
+        val = buckets.get(key)
+        if isinstance(val, list):
+            visual_tags.extend(str(t).strip() for t in val if str(t).strip())
+        elif val and str(val).strip():
+            visual_tags.append(str(val).strip())
+
+    post_id = "cmp_" + hashlib.sha1(f"{tenant_id}|shot|{sha}".encode()).hexdigest()[:16]
+    with _connect(dsn) as conn:
+        cur = conn.execute(
+            "INSERT INTO competitor_posts "
+            "(id, tenant_id, handle, url, platform, caption, visual_tags, "
+            " metrics, niche, posted_at, source) "
+            "VALUES (%s,%s,%s,NULL,NULL,%s,%s::jsonb,'{}'::jsonb,NULL,NULL,%s) "
+            "ON CONFLICT (id) DO UPDATE SET "
+            "  handle = EXCLUDED.handle, caption = EXCLUDED.caption, "
+            "  visual_tags = EXCLUDED.visual_tags",
+            (post_id, tenant_id, handle, caption or None,
+             json.dumps(visual_tags), SOURCE_SCREENSHOT),
+        )
+    return {
+        "post_id": post_id,
+        "handle": handle,
+        "caption": caption or None,
+        "visual_tags": visual_tags,
+        "vlm_status": (vlm or {}).get("status"),
+        "artifact_id": artifact_id,
+        "ingested": bool(cur.rowcount),
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Deterministic 0–10 scoring. WEIGHTS below are the documented weighted sum;
 # a component with no underlying data is None and EXCLUDED (renormalized).
@@ -290,6 +361,17 @@ WEIGHTS: dict[str, float] = {
     # so an untargeted scoring is byte-identical to before.
     "theme_relevance": 0.40,   # niche+caption+visual_tags vs the CAMPAIGN theme
     "engagement_rate": 0.25,   # interactions/views — the strongest performance signal
+    # FOLLOWER REACH (client's core note, PA meeting 2026-07-11): the old scorer
+    # let a tiny account with a catchy caption out-rank a real top performer
+    # (~100 likes vs the 20k–50k-like accounts the client actually wants to mold
+    # from). For discovered posts the interactions/views rate is usually absent
+    # (the Business Discovery API returns no view count), so raw REACH — account
+    # size + absolute like volume — carries the "who is actually winning" signal.
+    # Both log-scaled (10 ≈ 10k) and None (excluded) when the number is absent, so
+    # nothing is fabricated; the config floors (min_followers / min_engagement_rate)
+    # additionally hard-exclude tiny accounts before they ever reach this scorer.
+    "follower_reach": 0.20,    # account size — big accounts rank above tiny ones
+    "likes_weight": 0.15,      # absolute like volume (log scale) — the "50k likes"
     "comments_weight": 0.10,   # conversation volume (log scale)
     "shares_saves_weight": 0.10,  # amplification/bookmark intent (log scale)
     "niche_match": 0.15,       # niche+caption tokens vs OUR artist style tags
@@ -425,6 +507,14 @@ def score_components(
     else:
         out["engagement_rate"] = None  # honest: no views (or no interactions) reported
 
+    # REACH signals — raw account size + absolute like volume, log-scaled (10 ≈
+    # 10k). These separate the real top performers from the tiny accounts the old
+    # scorer over-rewarded on caption alone. None (excluded) when the number is
+    # absent — never a fabricated zero.
+    followers = metrics.get("followers")
+    out["follower_reach"] = _log_scale(followers) if followers is not None else None
+    out["likes_weight"] = _log_scale(likes) if likes is not None else None
+
     out["comments_weight"] = _log_scale(comments) if comments is not None else None
 
     provided_amp = [v for v in (shares, saves) if v is not None]
@@ -484,6 +574,35 @@ def score_components(
         out["cta_strength"] = None
         out["hook_strength"] = None
     return out
+
+
+def meets_reach_floor(
+    metrics: dict[str, Any] | None,
+    *,
+    min_followers: int | None = None,
+    min_engagement_rate: float | None = None,
+) -> bool:
+    """Whether a post's PROVIDED metrics clear the tenant's reach floors — the
+    hard gate that keeps tiny accounts out of the mold set (client's core note,
+    PA meeting 2026-07-11: stop surfacing ~100-like accounts).
+
+    HONESTY: a floor only rejects when the underlying metric is actually present
+    AND below it. An ABSENT metric is never treated as a failing zero (we can't
+    prove a real account is tiny just because the API didn't return the number),
+    so a post with no follower count still passes the follower floor — it is the
+    *scorer* that then ranks it below accounts with proven reach. ``None`` floors
+    are inactive. ``engagement_rate`` here is the discovery-stored
+    ``(likes+comments)/followers`` ratio, not the views-based score component."""
+    m = metrics or {}
+    if min_followers is not None:
+        f = m.get("followers")
+        if isinstance(f, (int, float)) and not isinstance(f, bool) and f < min_followers:
+            return False
+    if min_engagement_rate is not None:
+        er = m.get("engagement_rate")
+        if isinstance(er, (int, float)) and not isinstance(er, bool) and er < min_engagement_rate:
+            return False
+    return True
 
 
 def weighted_total(components: dict[str, float | None]) -> float | None:

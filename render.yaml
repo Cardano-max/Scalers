@@ -1,0 +1,94 @@
+# Render Blueprint — full-stack Scalers deploy (engine + console + Postgres).
+# One click: https://dashboard.render.com → New → Blueprint → this repo.
+# Full walkthrough + the Vercel-console variant: docs/deploy.md
+#
+# Secrets (sync: false) are prompted at deploy time — paste from the operator's
+# envfile. NEVER commit values.
+
+databases:
+  - name: scalers-db
+    plan: basic-256mb
+    postgresMajorVersion: "16"
+    # pgvector ships on Render Postgres; 01-pgvector.sql runs CREATE EXTENSION
+    # on first boot via the engine's deploy_migrate entrypoint.
+
+services:
+  # ── Python engine: FastAPI portal + GraphQL/SSE + studio agents ────────────
+  - type: web
+    name: scalers-engine
+    runtime: docker
+    dockerfilePath: ./Dockerfile.engine
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /healthz
+    disk:
+      name: artifacts
+      mountPath: /app/engine/var
+      sizeGB: 5
+    envVars:
+      - key: ENGINE_DATABASE_URL
+        fromDatabase:
+          name: scalers-db
+          property: connectionString
+      - key: STUDIO_TENANT_ID
+        value: ladies8391
+      - key: SCALERS_EMBEDDER
+        value: deterministic
+      # The deployed console's origin(s), comma-separated — set after the console
+      # service (or Vercel project) exists, e.g. https://scalers-console.onrender.com
+      - key: CONSOLE_ORIGINS
+        sync: false
+      # ── secrets: prompted at blueprint deploy, never committed ──
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: FIRECRAWL_API_KEY
+        sync: false
+      - key: META_APP_ID
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: META_PAGE_TOKEN
+        sync: false
+      - key: META_IG_USER_ID
+        sync: false
+      - key: LADIES8391_META_ACCESS_TOKEN
+        sync: false
+      - key: LADIES8391_FB_PAGE_TOKEN
+        sync: false
+      - key: GMAIL_CLIENT_ID
+        sync: false
+      - key: GMAIL_CLIENT_SECRET
+        sync: false
+      - key: LADIES8391_GMAIL_OAUTH_REFRESH
+        sync: false
+      - key: SMTP_SENDER
+        sync: false
+      - key: SMTP_APP_PASSWORD
+        sync: false
+      - key: GMAIL_REDIRECT_TO
+        sync: false
+
+  # ── Next.js operator console (skip this service if hosting it on Vercel) ───
+  - type: web
+    name: scalers-console
+    runtime: node
+    rootDir: web
+    plan: starter
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      # Server-side proxy target for the next.config rewrites (/studio, /graphql,
+      # /sse) — the engine service URL. Same-origin proxying keeps SSE unbuffered.
+      - key: STUDIO_BACKEND_ORIGIN
+        fromService:
+          type: web
+          name: scalers-engine
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: NEXT_PUBLIC_DATA_SOURCE
+        value: live
+      - key: NEXT_PUBLIC_TENANT_ID
+        value: ladies8391

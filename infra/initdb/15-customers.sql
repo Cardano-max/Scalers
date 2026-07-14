@@ -53,3 +53,23 @@ CREATE INDEX IF NOT EXISTS customers_tenant_idx ON customers (tenant_id);
 -- (partial index), so the uniqueness contract matches the code's docstring.
 CREATE UNIQUE INDEX IF NOT EXISTS customers_tenant_email_uniq
     ON customers (tenant_id, lower(email)) WHERE email IS NOT NULL;
+
+-- Ink Pulse leads are frequently phone/Instagram-only, and its upsert
+-- (studio/ink_pulse._upsert_ink_pulse_lead) dedups on any contact handle. These
+-- partial UNIQUE backstops give phone/IG the same DB-boundary exactly-once
+-- guarantee email has — a concurrent double-ingest can no longer create two rows
+-- for one person. Non-empty predicates so legacy ''-valued rows never conflict.
+--
+-- The PHONE backstop is scoped to source='ink_pulse' rows ONLY: the other import
+-- paths (client_import / conversation_import / appointment_import) also write
+-- phone, and two legitimate customers CAN share one number (a couple booking
+-- together) — a global unique index would crash those imports. Ink Pulse rows are
+-- exclusively minted by its own upsert, which treats one handle = one person.
+-- The IG backstop is global: only Ink Pulse writes ig_handle, and an Instagram
+-- handle identifies exactly one account.
+CREATE UNIQUE INDEX IF NOT EXISTS customers_tenant_phone_inkpulse_uniq
+    ON customers (tenant_id, phone)
+    WHERE phone IS NOT NULL AND phone <> '' AND source = 'ink_pulse';
+CREATE UNIQUE INDEX IF NOT EXISTS customers_tenant_ig_uniq
+    ON customers (tenant_id, lower(ig_handle))
+    WHERE ig_handle IS NOT NULL AND ig_handle <> '';

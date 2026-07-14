@@ -36,7 +36,7 @@ try:
     from harness.config import DEFAULT_HAIKU, DEFAULT_OPUS, DEFAULT_SONNET
 except Exception:  # pragma: no cover - defensive; harness.config is normally present
     DEFAULT_OPUS, DEFAULT_SONNET, DEFAULT_HAIKU = (
-        "claude-sonnet-4-5",
+        "claude-haiku-4-5",
         "claude-haiku-4-5",
         "claude-haiku-4-5",
     )

@@ -1,0 +1,63 @@
+# Deploy the full Scalers stack to Render — driven entirely from CI so no
+# dashboard clicks are needed (and so the deploy can be triggered/monitored by
+# the agent from an egress-restricted sandbox: GitHub is reachable, Render's
+# API is not).
+#
+# Triggers:
+#   * push touching deploy/DEPLOY_TRIGGER on this branch (works pre-merge —
+#     GitHub only requires the workflow file on the default branch for
+#     workflow_dispatch, not for push triggers)
+#   * workflow_dispatch (available once merged to main)
+#
+# Required repo Actions secrets (Settings → Secrets and variables → Actions):
+#   RENDER_API_KEY  — Render account API key
+#   SCALERS_ENV     — full contents of the operator envfile (the runtime keys)
+#
+# Secrets never appear in logs (GitHub masks them; the script prints names only).
+
+name: deploy-render
+
+on:
+  push:
+    paths: ["deploy/DEPLOY_TRIGGER"]
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch Render should build from"
+        required: false
+        default: ""
+
+concurrency:
+  group: deploy-render
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Guard — secrets present
+        run: |
+          if [ -z "${{ secrets.RENDER_API_KEY }}" ]; then
+            echo "::error::RENDER_API_KEY repo secret is missing — add it in Settings → Secrets and variables → Actions"; exit 1; fi
+          if [ -z "${{ secrets.SCALERS_ENV }}" ]; then
+            echo "::error::SCALERS_ENV repo secret is missing — paste the operator envfile contents"; exit 1; fi
+      - name: Provision + deploy on Render
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          SCALERS_ENV: ${{ secrets.SCALERS_ENV }}
+          # Optional: a Neon/Supabase connection string — skips Render Postgres
+          # entirely (Render requires a card for databases; these don't).
+          EXTERNAL_DATABASE_URL: ${{ secrets.EXTERNAL_DATABASE_URL }}
+          DEPLOY_BRANCH: ${{ inputs.branch != '' && inputs.branch || github.ref_name }}
+          # SAFE production setup (operator-approved, client-reimbursed):
+          # engine standard (2GB, no sleep), console starter, Render Postgres
+          # basic-256mb — one invoice. Override via repo Actions variables.
+          RENDER_PLAN_ENGINE: ${{ vars.RENDER_PLAN_ENGINE || 'standard' }}
+          RENDER_PLAN_CONSOLE: ${{ vars.RENDER_PLAN_CONSOLE || 'starter' }}
+          RENDER_PLAN_DB: ${{ vars.RENDER_PLAN_DB || 'basic_256mb' }}
+          # All-Render database for the long-term single-invoice setup (the Neon
+          # secret stays in place but is ignored while this is 1).
+          USE_RENDER_DB: "1"
+        run: python3 scripts/render_deploy.py

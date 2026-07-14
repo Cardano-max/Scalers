@@ -165,7 +165,16 @@ def process_image_upload(
     from studio.artists_directory import artist_slug as _slugify
     from studio.artists_directory import resolve_artist
 
-    artifact_type = kind if kind in ("image", "artwork", "screenshot") else "image"
+    # kind="competitor": the image is a COMPETITOR post screenshot — the VLM
+    # researches the image itself and it is filed as a competitor_posts row for
+    # creative-intelligence scoring. It must NEVER enter our artwork library or
+    # artist memory (someone else's work is study material, not an asset).
+    is_competitor = kind == "competitor"
+    artifact_type = (
+        "screenshot" if is_competitor
+        else kind if kind in ("image", "artwork", "screenshot")
+        else "image"
+    )
     prompt = (prompt or "").strip()
 
     # 1) Bytes to disk — content-addressed, never truncated.
@@ -240,10 +249,26 @@ def process_image_upload(
         dsn=dsn,
     )
 
+    # 4') Competitor screenshot → a REAL competitor_posts row with VLM-derived
+    #     visual_tags (the image is the research object). Kept OUT of the artwork
+    #     library and artist memory below.
+    competitor_post: dict[str, Any] | None = None
+    competitor_error: str | None = None
+    if is_competitor:
+        try:
+            from studio.competitor_intel import record_screenshot_post
+
+            competitor_post = record_screenshot_post(
+                tenant_id, name=name, prompt=prompt, vlm=vlm,
+                artifact_id=artifact_id, sha=sha, dsn=dsn,
+            )
+        except Exception as exc:  # honest: report, never claim the row exists
+            competitor_error = f"{type(exc).__name__}: {exc}"
+
     # 4) Library row so artwork_select can pick this piece for campaigns.
     asset_id: str | None = None
     asset_error: str | None = None
-    if artifact_type in ("image", "artwork"):
+    if artifact_type in ("image", "artwork") and not is_competitor:
         try:
             from team.store import TeamStore
 
@@ -284,10 +309,11 @@ def process_image_upload(
             asset_id = None
             asset_error = f"{type(exc).__name__}: {exc}"
 
-    # 5) Artist memory ("new design uploaded ...") — only when a real artist is named.
+    # 5) Artist memory ("new design uploaded ...") — only when a real artist is
+    #    named, and never for a competitor screenshot (not our artist's work).
     memory_id: str | None = None
     memory_error: str | None = None
-    if slug:
+    if slug and not is_competitor:
         try:
             from studio.artist_memory import write_artist_memory
 
@@ -311,7 +337,21 @@ def process_image_upload(
             memory_error = f"{type(exc).__name__}: {exc}"
 
     # The full honest summary.
-    if vlm["status"] == "ok":
+    if is_competitor and vlm["status"] == "ok":
+        note = (
+            "Competitor screenshot analyzed for real (VLM over the image) and filed "
+            "as a competitor post — its visual pattern now feeds creative-intelligence "
+            "scoring and pattern molding. It was NOT added to your artwork library "
+            "(never reused as your own work). Nothing was sent."
+        )
+    elif is_competitor:
+        note = (
+            "Competitor screenshot stored and filed as a competitor post, but visual "
+            f"analysis was NOT captured ({vlm.get('error') or 'no facts extracted'}) — "
+            "no visual tags were fabricated; caption/handle from your note only. "
+            "It was NOT added to your artwork library. Nothing was sent."
+        )
+    elif vlm["status"] == "ok":
         note = (
             "Image stored on disk and analyzed for real (VLM extraction, image-level "
             "facts); it is in the artwork library and linked to the artist. Nothing "
@@ -371,6 +411,10 @@ def process_image_upload(
         "memoryId": memory_id,
         "note": note,
     }
+    if is_competitor:
+        out["competitorPost"] = competitor_post
+        if competitor_error:
+            out["competitorError"] = competitor_error
     if asset_error:
         out["assetError"] = asset_error
     if memory_error:

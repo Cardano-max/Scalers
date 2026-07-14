@@ -134,10 +134,20 @@ def test_facts_view_reads_objection_from_profile():
 # ── wiring: the agui staging chokepoint skips a faking draft, never stages it ──
 
 
+def _fake_draft_fn(facts, *, goal="", **kw):
+    return {
+        "channel": "gmail", "target": f"{facts['customer_id']}@lead.example",
+        "subject": "We miss you",
+        "draft": "Hey! I saw your Instagram and loved your recent posts — book again?",
+        "grounding": [], "customer_id": facts["customer_id"],
+        "copy_model": "grounded_template",
+    }
+
+
 def test_provided_leads_skips_fake_personalization_draft(monkeypatch):
-    # A history-less lead whose (hallucinated) copy claims "I saw your Instagram" must be
-    # SKIPPED with a concrete reason at the staging site — it never reaches the pending
-    # queue. Mirrors the ju1.2 offer-antifab wiring test.
+    # A history-less lead whose (hallucinated) copy claims "I saw your Instagram"
+    # and CANNOT be repaired (the revise seam is unavailable) must be SKIPPED with
+    # a concrete reason at the staging site — the fake never reaches the queue.
     import actions.store as store_mod
     import studio.customer_research as cr
     from studio.agui import _execute_provided_leads_sync
@@ -150,23 +160,78 @@ def test_provided_leads_skips_fake_personalization_draft(monkeypatch):
         store_mod, "record_pending_action",
         lambda **kw: (staged.append(kw["idempotency_key"]) or f"act_{kw['idempotency_key']}"),
     )
-
-    def _faking_draft(facts, *, goal="", **kw):
-        return {
-            "channel": "gmail", "target": f"{facts['customer_id']}@lead.example",
-            "subject": "We miss you",
-            "draft": "Hey! I saw your Instagram and loved your recent posts — book again?",
-            "grounding": [], "customer_id": facts["customer_id"],
-            "copy_model": "grounded_template",
-        }
-
-    monkeypatch.setattr(cr, "build_outreach_draft", _faking_draft)
+    monkeypatch.setattr(cr, "build_outreach_draft", _fake_draft_fn)
+    # Repair unavailable (hermetic: never a live rewrite in a unit test).
+    monkeypatch.setattr(cr, "revise_outreach_draft", lambda t, d, c: None)
     summary = _execute_provided_leads_sync(_plan(), "sess1", "ladies8391", None, None)
 
     assert not staged, "draft that faked personalization reached the pending queue"
     reasons = " | ".join(s.get("reason", "") for s in summary["output_ledger"]["skipped"])
     assert "fake personalization" in reasons and "social" in reasons
     assert summary["n_pending"] == 0
+
+
+def test_provided_leads_repairs_fake_personalization_when_rewrite_is_clean(monkeypatch):
+    # NEW contract (operator order 2026-07-14, "fix the fakes"): a faking draft
+    # gets ONE de-fabrication rewrite; a rewrite that passes the SAME guard stages
+    # (the lead keeps its draft), and the staged copy is the CLEAN version — the
+    # fake text itself never reaches the queue. A still-dirty rewrite skips (the
+    # guard re-check is the arbiter, proven by the still-faking case below).
+    import actions.store as store_mod
+    import studio.customer_research as cr
+    from studio.agui import _execute_provided_leads_sync
+
+    from tests.test_provided_leads_real_team import _plan, _wire
+
+    _wire(monkeypatch)
+    staged_drafts: list[str] = []
+    monkeypatch.setattr(
+        store_mod, "record_pending_action",
+        lambda **kw: (staged_drafts.append(kw["draft"]) or f"act_{kw['idempotency_key']}"),
+    )
+    monkeypatch.setattr(cr, "build_outreach_draft", _fake_draft_fn)
+    monkeypatch.setattr(
+        cr, "revise_outreach_draft",
+        lambda t, d, c: {"subject": "Hello from the studio",
+                         "draft": "Wanted to reach out and say hello. Reply STOP to opt out.",
+                         "copy_model": "anthropic:claude-haiku-4-5"},
+    )
+    summary = _execute_provided_leads_sync(_plan(), "sess2", "ladies8391", None, None)
+
+    assert staged_drafts, "repairable draft was dropped instead of repaired"
+    assert all("saw your Instagram" not in d for d in staged_drafts), (
+        "the FAKE copy reached the queue — the repair must stage the clean rewrite")
+    reasons = " | ".join(s.get("reason", "") for s in summary["output_ledger"]["skipped"])
+    assert "fake personalization" not in reasons
+
+
+def test_provided_leads_still_skips_when_rewrite_still_fakes(monkeypatch):
+    # The rewrite itself is re-checked by the SAME guard: a rewrite that still
+    # fakes (here: still claims Instagram) is discarded and the lead skips.
+    import actions.store as store_mod
+    import studio.customer_research as cr
+    from studio.agui import _execute_provided_leads_sync
+
+    from tests.test_provided_leads_real_team import _plan, _wire
+
+    _wire(monkeypatch)
+    staged: list[str] = []
+    monkeypatch.setattr(
+        store_mod, "record_pending_action",
+        lambda **kw: (staged.append(kw["idempotency_key"]) or f"act_{kw['idempotency_key']}"),
+    )
+    monkeypatch.setattr(cr, "build_outreach_draft", _fake_draft_fn)
+    monkeypatch.setattr(
+        cr, "revise_outreach_draft",
+        lambda t, d, c: {"subject": "We miss you",
+                         "draft": "Loved your Instagram feed! Reply STOP to opt out.",
+                         "copy_model": "anthropic:claude-haiku-4-5"},
+    )
+    summary = _execute_provided_leads_sync(_plan(), "sess3", "ladies8391", None, None)
+
+    assert not staged, "still-faking rewrite reached the pending queue"
+    reasons = " | ".join(s.get("reason", "") for s in summary["output_ledger"]["skipped"])
+    assert "fake personalization" in reasons
 
 
 def test_provided_leads_stages_grounded_draft_normally(monkeypatch):

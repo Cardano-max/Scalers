@@ -44,6 +44,10 @@ OFFICIAL_API_HOSTS: dict[str, frozenset[str]] = {
     # combined 'meta_ad_library' provider above; this row is its standalone provider.
     "exa": frozenset({"api.exa.ai"}),
     "foreplay": frozenset({"api.foreplay.co"}),
+    # Anthropic-powered web research (client-directed PRIMARY, PA meeting
+    # 2026-07-11): Claude Messages API only — the provider POSTs /v1/messages
+    # with the official web-search server tool through the vetted egress seam.
+    "anthropic": frozenset({"api.anthropic.com"}),
     # Connector scaffolds (xeu): Meta Graph (FB/IG publish + comment replies) and
     # Gmail + the OAuth token hosts. Connect only to these (sec conn-scaffold req D).
     "facebook": frozenset({"graph.facebook.com", "graph.instagram.com", "www.facebook.com"}),

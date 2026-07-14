@@ -25,9 +25,11 @@ def test_nonzero_temperature_rejected(bad):
 
 
 def test_models_are_pinned_to_stack_decision():
+    # 2026-07-14 cost order: EVERY tier resolves to the (haiku) ceiling until
+    # the operator lifts ENGINE_MODEL_CEILING — policy-relative, not literal.
     models = Settings().models
-    assert models.opus == POLICY_CEILING_MODEL == "claude-sonnet-4-5"  # 8sk: no opus tier
-    assert models.sonnet == DEFAULT_SONNET == "claude-sonnet-4-5"  # 8sk ceiling
+    assert models.opus == POLICY_CEILING_MODEL == "claude-haiku-4-5"  # 8sk: no opus tier
+    assert models.sonnet == DEFAULT_SONNET == POLICY_CEILING_MODEL
     assert models.haiku == DEFAULT_HAIKU == "claude-haiku-4-5"
 
 

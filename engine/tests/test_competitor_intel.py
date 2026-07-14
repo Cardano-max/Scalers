@@ -55,14 +55,37 @@ _CAPTION = (
 def test_missing_metrics_score_none_and_are_excluded_from_the_total():
     post = {"metrics": {"likes": 500, "views": 10000}}  # no caption/tags/date
     comp = score_components(post, [], [])
-    # 500/10000 = 5% engagement → 5.0; everything else has NO data → None.
+    # 500/10000 = 5% engagement → 5.0; likes are present so likes_weight scores;
+    # everything else (incl. follower_reach — no follower count) has NO data → None.
     assert comp["engagement_rate"] == 5.0
-    for key in ("comments_weight", "shares_saves_weight", "niche_match",
-                "style_match", "recency", "cta_strength", "hook_strength"):
+    assert comp["likes_weight"] is not None  # absolute like volume is a real signal
+    for key in ("follower_reach", "comments_weight", "shares_saves_weight",
+                "niche_match", "style_match", "recency", "cta_strength",
+                "hook_strength"):
         assert comp[key] is None
-    # Renormalized: the one present component IS the total — absent data never
-    # drags it toward a fabricated 0.
-    assert weighted_total(comp) == 5.0
+    # Renormalized over the PRESENT components only — absent data never drags the
+    # total toward a fabricated 0.
+    present = {k: v for k, v in comp.items() if v is not None}
+    assert weighted_total(comp) == weighted_total(present)
+
+
+def test_follower_reach_ranks_big_accounts_over_tiny_ones():
+    from studio.competitor_intel import meets_reach_floor
+
+    tiny = score_components({"metrics": {"likes": 100, "followers": 200}}, [], [])
+    huge = score_components({"metrics": {"likes": 48000, "followers": 90000}}, [], [])
+    # The 90k-follower / 48k-like account scores strictly higher on reach — the
+    # exact client complaint ("it's picking up the 100-like accounts").
+    assert huge["follower_reach"] > tiny["follower_reach"]
+    assert huge["likes_weight"] > tiny["likes_weight"]
+    assert weighted_total(huge) > weighted_total(tiny)
+    # Reach is honest-None when the numbers aren't provided (never a fake 0).
+    assert score_components({"metrics": {}}, [], [])["follower_reach"] is None
+    # Config floor hard-excludes the tiny account but keeps the big one; an ABSENT
+    # follower count still passes (we don't assume tiny from missing data).
+    assert meets_reach_floor({"followers": 90000}, min_followers=5000) is True
+    assert meets_reach_floor({"followers": 200}, min_followers=5000) is False
+    assert meets_reach_floor({"likes": 10}, min_followers=5000) is True
 
 
 def test_engagement_rate_is_honest_none_without_views():

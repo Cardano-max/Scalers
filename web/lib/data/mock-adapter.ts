@@ -14,6 +14,7 @@ import type { DataAdapter } from './adapter';
 import type { SSEClient, SSEHandlers, SSEStatus } from './sse';
 import type {
   Action,
+  ActionContributions,
   ActionEvidence,
   ActionLineage,
   ActivityItem,
@@ -948,6 +949,11 @@ export class MockAdapter implements DataAdapter {
   }
   async getActionLineage(actionId: string): Promise<ActionLineage | null> {
     return LINEAGE[actionId] ?? null;
+  }
+  // The mock backend records no agent_runs trail — honest-null, the panel then
+  // says "no contribution trail recorded" instead of inventing one.
+  async getActionContributions(_actionId: string): Promise<ActionContributions | null> {
+    return null;
   }
   async getActivity(_tenantId: string, filter?: ActionFilter) {
     return filterByType(ACTIVITY, filter);

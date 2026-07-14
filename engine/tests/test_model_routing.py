@@ -21,14 +21,16 @@ def test_task_tiers_route_high_stakes_to_best_and_extraction_to_cheap() -> None:
     assert mr.model_for("something-unknown") == mr.TIER_MID
     # The pins carry the anthropic provider prefix and the planner uses the best tier.
     assert mr.PLANNER_MODEL == mr.TIER_BEST
-    # 8sk MODEL POLICY: sonnet-4-5 is the absolute ceiling — "best" is the ceiling now.
-    assert mr.TIER_BEST.startswith("anthropic:claude-sonnet-4-5")
+    # 2026-07-14 cost order: haiku everywhere — every tier IS the (haiku) ceiling
+    # until the operator lifts ENGINE_MODEL_CEILING.
+    assert mr.TIER_BEST.startswith("anthropic:claude-haiku")
     assert mr.TIER_CHEAP.startswith("anthropic:claude-haiku")
 
 
 def test_tier_of_labels_models() -> None:
-    assert mr.tier_of(mr.TIER_BEST) == "best"
-    # Under the 8sk policy MID and CHEAP collapse to haiku-4-5, so tier_of reads "cheap".
+    # Under the 2026-07-14 cost order ALL tiers collapse to haiku-4-5, so the
+    # reverse map reads the last (cheap) label for every tier — honest display.
+    assert mr.tier_of(mr.TIER_BEST) == "cheap"
     assert mr.tier_of(mr.TIER_MID) == "cheap"
     assert mr.tier_of(mr.TIER_CHEAP) == "cheap"
     assert mr.tier_of("anthropic:some-other-model") == "other"
@@ -37,35 +39,44 @@ def test_tier_of_labels_models() -> None:
 def test_caching_gates_on_provider_and_prefix_size_never_net_negative() -> None:
     from pydantic_ai.messages import CachePoint
 
+    # The caching seam is model-relative, not policy-relative: exercise the
+    # Sonnet floor (1024) with an explicit id (tests are outside the source
+    # scan), since every routed tier is haiku under the 2026-07-14 cost order.
+    sonnet = "anthropic:claude-sonnet-4-5"
     big = "x " * 3000  # ~1500 tokens, clears the Sonnet/Opus 1024 minimum
     small = "brand/offers"  # ~a few tokens — below the minimum
 
     # Anthropic + big prefix -> a REAL CachePoint after the stable prefix.
-    prompt = mr.build_cached_prompt(big, "VOLATILE per-lead", mr.TIER_BEST)
+    prompt = mr.build_cached_prompt(big, "VOLATILE per-lead", sonnet)
     assert isinstance(prompt, list)
     assert prompt[0] == big and isinstance(prompt[1], CachePoint) and prompt[2] == "VOLATILE per-lead"
-    assert mr.should_cache(big, mr.TIER_BEST) is True
+    assert mr.should_cache(big, sonnet) is True
 
     # A small prefix is NOT cached (a cache write would be net-negative) -> plain string.
-    assert mr.should_cache(small, mr.TIER_BEST) is False
-    assert isinstance(mr.build_cached_prompt(small, "v", mr.TIER_BEST), str)
+    assert mr.should_cache(small, sonnet) is False
+    assert isinstance(mr.build_cached_prompt(small, "v", sonnet), str)
 
     # A non-anthropic model is never anthropic-cached (leaves ollama/openai untouched).
     assert mr.should_cache(big, "ollama:llama3") is False
     assert isinstance(mr.build_cached_prompt(big, "v", "ollama:llama3"), str)
 
-    # Haiku's minimum is higher (4096) — the same 1500-token prefix does NOT clear it.
+    # Haiku's minimum is higher (4096) — the same 1500-token prefix does NOT clear
+    # it (and TIER_BEST routes to haiku now, so the routed tiers do not cache it).
     assert mr.should_cache(big, mr.TIER_CHEAP) is False
+    assert mr.should_cache(big, mr.TIER_BEST) is False
+    # A prefix that clears haiku's floor caches on the routed tier too.
+    assert mr.should_cache("x " * 9000, mr.TIER_BEST) is True
 
 
 def test_cached_anthropic_settings_sets_real_cache_flags_when_worth_it() -> None:
+    sonnet = "anthropic:claude-sonnet-4-5"  # explicit id: routed tiers are haiku now
     big = "x " * 3000
-    settings = mr.cached_anthropic_settings(temperature=0.0, model=mr.TIER_BEST, stable_context=big)
+    settings = mr.cached_anthropic_settings(temperature=0.0, model=sonnet, stable_context=big)
     assert settings.get("anthropic_cache_instructions") is True
     assert settings.get("anthropic_cache_tool_definitions") is True
     assert settings.get("temperature") == 0.0
     # A small prefix -> no cache flags (never net-negative).
-    small = mr.cached_anthropic_settings(temperature=0.0, model=mr.TIER_BEST, stable_context="tiny")
+    small = mr.cached_anthropic_settings(temperature=0.0, model=sonnet, stable_context="tiny")
     assert small.get("anthropic_cache_instructions") is None
     # A non-anthropic model -> plain settings, no anthropic cache_control.
     other = mr.cached_anthropic_settings(temperature=0.0, model="ollama:llama3", stable_context=big)

@@ -1,0 +1,80 @@
+conversation_ref,customer_name,customer_email,customer_phone,channel,date,time,speaker,sender_label,text
+kaps-001,Maya Torres,maya.torres@example.com,,instagram,2026-06-15,14:00,customer,Maya Torres,Hi! I saw Kaps' black and grey lion piece. How much would a half sleeve like that run?
+kaps-001,Maya Torres,maya.torres@example.com,,instagram,2026-06-15,14:01,studio,Skin Design Tattoos,"Hey Maya! Kaps' full-day sessions are $1,200 — a half sleeve is usually 2 sessions."
+kaps-001,Maya Torres,maya.torres@example.com,,instagram,2026-06-15,14:02,customer,Maya Torres,"Oof, that's more than I expected. Let me think about it."
+kaps-002,Derek Okafor,derek.o@example.com,+1 555 0102,sms,2026-06-15,14:00,customer,Derek Okafor,Is Kaps taking bookings for March? I want a realism piece of my grandfather's portrait.
+kaps-002,Derek Okafor,derek.o@example.com,+1 555 0102,sms,2026-06-15,14:01,studio,Skin Design Tattoos,"March is fully booked, first opening is mid-May. Want me to hold a consult?"
+kaps-002,Derek Okafor,derek.o@example.com,+1 555 0102,sms,2026-06-15,14:02,customer,Derek Okafor,"May is too far out, I wanted it before his anniversary in April. I'll check elsewhere."
+kaps-003,Priya Raman,priya.r@example.com,,instagram,2026-06-15,14:00,customer,Priya Raman,Do you do fine line florals? Thinking peonies on my forearm.
+kaps-003,Priya Raman,priya.r@example.com,,instagram,2026-06-15,14:01,studio,Skin Design Tattoos,Kaps specializes in black & grey realism — for fine line florals our artist Noa is amazing. Want to see her book?
+kaps-003,Priya Raman,priya.r@example.com,,instagram,2026-06-15,14:02,customer,Priya Raman,I really wanted Kaps specifically after seeing his work at the convention.
+kaps-003,Priya Raman,priya.r@example.com,,instagram,2026-06-15,14:03,studio,Skin Design Tattoos,Kaps can absolutely do a botanical piece in his style — softer realism. Want a consult?
+kaps-003,Priya Raman,priya.r@example.com,,instagram,2026-06-15,14:04,customer,Priya Raman,Maybe. I'll get back to you after payday.
+kaps-004,James Whitfield,,+1 555 0104,sms,2026-06-15,14:00,customer,James Whitfield,Hey I put down a deposit last year for a chest piece with Kaps but had to cancel. Is that deposit still good?
+kaps-004,James Whitfield,,+1 555 0104,sms,2026-06-15,14:01,studio,Skin Design Tattoos,Hi James — deposits are held for 12 months. Yours is still valid until August. Want to rebook?
+kaps-004,James Whitfield,,+1 555 0104,sms,2026-06-15,14:02,customer,James Whitfield,Work has been crazy. What weekend slots does he have?
+kaps-004,James Whitfield,,+1 555 0104,sms,2026-06-15,14:03,studio,Skin Design Tattoos,Kaps does Saturdays once a month — next open Saturday is in 6 weeks.
+kaps-004,James Whitfield,,+1 555 0104,sms,2026-06-15,14:04,customer,James Whitfield,Let me look at my schedule and circle back.
+kaps-005,Alexis Chen,alexis.chen@example.com,,instagram,2026-06-15,14:00,customer,Alexis Chen,Your studio is in Vegas right? I'm in LA — is it worth flying out for a session with Kaps?
+kaps-005,Alexis Chen,alexis.chen@example.com,,instagram,2026-06-15,14:01,studio,Skin Design Tattoos,"We're Las Vegas based, yes! Lots of clients fly in — full-day sessions make the trip worth it."
+kaps-005,Alexis Chen,alexis.chen@example.com,,instagram,2026-06-15,14:02,customer,Alexis Chen,"Hmm, flights plus hotel plus $1200... I need to budget for this. Do you ever do LA guest spots?"
+kaps-005,Alexis Chen,alexis.chen@example.com,,instagram,2026-06-15,14:03,studio,Skin Design Tattoos,Kaps does occasional guest spots — none scheduled right now but I can add you to the list.
+kaps-005,Alexis Chen,alexis.chen@example.com,,instagram,2026-06-15,14:04,customer,Alexis Chen,Yes please add me!
+kaps-006,Marcus Bell,marcus.bell@example.com,+1 555 0106,sms,2026-06-15,14:00,customer,Marcus Bell,Do you guys do payment plans? I want a full back piece but can't drop 4 grand at once.
+kaps-006,Marcus Bell,marcus.bell@example.com,+1 555 0106,sms,2026-06-15,14:01,studio,Skin Design Tattoos,We do session-by-session pricing — each session is booked and paid separately.
+kaps-006,Marcus Bell,marcus.bell@example.com,+1 555 0106,sms,2026-06-15,14:02,customer,Marcus Bell,So I could space sessions out every couple months? That could work actually.
+kaps-006,Marcus Bell,marcus.bell@example.com,+1 555 0106,sms,2026-06-15,14:03,studio,Skin Design Tattoos,Exactly. Want me to set up a consult with Kaps to plan the design?
+kaps-006,Marcus Bell,marcus.bell@example.com,+1 555 0106,sms,2026-06-15,14:04,customer,Marcus Bell,"Not yet, saving up for the first session. Maybe in the summer."
+kaps-007,Sofia Reyes,sofia.reyes@example.com,,instagram,2026-06-15,14:00,customer,Sofia Reyes,I messaged a few weeks ago about a memorial piece for my mom. Still thinking about the design.
+kaps-007,Sofia Reyes,sofia.reyes@example.com,,instagram,2026-06-15,14:01,studio,Skin Design Tattoos,Take your time Sofia. When you're ready Kaps can sketch a few concepts from photos you share.
+kaps-007,Sofia Reyes,sofia.reyes@example.com,,instagram,2026-06-15,14:02,customer,Sofia Reyes,Thank you. It's hard to decide on something so permanent about her.
+kaps-008,Tyler Nguyen,,+1 555 0108,sms,2026-06-15,14:00,customer,Tyler Nguyen,How long is the wait for a sleeve consult with Kaps?
+kaps-008,Tyler Nguyen,,+1 555 0108,sms,2026-06-15,14:01,studio,Skin Design Tattoos,"Consults are about 2 weeks out, the sleeve itself would start about 6 weeks after."
+kaps-008,Tyler Nguyen,,+1 555 0108,sms,2026-06-15,14:02,customer,Tyler Nguyen,"Cool. And ballpark cost for a full sleeve, japanese style mixed with realism?"
+kaps-008,Tyler Nguyen,,+1 555 0108,sms,2026-06-15,14:03,studio,Skin Design Tattoos,"Full sleeves run 4-6 full-day sessions at $1,200 each depending on detail."
+kaps-008,Tyler Nguyen,,+1 555 0108,sms,2026-06-15,14:04,customer,Tyler Nguyen,Ok that's a real investment. Let me talk to my wife lol
+kaps-009,Hannah Kim,hannah.kim@example.com,,email,2026-06-15,14:00,customer,Hannah Kim,"Hi, I won a gift certificate at the charity event for a session with Kaps. How do I redeem it?"
+kaps-009,Hannah Kim,hannah.kim@example.com,,email,2026-06-15,14:01,studio,Skin Design Tattoos,Congrats Hannah! Just reply with 2-3 date options and the certificate number and we'll get you in.
+kaps-010,Luis Herrera,luis.h@example.com,+1 555 0110,sms,2026-06-15,14:00,customer,Luis Herrera,Yo is Kaps the one who did the chicano lettering piece on your page? That's exactly my style.
+kaps-010,Luis Herrera,luis.h@example.com,+1 555 0110,sms,2026-06-15,14:01,studio,Skin Design Tattoos,That's him! He loves lettering + black and grey work. What are you thinking?
+kaps-010,Luis Herrera,luis.h@example.com,+1 555 0110,sms,2026-06-15,14:02,customer,Luis Herrera,Family name across the collarbone with roses. How much roughly?
+kaps-010,Luis Herrera,luis.h@example.com,+1 555 0110,sms,2026-06-15,14:03,studio,Skin Design Tattoos,"That's usually a single full-day session — $1,200 flat."
+kaps-010,Luis Herrera,luis.h@example.com,+1 555 0110,sms,2026-06-15,14:04,customer,Luis Herrera,"Quote me after the holidays man, December is killing my wallet."
+kaps-011,Emily Sanders,emily.sanders@example.com,,instagram,2026-06-15,14:00,customer,Emily Sanders,First tattoo ever and I'm honestly nervous about the pain. Is a rib piece a bad idea for a first one?
+kaps-011,Emily Sanders,emily.sanders@example.com,,instagram,2026-06-15,14:01,studio,Skin Design Tattoos,Ribs are one of the tougher spots — many first-timers start with forearm or shoulder. Kaps is great with nervous clients.
+kaps-011,Emily Sanders,emily.sanders@example.com,,instagram,2026-06-15,14:02,customer,Emily Sanders,That's reassuring. I'll think about placement and message back.
+kaps-012,Andre Johnson,,+1 555 0112,sms,2026-06-15,14:00,customer,Andre Johnson,I need a cover-up of an old tribal piece on my shoulder. Can Kaps handle that?
+kaps-012,Andre Johnson,,+1 555 0112,sms,2026-06-15,14:01,studio,Skin Design Tattoos,Cover-ups are Kaps' bread and butter — send a photo of the current piece?
+kaps-012,Andre Johnson,,+1 555 0112,sms,2026-06-15,14:02,customer,Andre Johnson,Sent. It's pretty dark ink.
+kaps-012,Andre Johnson,,+1 555 0112,sms,2026-06-15,14:03,studio,Skin Design Tattoos,He can work with that — likely a larger black & grey design over it. Consult is free.
+kaps-012,Andre Johnson,,+1 555 0112,sms,2026-06-15,14:04,customer,Andre Johnson,Booked it for Thursday. Looking forward.
+kaps-013,Rachel Goldman,rachel.g@example.com,,instagram,2026-06-15,14:00,customer,Rachel Goldman,What's your deposit policy? I got burned by another studio that kept my deposit when THEY cancelled.
+kaps-013,Rachel Goldman,rachel.g@example.com,,instagram,2026-06-15,14:01,studio,Skin Design Tattoos,Deposits here roll forward if we ever reschedule — you only lose it on a no-show. It's in writing.
+kaps-013,Rachel Goldman,rachel.g@example.com,,instagram,2026-06-15,14:02,customer,Rachel Goldman,Ok that's fair. Still a bit gun-shy but I love Kaps' portfolio.
+kaps-014,Kevin O'Brien,kevin.ob@example.com,+1 555 0114,sms,2026-06-15,14:00,customer,Kevin O'Brien,My buddy and I both want pieces from the same flash set. Do you do group bookings?
+kaps-014,Kevin O'Brien,kevin.ob@example.com,+1 555 0114,sms,2026-06-15,14:01,studio,Skin Design Tattoos,We can book you back-to-back on the same day with Kaps — makes a great day of it.
+kaps-014,Kevin O'Brien,kevin.ob@example.com,+1 555 0114,sms,2026-06-15,14:02,customer,Kevin O'Brien,Sweet. He gets paid biweekly so we'll aim for end of month.
+kaps-015,Destiny Walker,destiny.w@example.com,,instagram,2026-06-15,14:00,customer,Destiny Walker,Does Kaps do color realism or only black and grey? I want a hummingbird with real vibrant colors.
+kaps-015,Destiny Walker,destiny.w@example.com,,instagram,2026-06-15,14:01,studio,Skin Design Tattoos,"Kaps is primarily black & grey. For color realism, guest artist Rio visits quarterly — jaw-dropping color work."
+kaps-015,Destiny Walker,destiny.w@example.com,,instagram,2026-06-15,14:02,customer,Destiny Walker,When is Rio next in town?
+kaps-015,Destiny Walker,destiny.w@example.com,,instagram,2026-06-15,14:03,studio,Skin Design Tattoos,Next visit isn't announced yet — want me to notify you?
+kaps-015,Destiny Walker,destiny.w@example.com,,instagram,2026-06-15,14:04,customer,Destiny Walker,Yes! And send me Rio's page.
+kaps-016,Omar Farouk,,+1 555 0116,sms,2026-06-15,14:00,customer,Omar Farouk,Quick question — do you tattoo over scars? I have a surgical scar on my forearm I'd like to incorporate.
+kaps-016,Omar Farouk,,+1 555 0116,sms,2026-06-15,14:01,studio,Skin Design Tattoos,"Yes, once scars are fully healed (12+ months). Kaps has done several scar-integration pieces."
+kaps-016,Omar Farouk,,+1 555 0116,sms,2026-06-15,14:02,customer,Omar Farouk,It's been 3 years. What would a forearm piece incorporating it cost?
+kaps-016,Omar Farouk,,+1 555 0116,sms,2026-06-15,14:03,studio,Skin Design Tattoos,"Depends on size — likely one full-day session, $1,200. Free consult to assess it."
+kaps-016,Omar Farouk,,+1 555 0116,sms,2026-06-15,14:04,customer,Omar Farouk,stop
+kaps-017,Grace Liu,grace.liu@example.com,,email,2026-06-15,14:00,customer,Grace Liu,I'm planning a matching piece with my sister for our mom's 60th. She lives in Phoenix though — can we book the same weekend?
+kaps-017,Grace Liu,grace.liu@example.com,,email,2026-06-15,14:01,studio,Skin Design Tattoos,Absolutely — we can do you both on a Saturday. Kaps loves meaningful matching pieces.
+kaps-017,Grace Liu,grace.liu@example.com,,email,2026-06-15,14:02,customer,Grace Liu,"Perfect, I'll coordinate flights with her and email you dates."
+kaps-018,Brandon Cole,brandon.cole@example.com,+1 555 0118,sms,2026-06-15,14:00,customer,Brandon Cole,Saw the studio won best black and grey at the expo. Congrats. Is Kaps' books open or closed rn?
+kaps-018,Brandon Cole,brandon.cole@example.com,+1 555 0118,sms,2026-06-15,14:01,studio,Skin Design Tattoos,Open! He books 6-8 weeks out currently.
+kaps-018,Brandon Cole,brandon.cole@example.com,+1 555 0118,sms,2026-06-15,14:02,customer,Brandon Cole,What do I need for a consult? References?
+kaps-018,Brandon Cole,brandon.cole@example.com,+1 555 0118,sms,2026-06-15,14:03,studio,Skin Design Tattoos,Reference images + placement idea + rough budget. That's it.
+kaps-019,Natalia Volkov,natalia.v@example.com,,instagram,2026-06-15,14:00,customer,Natalia Volkov,Your prices went up since last year didn't they? I was quoted $950 for a day session in 2025.
+kaps-019,Natalia Volkov,natalia.v@example.com,,instagram,2026-06-15,14:01,studio,Skin Design Tattoos,"Yes — Kaps' day rate is now $1,200 as of January. His waitlist doubled after the expo win."
+kaps-019,Natalia Volkov,natalia.v@example.com,,instagram,2026-06-15,14:02,customer,Natalia Volkov,"I get it, he's worth it, just stings. Might wait for a flash day or promo."
+kaps-019,Natalia Volkov,natalia.v@example.com,,instagram,2026-06-15,14:03,studio,Skin Design Tattoos,We do occasional flash events — I'll make sure you hear about the next one.
+kaps-020,Chris Martin,,+1 555 0120,sms,2026-06-15,14:00,customer,Chris Martin,I keep chickening out lol. Third time messaging you guys about the same phoenix back piece idea.
+kaps-020,Chris Martin,,+1 555 0120,sms,2026-06-15,14:01,studio,Skin Design Tattoos,Ha! Third time's the charm Chris. Want to just do a no-pressure consult? Nothing gets inked at a consult.
+kaps-020,Chris Martin,,+1 555 0120,sms,2026-06-15,14:02,customer,Chris Martin,"You know what, maybe. Let me get through tax season first."

@@ -45,6 +45,9 @@ export function MediaUpload({
   const [fileType, setFileType] = useState<string | null>(null);
   const [artist, setArtist] = useState(defaultArtist);
   const [prompt, setPrompt] = useState('');
+  // Competitor-post mode: the image is filed for creative-intelligence study
+  // (VLM-tagged competitor_posts row), NOT into our artwork library.
+  const [competitor, setCompetitor] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<UploadImageResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -81,8 +84,9 @@ export function MediaUpload({
         name: fileName,
         contentBase64: fileB64,
         mediaType: fileType ?? undefined,
-        artist: artist.trim(),
+        artist: competitor ? '' : artist.trim(),
         prompt: prompt.trim() || undefined,
+        kind: competitor ? 'competitor' : undefined,
       });
       if (!res.ok) {
         setError(res.error ?? 'upload failed');
@@ -180,12 +184,31 @@ export function MediaUpload({
         type="text"
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
-        placeholder="Notes about this piece (optional — stored with the memory)"
+        placeholder={
+          competitor
+            ? '@handle + why this post won (optional — e.g. "@inkhaus their spring flash drop")'
+            : 'Notes about this piece (optional — stored with the memory)'
+        }
         style={{
           font: 'inherit', fontSize: 12, padding: '7px 10px',
           border: '1px solid var(--hairline)', borderRadius: 'var(--radius-button)',
         }}
       />
+      <label
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          fontSize: 12, color: 'var(--text-secondary)', cursor: 'pointer',
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={competitor}
+          onChange={(e) => setCompetitor(e.target.checked)}
+          data-testid="competitor-post-toggle"
+        />
+        This is a competitor&apos;s post — analyze it for creative intelligence (kept out
+        of our artwork library)
+      </label>
       {ack && <div style={{ fontSize: 12, color: TEAL }}>{ack}</div>}
       {error && <div style={{ fontSize: 12, color: '#B42318' }}>{error}</div>}
     </section>

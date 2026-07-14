@@ -36,6 +36,17 @@ CONSOLE_ORIGINS = [
     "http://127.0.0.1:3031",
 ]
 
+# DEPLOYED console origins (e.g. the Vercel URL when the console and engine live on
+# different hosts): comma-separated in CONSOLE_ORIGINS, appended to the local dev
+# list above. Explicit origins only — never a wildcard (allow_credentials=True).
+import os as _os  # noqa: E402 — tiny, deliberate: keep the list definition together
+
+CONSOLE_ORIGINS += [
+    o.strip().rstrip("/")
+    for o in _os.environ.get("CONSOLE_ORIGINS", "").split(",")
+    if o.strip()
+]
+
 
 def mount_obsapi(app: FastAPI) -> None:
     """Wire CORS + ``/graphql`` + ``/sse/*`` onto ``app`` (idempotent per process)."""
