@@ -74,6 +74,23 @@ def main() -> int:
     import bootstrap_db
 
     rc = bootstrap_db.main()
+
+    # Seed the tenant-registry row for the studio tenant IF ABSENT — with the
+    # store's own safe defaults (test_mode=TRUE, EMPTY allowlist), so a fresh
+    # deploy is fail-closed-with-a-clear-reason rather than fail-closed-with-a-
+    # missing-row error. Never touches an existing row; the operator adds
+    # allowlist entries / flips live deliberately.
+    tenant = (os.environ.get("STUDIO_TENANT_ID") or "").strip()
+    if tenant:
+        try:
+            from tenants.store import get_tenant, upsert_tenant
+
+            if get_tenant(tenant) is None:
+                upsert_tenant(tenant, name=tenant, test_mode=True, allowlist=[])
+                print(f"deploy_migrate: seeded tenant registry row for {tenant!r} "
+                      "(test_mode=True, empty allowlist — nothing can send)")
+        except Exception as exc:  # noqa: BLE001 — seeding is best-effort
+            print(f"deploy_migrate: tenant seed skipped ({type(exc).__name__}: {exc})")
     if failures:
         print(f"deploy_migrate: done with {len(failures)} skipped file(s) "
               f"(set STRICT_MIGRATIONS=1 to fail on these): {failures}")
