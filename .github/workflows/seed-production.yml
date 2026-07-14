@@ -35,26 +35,42 @@ jobs:
           ENGINE_URL: ${{ inputs.engine_url || 'https://scalers-engine.onrender.com' }}
         run: |
           python3 - << 'PY'
-          import json, os, time, urllib.request
+          import json, os, time, urllib.error, urllib.request
 
           BASE = os.environ["ENGINE_URL"].rstrip("/")
 
-          def post(path, body, timeout=180):
-              req = urllib.request.Request(BASE + path, data=json.dumps(body).encode(),
-                                           headers={"content-type": "application/json"})
-              with urllib.request.urlopen(req, timeout=timeout) as r:
-                  return json.loads(r.read() or b"{}")
+          def post(path, body, timeout=180, retries=8):
+              # Render answers 502/503 from its proxy while a deploy swaps
+              # instances — retry through the window instead of dying on it.
+              for attempt in range(retries):
+                  req = urllib.request.Request(
+                      BASE + path, data=json.dumps(body).encode(),
+                      headers={"content-type": "application/json"})
+                  try:
+                      with urllib.request.urlopen(req, timeout=timeout) as r:
+                          return json.loads(r.read() or b"{}")
+                  except urllib.error.HTTPError as e:
+                      if e.code in (502, 503, 504) and attempt < retries - 1:
+                          print(f"  {path}: HTTP {e.code} (deploy window) — retry {attempt+1}")
+                          time.sleep(20)
+                          continue
+                      raise
+                  except (urllib.error.URLError, TimeoutError) as e:
+                      if attempt < retries - 1:
+                          print(f"  {path}: {e} — retry {attempt+1}")
+                          time.sleep(20)
+                          continue
+                      raise
 
           # Wait for the engine — and specifically for a build that HAS the
-          # artists route (an empty POST returns 400 "name required" on new code,
-          # 404/405 on a stale deploy still rolling out).
-          import urllib.error
+          # artists route (an empty POST returns 400 "name required" on new code;
+          # 404/405 = stale build, 5xx = deploy window — keep waiting on all).
           for i in range(60):
               try:
                   with urllib.request.urlopen(BASE + "/healthz", timeout=15) as r:
                       pass
                   try:
-                      post("/studio/artists", {}, timeout=20)
+                      post("/studio/artists", {}, timeout=20, retries=1)
                       print("artists route live"); break
                   except urllib.error.HTTPError as he:
                       if he.code == 400:
