@@ -28,6 +28,12 @@ import urllib.request
 BASE = os.environ.get("ENGINE_URL", "https://scalers-engine.onrender.com").rstrip("/")
 TENANT = os.environ.get("TENANT_ID", "ladies8391")
 SESSION = os.environ.get("SESSION_ID", "studio-live-session")
+# When set (CI), gate on Render reporting THIS commit live before the scenario
+# runs — otherwise the probe can pass against the PREVIOUS build and the deploy
+# swap then 502s mid-run and kills the in-flight campaign (seen on run #1).
+RENDER_KEY = os.environ.get("RENDER_API_KEY", "")
+EXPECT_SHA = os.environ.get("EXPECT_COMMIT_SHA", "")
+RENDER_API = "https://api.render.com/v1"
 
 
 def _req(method: str, path: str, body: dict | None = None, timeout: int = 120):
@@ -61,6 +67,48 @@ def call(method: str, path: str, body: dict | None = None,
             raise
 
 
+def _render(path: str):
+    req = urllib.request.Request(
+        RENDER_API + path,
+        headers={"authorization": f"Bearer {RENDER_KEY}", "accept": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read() or b"{}")
+
+
+def wait_for_render_deploy() -> None:
+    """Block until Render reports the EXPECTED commit live on scalers-engine.
+    Skipped (with a note) when RENDER_API_KEY is absent — the route probe alone
+    then gates, which only proves SOME build with the route is up."""
+    if not (RENDER_KEY and EXPECT_SHA):
+        print("no RENDER_API_KEY/EXPECT_COMMIT_SHA — skipping deploy-sha gate")
+        return
+    svc_id = ""
+    for item in _render("/services?type=web_service&limit=50") or []:
+        svc = item.get("service") or item
+        if svc.get("name") == "scalers-engine":
+            svc_id = svc["id"]
+            break
+    if not svc_id:
+        raise SystemExit("scalers-engine service not found on Render")
+    deadline = time.time() + 30 * 60
+    while time.time() < deadline:
+        deps = _render(f"/services/{svc_id}/deploys?limit=1") or []
+        dep = (deps[0].get("deploy") or deps[0]) if deps else {}
+        commit = ((dep.get("commit") or {}).get("id") or "")[:12]
+        status = dep.get("status") or "none"
+        if commit == EXPECT_SHA[:12] and status == "live":
+            print(f"render deploy live for {commit}")
+            return
+        if commit == EXPECT_SHA[:12] and status in (
+            "build_failed", "update_failed", "canceled", "deactivated",
+        ):
+            raise SystemExit(f"render deploy for {commit} failed: {status}")
+        print(f"waiting for render deploy: latest={commit or 'none'} status={status}")
+        time.sleep(20)
+    raise SystemExit("render never reported the pushed commit live")
+
+
 def wait_for_new_build() -> None:
     """The new build is live once /studio/action/{id}/contributions ANSWERS —
     an unknown id must 404 with our 'unknown action' detail (stale builds have
@@ -90,6 +138,7 @@ def main() -> None:
     print(f"== verify {BASE} tenant={TENANT}")
 
     # 1. new build + health
+    wait_for_render_deploy()
     wait_for_new_build()
     call("GET", "/healthz", timeout=20)
     print("healthz OK")
@@ -137,7 +186,12 @@ def main() -> None:
     status = "running"
     deadline = time.time() + 30 * 60
     while time.time() < deadline:
-        state = call("GET", f"/studio/run/{run_id}", timeout=60, retries=3)
+        try:
+            state = call("GET", f"/studio/run/{run_id}", timeout=60, retries=8)
+        except Exception as e:  # noqa: BLE001 — poll through transient windows
+            print(f"  poll error (continuing): {e}")
+            time.sleep(15)
+            continue
         status = state.get("status", "?")
         steps = state.get("steps") or []
         if len(steps) > seen_steps:
