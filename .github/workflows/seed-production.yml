@@ -45,15 +45,26 @@ jobs:
               with urllib.request.urlopen(req, timeout=timeout) as r:
                   return json.loads(r.read() or b"{}")
 
-          # Wait for the engine (it may be mid-deploy or waking).
-          for i in range(40):
+          # Wait for the engine — and specifically for a build that HAS the
+          # artists route (an empty POST returns 400 "name required" on new code,
+          # 404/405 on a stale deploy still rolling out).
+          import urllib.error
+          for i in range(60):
               try:
                   with urllib.request.urlopen(BASE + "/healthz", timeout=15) as r:
-                      print("healthz:", r.read().decode()[:160]); break
+                      pass
+                  try:
+                      post("/studio/artists", {}, timeout=20)
+                      print("artists route live"); break
+                  except urllib.error.HTTPError as he:
+                      if he.code == 400:
+                          print("artists route live (400 name-required)"); break
+                      print(f"waiting for new build ({i}): HTTP {he.code}")
               except Exception as e:
-                  print(f"waiting for engine ({i}): {e}"); time.sleep(15)
+                  print(f"waiting for engine ({i}): {e}")
+              time.sleep(15)
           else:
-              raise SystemExit("engine never became healthy")
+              raise SystemExit("engine never became ready with the artists route")
 
           # 1. Kaps on the roster (idempotent by name).
           out = post("/studio/artists", {
