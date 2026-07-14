@@ -515,3 +515,31 @@ export interface ActionLineage {
   limitedPersonalization: boolean | null;
   personalizationNote: string | null;
 }
+
+/**
+ * One agent's recorded contribution to a draft (GET /studio/action/{id}/contributions):
+ * what it was for, what it concretely produced, and how the next agent consumed it.
+ * Built server-side from the run's real agent_runs trail — never narrated.
+ */
+export interface AgentContribution {
+  agent: string;
+  model: string | null;
+  purpose: string;
+  output: string;
+  nextUse: string;
+  /** done | degraded | missing | idle — degraded/missing are honest, not errors. */
+  status: string;
+  evidence?: string[] | string;
+  dbHistory?: Record<string, unknown>;
+  personalization?: { level: string; reason: string };
+  rationale?: string | null;
+}
+
+export interface ActionContributions {
+  actionId: string;
+  runId: string | null;
+  customerId: string | null;
+  contributions: AgentContribution[];
+  agentRunCount: number;
+  note: string;
+}

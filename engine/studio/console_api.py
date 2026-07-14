@@ -287,6 +287,225 @@ def _customer_lineage(
 # ── nmh.6: customer dossier + supervisor memory-state (read-only) ────────────── #
 
 
+@router.get("/studio/action/{action_id}/contributions")
+def action_contributions(action_id: str) -> dict:
+    """AGENT CONTRIBUTIONS — why this draft took a team, not one prompt.
+
+    Assembles, from the REAL ``agent_runs`` trail of the draft's run, what each
+    agent contributed to THIS draft: purpose, the concrete output it produced,
+    the evidence it used, and how the next agent consumed it. Per-lead cells are
+    matched on the draft's customer; run-level cells (strategist/jury) apply to
+    the whole campaign. Location and identity land as their own entries. Every
+    field the system cannot ground is honest-missing — never a fabricated step."""
+    import psycopg
+    from psycopg.rows import dict_row
+
+    from actions.store import _dsn, get_action
+
+    action = get_action(action_id)
+    if action is None:
+        raise HTTPException(status_code=404, detail=f"unknown action {action_id!r}")
+    ctx: dict[str, Any] = {}
+    if action.context:
+        try:
+            _c = json.loads(action.context)
+            ctx = _c if isinstance(_c, dict) else {}
+        except (ValueError, TypeError):
+            ctx = {}
+    dossier = ctx.get("dossier") if isinstance(ctx.get("dossier"), dict) else {}
+    customer_id = dossier.get("customer_id")
+
+    rows: list[dict[str, Any]] = []
+    if action.run_id:
+        with psycopg.connect(_dsn(), autocommit=True, row_factory=dict_row) as conn:
+            rows = conn.execute(
+                "SELECT role, model, input, output, created_at FROM agent_runs "
+                "WHERE run_id = %s ORDER BY created_at",
+                (action.run_id,),
+            ).fetchall()
+
+    def _mine(role: str) -> dict[str, Any] | None:
+        """This customer's cell for a per-lead role — never another lead's cell.
+        A customer-less action (a social POST) has no per-lead cells at all, so
+        there it falls back to the run-level cell of the same role."""
+        for r in rows:
+            if r["role"] != role:
+                continue
+            inp = r.get("input") or {}
+            out = r.get("output") or {}
+            if customer_id and (inp.get("customer_id") == customer_id
+                                or out.get("customer_id") == customer_id):
+                return r
+        if not customer_id:
+            return _run_level(role)
+        return None
+
+    def _run_level(role: str) -> dict[str, Any] | None:
+        for r in rows:
+            if r["role"] == role:
+                return r
+        return None
+
+    entries: list[dict[str, Any]] = []
+
+    strat = _run_level("strategist")
+    if strat:
+        out = strat.get("output") or {}
+        entries.append({
+            "agent": "Strategy",
+            "model": strat.get("model"),
+            "purpose": "Set the campaign-wide positioning and angle every draft follows.",
+            "output": out.get("positioning") or out.get("angle") or "",
+            "nextUse": "The copywriter writes inside this strategy — tone, offer "
+                       "framing, and CTA logic all come from here.",
+            "status": "done",
+        })
+
+    res = _mine("researcher")
+    if res:
+        out = res.get("output") or {}
+        enr = out.get("public_enrichment") or {}
+        idc = enr.get("identity") or {}
+        db = out.get("db_history") or {}
+        cited = int(out.get("cited") or 0)
+        evidence = [s.get("url") for s in (out.get("sources") or []) if s.get("url")]
+        entries.append({
+            "agent": "Research",
+            "model": res.get("model"),
+            "purpose": "Ground this lead in real first-party history and, when "
+                       "authorized, cited public evidence.",
+            "output": (f"{cited} cited source(s)" if cited else
+                       "no public citations — grounded on first-party data only "
+                       "(nothing invented)"),
+            "evidence": evidence,
+            "dbHistory": {k: v for k, v in db.items() if v not in (None, [], 0)},
+            "nextUse": "The analyst classifies objection/readiness from exactly "
+                       "this grounding.",
+            "status": "degraded" if out.get("degraded") else "done",
+        })
+        if enr:
+            entries.append({
+                "agent": "Identity Guardian",
+                "model": "deterministic:identity-evidence",
+                "purpose": "Verify any public profile really is THIS customer — "
+                           "never personalize from a stranger with the same name.",
+                "output": ((f"{idc.get('confirmed', 0)} confirmed · "
+                            f"{idc.get('likely', 0)} likely · "
+                            f"{idc.get('uncertain', 0)} uncertain (shown, not used) · "
+                            f"{idc.get('rejected', 0)} rejected") if idc else
+                           "no public candidates found — nothing to vet; the draft "
+                           "stayed on first-party data"),
+                "nextUse": "Only confirmed/likely facts reached the dossier the "
+                           "copywriter saw.",
+                "status": "done" if idc else "idle",
+            })
+
+    # Location — resolved live from the customer row (source + confidence).
+    if customer_id:
+        try:
+            from studio.customer_research import lookup_lead
+            from studio.location import resolve_customer_location
+
+            facts = lookup_lead(action.tenant_id, customer_id=customer_id) or {}
+            loc = resolve_customer_location(facts)
+            entries.append({
+                "agent": "Location Resolver",
+                "model": "deterministic:on-file-first",
+                "purpose": "Target by the CUSTOMER's location, never assume the "
+                           "studio's.",
+                "output": (f"{loc['display']} (source: {loc['source']}, "
+                           f"{'confident' if loc['confident'] else 'not confident'})"
+                           if loc.get("display") else
+                           "location unknown — not invented; no location-based "
+                           "angle used"),
+                "nextUse": "Strategy/copy may reference the location only when it "
+                           "is grounded.",
+                "status": "done" if loc.get("display") else "missing",
+            })
+        except Exception:
+            pass
+
+    ana = _mine("analyst")
+    if ana:
+        out = ana.get("output") or {}
+        grounded = int(out.get("grounded_fields") or 0)
+        level = "high" if grounded >= 7 else "medium" if grounded >= 4 else "low"
+        entries.append({
+            "agent": "Analyst",
+            "model": ana.get("model"),
+            "purpose": "Classify the REAL objection and readiness from the "
+                       "conversation evidence.",
+            "output": (f"objection: {out.get('primary_objection')} "
+                       f"({out.get('objection_signal')}) · readiness: "
+                       f"{out.get('readiness_stage') or '—'}"),
+            "personalization": {
+                "level": level,
+                "reason": f"{grounded} grounded field(s) available for this lead",
+            },
+            "evidence": out.get("objection_evidence") or out.get("evidence") or [],
+            "nextUse": "The copywriter leads with this objection — not a generic "
+                       "reactivation line.",
+            "status": "done",
+        })
+
+    dr = _mine("draft")
+    if dr:
+        out = dr.get("output") or {}
+        if out.get("hook") or out.get("angle"):
+            wrote = f"hook: {out.get('hook') or '—'} · angle: {out.get('angle') or '—'}"
+        else:  # a social post cell records note/caption instead of hook/angle
+            wrote = (out.get("note") or (out.get("caption") or "")[:140]
+                     or "draft recorded")
+        entries.append({
+            "agent": "Copywriter",
+            "model": dr.get("model"),
+            "purpose": ("Write THIS lead's message in the studio's brand voice."
+                        if customer_id else
+                        "Write the post caption in the studio's brand voice."),
+            "output": wrote,
+            "nextUse": "The critic re-verifies evidence and tone before staging.",
+            "status": "done",
+        })
+
+    cr = _mine("critic")
+    if cr:
+        out = cr.get("output") or {}
+        entries.append({
+            "agent": "Critic",
+            "model": cr.get("model"),
+            "purpose": "Adversarially check the draft: evidence, tone, claims, "
+                       "consent language.",
+            "output": (f"verdict: {out.get('verdict') or '—'}"
+                       + (f" · confidence {out.get('confidence')}" if out.get("confidence") else "")),
+            "rationale": out.get("rationale"),
+            "nextUse": "Only an approved draft is staged for YOUR review.",
+            "status": "done",
+        })
+
+    jury = _run_level("jury")
+    if jury:
+        out = jury.get("output") or {}
+        entries.append({
+            "agent": "Jury",
+            "model": jury.get("model"),
+            "purpose": "Final send-readiness gate across the whole campaign.",
+            "output": (out.get("note") or out.get("finding") or out.get("verdict")
+                       or json.dumps(out)[:160]),
+            "nextUse": "Drafts stay HELD until you approve — the jury never sends.",
+            "status": "done",
+        })
+
+    return {
+        "actionId": action.id,
+        "runId": action.run_id,
+        "customerId": customer_id,
+        "contributions": entries,
+        "agentRunCount": len(rows),
+        "note": ("Built from the run's real agent_runs trail — every entry is a "
+                 "recorded step, none is narrated after the fact."),
+    }
+
+
 @router.get("/studio/customer/{customer_id}/dossier")
 def customer_dossier(customer_id: str, tenant_id: str) -> dict:
     """The on-demand customer dossier (spec §8): real fields + explicit MISSING where

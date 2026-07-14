@@ -11,6 +11,7 @@ import * as Q from './queries';
 import type { DataAdapter } from './adapter';
 import type {
   Action,
+  ActionContributions,
   ActionEvidence,
   ActionLineage,
   ActivityItem,
@@ -134,6 +135,19 @@ export class LiveAdapter implements DataAdapter {
       });
       if (!res.ok) return null;
       return (await res.json()) as ActionLineage;
+    } catch {
+      return null;
+    }
+  }
+  /** Per-draft agent contributions from the recorded agent_runs trail. */
+  async getActionContributions(actionId: string): Promise<ActionContributions | null> {
+    try {
+      const res = await fetch(
+        `/studio/action/${encodeURIComponent(actionId)}/contributions`,
+        { method: 'GET', headers: { accept: 'application/json' } },
+      );
+      if (!res.ok) return null;
+      return (await res.json()) as ActionContributions;
     } catch {
       return null;
     }

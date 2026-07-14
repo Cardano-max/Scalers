@@ -25,6 +25,7 @@ import { SendModeToggle } from './studio/send-mode';
 import { ReadyQueueBoard } from './studio/ReadyQueueBoard';
 // --- traceability spine (additive) ---
 import { useTraceArrival } from '@/lib/useTraceArrival';
+import { AgentContributionsPanel } from './trace/AgentContributionsPanel';
 import { LineageChips } from './trace/LineageChips';
 import { LineagePanel } from './trace/LineagePanel';
 import { PostPreview, parsePostContext, hasPostEvidence } from './trace/PostPreview';
@@ -789,6 +790,13 @@ function DetailPane({
         actionId={action.id}
         hasOwnEvidence={hasPostEvidence(parsePostContext(action.context))}
       />
+
+      {/* Agent contributions — per-agent "what I did for THIS draft" from the
+          recorded agent_runs trail (strategy → research → identity guardian →
+          location → analyst → copywriter → critic → jury). This is the panel
+          that shows WHY the draft took a team: renders nothing when the draft
+          has no recorded trail (never a narrated one). */}
+      <AgentContributionsPanel actionId={action.id} />
 
       <AutonomyCard action={action} />
 

@@ -2835,6 +2835,10 @@ def _execute_provided_leads_sync(
                 _enr = enrich_lead(tenant_id, cust_id, dsn=dsn)
                 public_enrichment = {
                     "found": len(_enr.get("found") or []),
+                    # Identity Guardian verdicts: how many candidates were verified
+                    # as THIS customer vs surfaced-unverified vs rejected strangers.
+                    "identity": _enr.get("identity_counts"),
+                    "unverified": len(_enr.get("unverified") or []),
                     "suppressed": int(_enr.get("suppressed") or 0),
                     "misses": len(_enr.get("misses") or []),
                     "memory_id": _enr.get("memory_id"),

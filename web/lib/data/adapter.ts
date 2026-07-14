@@ -8,6 +8,7 @@
  */
 import type {
   Action,
+  ActionContributions,
   ActionEvidence,
   ActionLineage,
   ActivityItem,
@@ -64,6 +65,13 @@ export interface DataAdapter {
    * studio / offer / CTA / examples referenced. Null fields = honest "missing".
    */
   getActionLineage(actionId: string): Promise<ActionLineage | null>;
+  /**
+   * Per-draft AGENT CONTRIBUTIONS — what each agent in the run concretely did
+   * for THIS draft (strategy, research + identity guardian, location, analyst,
+   * copywriter, critic, jury), assembled from the recorded agent_runs trail.
+   * Null on transport failure or when the draft has no run trail.
+   */
+  getActionContributions(actionId: string): Promise<ActionContributions | null>;
   /**
    * Executed (completed) actions for the Activity screen — the reasoning trace,
    * engagement, outcome, and thread/comments deep-links resolved alongside the
