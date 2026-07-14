@@ -128,3 +128,49 @@ def location_search_query(facts: dict[str, Any] | None) -> str | None:
     if not query:
         return None
     return f"{query} location city"
+
+
+# --------------------------------------------------------------------------- #
+# OSINT tier — location from IDENTITY-VERIFIED public research only.
+# --------------------------------------------------------------------------- #
+# Matches "Austin, TX" / "Lake Charles, LA" in a verified hit's title/snippet.
+# Conservative by design: the two-letter token must be a REAL US state code and
+# the city must look like a proper noun — a miss stays a miss, never a guess.
+_CITY_ST_RE = re.compile(r"\b([A-Z][a-zA-Z.'-]+(?: [A-Z][a-zA-Z.'-]+){0,3}),\s*([A-Z]{2})\b")
+
+
+def location_from_verified_research(
+    hits: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    """Extract a location signal from IDENTITY-VERIFIED research hits (the
+    Identity Guardian's confirmed/likely set — callers must never pass raw
+    hits: a stranger's city is worse than no city).
+
+    Scans each hit's title+snippet for a "City, ST" mention and returns::
+
+        {"city", "state", "display", "url", "excerpt"}
+
+    for the FIRST match, or ``None``. The evidence URL and the verbatim
+    excerpt ride along so the operator sees exactly where the city came from.
+    This is a SIGNAL, not ground truth — the caller labels it
+    ``source="public"`` and ``confident=False`` unless it corroborates an
+    on-file city."""
+    for hit in hits or []:
+        text = " ".join(
+            _clean(hit.get(k)) for k in ("title", "snippet") if _clean(hit.get(k))
+        )
+        if not text:
+            continue
+        m = _CITY_ST_RE.search(text)
+        if not m or m.group(2) not in _US_STATES:
+            continue
+        city, state = m.group(1), m.group(2)
+        start = max(0, m.start() - 40)
+        return {
+            "city": city,
+            "state": state,
+            "display": f"{city}, {state}",
+            "url": _clean(hit.get("url")),
+            "excerpt": text[start : m.end() + 40].strip(),
+        }
+    return None

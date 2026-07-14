@@ -423,19 +423,35 @@ def action_contributions(action_id: str) -> dict:
 
             facts = lookup_lead(action.tenant_id, customer_id=customer_id) or {}
             loc = resolve_customer_location(facts)
+            # OSINT fallback: the researcher's identity-verified public signal
+            # (persisted on its agent_run) — shown with its evidence URL and
+            # honestly labelled not-confident; never invented, never a stranger's.
+            osint = ((res or {}).get("output") or {}).get("location_signal") or {}
+            if loc.get("display"):
+                out_txt = (f"{loc['display']} (source: {loc['source']}, "
+                           f"{'confident' if loc['confident'] else 'not confident'})")
+                status = "done"
+                evidence: list[str] = []
+            elif osint.get("display"):
+                out_txt = (f"{osint['display']} (source: public — identity-verified "
+                           "profile, not confident)")
+                status = "done"
+                evidence = [f"seen in: {osint.get('url')} — “{osint.get('excerpt')}”"]
+            else:
+                out_txt = ("location unknown — not invented; no location-based "
+                           "angle used")
+                status = "missing"
+                evidence = []
             entries.append({
                 "agent": "Location Resolver",
-                "model": "deterministic:on-file-first",
+                "model": "deterministic:on-file-first+verified-osint",
                 "purpose": "Target by the CUSTOMER's location, never assume the "
                            "studio's.",
-                "output": (f"{loc['display']} (source: {loc['source']}, "
-                           f"{'confident' if loc['confident'] else 'not confident'})"
-                           if loc.get("display") else
-                           "location unknown — not invented; no location-based "
-                           "angle used"),
+                "output": out_txt,
+                **({"evidence": evidence} if evidence else {}),
                 "nextUse": "Strategy/copy may reference the location only when it "
                            "is grounded.",
-                "status": "done" if loc.get("display") else "missing",
+                "status": status,
             })
         except Exception:
             pass
@@ -496,6 +512,26 @@ def action_contributions(action_id: str) -> dict:
             "nextUse": "Only an approved draft is staged for YOUR review.",
             # An errored critic cell must read as failed — not as a completed check.
             "status": "failed" if out.get("verdict") == "error" else "done",
+        })
+
+    rev = _mine("reviser")
+    if rev:
+        out = rev.get("output") or {}
+        inp = rev.get("input") or {}
+        applied = bool(out.get("applied"))
+        entries.append({
+            "agent": "Reviser",
+            "model": rev.get("model"),
+            "purpose": "Act on the critic's concrete issues: rewrite ONLY what was "
+                       "flagged (no new claims), then let the critic re-judge.",
+            "output": (out.get("note") or
+                       ("revised draft staged" if applied else "original kept")),
+            **({"evidence": [f"critic's issues: {inp.get('critic_issues')}"]}
+               if inp.get("critic_issues") else {}),
+            "nextUse": ("The staged draft is the re-judged rewrite." if applied else
+                        "The staged draft is the original — the rewrite did not "
+                        "judge better."),
+            "status": "done",
         })
 
     jury = _run_level("jury")

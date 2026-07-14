@@ -63,6 +63,62 @@ HOST_AGUI_MODEL = "anthropic:claude-haiku-4-5"
 JURY_MODEL = f"anthropic:{_POLICY_CEILING}"
 
 
+def _revise_and_rejudge(
+    critic_cell: Any,
+    draft: dict[str, Any],
+    crit_rationale: str,
+    crit_confidence: float | None,
+    *,
+    objective: str,
+    tenant_id: str | None,
+    revise: Any,
+) -> dict[str, Any] | None:
+    """One bounded critic→copywriter→critic round for a drafted email.
+
+    ``revise`` is the revision seam (``studio.customer_research.
+    revise_outreach_draft`` in production; injectable for tests). Returns
+    ``None`` when no revision was produced, else a dict with the rewrite, the
+    re-judgement, and ``kept`` — True only when the rewrite judged BETTER
+    (approve, or revise at strictly higher confidence). An unjudged rewrite is
+    never kept over a judged original.
+    """
+    revised = revise(tenant_id, draft, crit_rationale)
+    if revised is None:
+        return None
+    re_verdict: str | None = None
+    re_conf: float | None = None
+    try:
+        re_prompt = "\n".join(
+            p
+            for p in [
+                f"Campaign objective: {objective}",
+                f"Channel: {draft.get('channel')}",
+                f"ASSET TO JUDGE (the outreach copy):\n{revised['draft']}",
+                f"Subject/headline: {revised['subject']}",
+                "Judge whether this is ship-quality outreach for this lead; flag "
+                "any off-voice phrasing, unsupported claim, or weak/absent call "
+                "to action as a concrete issue. Do not invent praise.",
+            ]
+            if p
+        )
+        recrit = critic_cell.run_sync(re_prompt)
+        re_verdict = recrit.verdict.value
+        re_conf = float(recrit.confidence)
+    except Exception:
+        pass  # unjudged rewrite is never kept over a judged original
+    kept = re_verdict == "approve" or (
+        re_verdict == "revise" and (re_conf or 0.0) > (crit_confidence or 0.0)
+    )
+    return {
+        "kept": kept,
+        "subject": revised["subject"],
+        "body": revised["draft"],
+        "copy_model": revised["copy_model"],
+        "re_verdict": re_verdict,
+        "re_conf": re_conf,
+    }
+
+
 def _draft_quality_conf(verdict: str | None, confidence: float | None) -> float | None:
     """Map the per-draft critic's verdict + its OWN confidence into a single ship-quality
     score for the action's ``conf`` field — what the Review Queue shows per draft.
@@ -2895,6 +2951,12 @@ def _execute_provided_leads_sync(
                 }
         th = facts.get("tattoo_history", []) or []
         traits = facts.get("persona_traits", {}) or {}
+        # OSINT location signal from IDENTITY-VERIFIED hits ONLY (a stranger's
+        # city is worse than no city). Evidence URL + verbatim excerpt ride
+        # along; None → key absent from the record, nothing invented.
+        from studio.location import location_from_verified_research as _loc_osint
+
+        _loc_sig = _loc_osint(research)
         sources = [
             {
                 "url": r.get("url"),
@@ -2927,6 +2989,7 @@ def _execute_provided_leads_sync(
                 "lead": facts.get("name"),
                 "customer_id": cust_id,
                 "public_enrichment": public_enrichment,
+                **({"location_signal": _loc_sig} if _loc_sig else {}),
                 "db_history": {
                     "city": facts.get("city"),
                     "past_tattoos": len(th),
@@ -3113,14 +3176,56 @@ def _execute_provided_leads_sync(
             f"{draft.get('subject') or ''}\n{draft.get('draft') or ''}", _pers_facts
         )
         if _pers_viol:
-            skipped.append(
-                {
-                    "row": _row,
-                    "lead": facts.get("name") or cust_id,
-                    "reason": f"fake personalization: {_pers_viol[0]}",
-                }
-            )
-            continue
+            # FIX THE FAKE at the source instead of dropping the lead: ONE bounded
+            # rewrite whose critique is the exact ungrounded claims, re-checked by
+            # the SAME guard. Only a still-dirty rewrite (or no LLM to rewrite
+            # with) skips the lead — the guard never weakens, the lead keeps its
+            # draft when the fake is removable, and the repair is recorded as a
+            # real `reviser` agent_run either way.
+            _fixed = False
+            if _cells_on and not _breaker_tripped:
+                from studio.customer_research import revise_outreach_draft as _rv
+
+                _fix_critique = (
+                    "The draft makes claims about this customer that are NOT on "
+                    "file (fake personalization). Remove or rephrase EXACTLY these "
+                    "ungrounded claims — and do NOT replace them with any other "
+                    "claim about the customer:\n- " + "\n- ".join(_pers_viol)
+                )
+                _rw = _rv(tenant_id, draft, _fix_critique)
+                if _rw is not None:
+                    _viol2 = personalization_violations(
+                        f"{_rw.get('subject') or ''}\n{_rw.get('draft') or ''}",
+                        _pers_facts,
+                    )
+                    _fixed = not _viol2
+                    _rec(
+                        "reviser",
+                        _rw["copy_model"],
+                        {"customer_id": cust_id, "channel": draft["channel"],
+                         "critic_issues": f"personalization guard: {'; '.join(_pers_viol)[:400]}"},
+                        {"applied": _fixed,
+                         "before_subject": draft.get("subject") or "",
+                         "after_subject": _rw["subject"],
+                         "note": ("ungrounded claim removed — guard re-check clean, "
+                                  "draft saved" if _fixed else
+                                  "rewrite still failed the guard — lead skipped "
+                                  "honestly")},
+                    )
+                    if _fixed:
+                        draft["subject"] = _rw["subject"]
+                        draft["draft"] = _rw["draft"]
+                        draft.setdefault("grounding", []).append(
+                            "copy=degrounded_after_guard")
+            if not _fixed:
+                skipped.append(
+                    {
+                        "row": _row,
+                        "lead": facts.get("name") or cust_id,
+                        "reason": f"fake personalization: {_pers_viol[0]}",
+                    }
+                )
+                continue
 
         # First-class per-lead DOSSIER (P2-C, 65w.7): assemble the evidence-linked record
         # from the REAL facts already gathered (identity/contact, persona, the grounded
@@ -3212,6 +3317,7 @@ def _execute_provided_leads_sync(
         # both None -> honest unknown conf, never a fabricated score.
         crit_verdict: str | None = None
         crit_confidence: float | None = None
+        crit_rationale: str = ""
         if not _cells_on:
             # Same switch as the strategist: keyless/LLM-off is a SKIP, not a
             # per-lead network error that could feed the failure breaker.
@@ -3227,6 +3333,7 @@ def _execute_provided_leads_sync(
             try:
                 crit = critic_cell.run_sync(crit_prompt)
                 crit_verdict, crit_confidence = crit.verdict.value, float(crit.confidence)
+                crit_rationale = (crit.rationale or "").strip()
                 # A REAL model call succeeded for this lead — the failure streak breaks.
                 _model_fail_streak = 0
                 _rec(
@@ -3268,6 +3375,51 @@ def _execute_provided_leads_sync(
             and _model_fail_streak >= MODEL_FAILURE_BREAKER_THRESHOLD
         ):
             _breaker_tripped = True
+
+        # REVISE LOOP (one bounded pass): a 'revise' verdict with concrete issues is
+        # ACTED ON, not just filed — the copywriter fixes exactly the named issues
+        # (hard anti-fabrication contract), the critic re-judges the rewrite, and the
+        # BETTER version stages. Recorded as a real `reviser` agent_run either way,
+        # so the evidence panel shows whether the revision was kept or honestly
+        # discarded. Any failure inside keeps the original — never a crash.
+        if (
+            _cells_on
+            and not _breaker_tripped
+            and crit_verdict == "revise"
+            and crit_rationale
+        ):
+            from studio.customer_research import revise_outreach_draft
+
+            outcome = _revise_and_rejudge(
+                critic_cell,
+                draft,
+                crit_rationale,
+                crit_confidence,
+                objective=campaign_angle or goal,
+                tenant_id=tenant_id,
+                revise=revise_outreach_draft,
+            )
+            if outcome is not None:
+                _rec(
+                    "reviser",
+                    outcome["copy_model"],
+                    {"customer_id": cust_id, "channel": draft["channel"],
+                     "critic_issues": crit_rationale[:500]},
+                    {"applied": outcome["kept"],
+                     "before_subject": draft.get("subject") or "",
+                     "after_subject": outcome["subject"],
+                     "reverdict": outcome["re_verdict"],
+                     "reconfidence": outcome["re_conf"],
+                     "note": ("revision fixed the critic's issues — revised draft staged"
+                              if outcome["kept"] else
+                              "revision did not judge better — original kept honestly")},
+                )
+                if outcome["kept"]:
+                    draft["subject"] = outcome["subject"]
+                    draft["draft"] = outcome["body"]
+                    draft.setdefault("grounding", []).append("copy=revised_after_critic")
+                    crit_verdict = outcome["re_verdict"]
+                    crit_confidence = outcome["re_conf"]
 
         # Land the critic's quality score on the draft so the Review Queue shows REAL,
         # varying confidence (a generic draft the critic flags scores lower than a

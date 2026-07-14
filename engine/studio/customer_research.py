@@ -1964,6 +1964,69 @@ def build_outreach_draft(
     }
 
 
+def revise_outreach_draft(
+    tenant_id: str | None,
+    draft: dict[str, Any],
+    critique: str,
+) -> dict[str, Any] | None:
+    """ONE bounded, critic-driven revision of a drafted email — the revise loop:
+    the critic named concrete issues, the copywriter fixes EXACTLY those, and
+    the caller re-critiques and keeps whichever version judges better.
+
+    Anti-fabrication is a hard prompt contract: the reviser may rewrite
+    phrasing, subject and CTA but may NOT introduce any new factual claim,
+    offer, discount, price, date, or customer history — the grounded facts are
+    exactly the original draft's. The revised body passes the same finishing
+    guard (``_finalize_outreach_body``) so the opt-out/CTA invariants hold.
+    Returns ``{subject, draft, copy_model}`` or ``None`` when revision is
+    unavailable (LLM off / non-email channel / empty critique / cell failure)
+    — the caller keeps the original, honestly.
+    """
+    ch = (draft.get("channel") or "").strip().lower()
+    if ch not in ("gmail", "email") or not _llm_copy_enabled():
+        return None
+    subject = (draft.get("subject") or "").strip()
+    body = (draft.get("draft") or "").strip()
+    if not body or not (critique or "").strip():
+        return None
+    try:
+        brand_voice_context, approved_claims = resolve_brand_voice(tenant_id)
+        from cells.copywriter import build_copywriter_email_cell
+
+        cell = build_copywriter_email_cell(
+            brand_voice_context=brand_voice_context,
+            approved_claims=approved_claims,
+        )
+        _cm = getattr(cell, "model", None)
+        copy_model = _cm if isinstance(_cm, str) else str(_cm)
+        prompt = "\n".join([
+            "REVISION PASS — an independent critic reviewed the outreach email",
+            "below and named concrete issues. Rewrite it to fix EXACTLY those",
+            "issues. HARD RULES:",
+            "- Do NOT introduce any new factual claim, offer, discount, price,",
+            "  date, or customer history that is not already in the draft.",
+            "- Keep the same personalization basis and evidence — only improve",
+            "  phrasing, subject line, structure, and the call to action.",
+            "- Keep any opt-out / unsubscribe line intact.",
+            f"CRITIC'S ISSUES:\n{critique.strip()}",
+            f"CURRENT SUBJECT: {subject}",
+            f"CURRENT BODY:\n{body}",
+        ])
+        copy = cell.run_sync(prompt)
+        new_subject = (copy.subject or "").strip()
+        new_body = (copy.body or "").strip()
+        if not new_body:
+            return None
+        new_body = _finalize_outreach_body(new_body, ch=ch)
+        return {
+            "subject": new_subject or subject,
+            "draft": new_body,
+            "copy_model": copy_model,
+        }
+    except Exception:
+        return None  # honest: revision unavailable — the original stages
+
+
 # --------------------------------------------------------------------------- #
 # Upload ingestion — UPSERT uploaded leads into ``customers`` (tenant+email key)
 # --------------------------------------------------------------------------- #
