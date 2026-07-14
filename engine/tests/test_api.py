@@ -42,8 +42,12 @@ def test_healthz_reports_pins_and_temperature():
     body = resp.json()
     assert body["status"] == "ok"
     assert body["temperature"] == 0.0
-    assert body["models"]["opus"] == "claude-sonnet-4-5"  # 8sk: top tier == ceiling
-    assert body["models"]["sonnet"] == "claude-sonnet-4-5"  # 8sk ceiling
+    # Policy-relative (2026-07-14 cost order: haiku everywhere; the ceiling is
+    # liftable via ENGINE_MODEL_CEILING, so assert against the policy, not ids).
+    from harness.config import POLICY_CEILING_MODEL
+
+    assert body["models"]["opus"] == POLICY_CEILING_MODEL  # top tier == ceiling
+    assert body["models"]["sonnet"] == POLICY_CEILING_MODEL
     assert body["models"]["haiku"] == "claude-haiku-4-5"
     assert body["checkpointer"] == "memory"
 

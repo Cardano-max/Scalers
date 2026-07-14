@@ -104,9 +104,22 @@ def test_search_empty_query_rejected():
 # ── pin-to-IP + Host + key + official /v1/messages path + Fable-5 shape ──────
 
 
+def test_default_models_follow_the_cost_policy():
+    # 2026-07-14 operator order: the research path DEFAULTS to haiku (both the
+    # primary and the server-side fallback); RESEARCH_*_MODEL envs lift it.
+    import research.providers.anthropic_research as ar
+
+    assert ar.PRIMARY_MODEL == "claude-haiku-4-5"
+    assert ar.FALLBACK_MODEL == "claude-haiku-4-5"
+
+
 def test_search_connects_to_pinned_ip_with_host_key_and_fable5_payload():
+    # The fable/opus ids are passed EXPLICITLY: this test pins the Fable-5
+    # payload SHAPE (beta fallback header, no thinking, no sampling params)
+    # for when the operator lifts the cost policy — the defaults are haiku.
     fake = _FakeFetcher()
-    p = _provider(fetcher=fake)
+    p = _provider(fetcher=fake, model="claude-fable-5",
+                  fallback_model="claude-opus-4-8")
     results = p.search("black and grey realism tattoo top posts", limit=5)
     call = fake.calls[0]
     assert call["ip"] == "160.79.104.10"              # resolved + vetted IP

@@ -168,8 +168,10 @@ class AnthropicResearchProvider:
             "messages": [{"role": "user", "content": _research_instruction(query.strip())}],
         }
         # Opt into the server-side fallback so a false-positive decline on benign
-        # research is re-served by Opus in the same call (Fable-5 guidance).
-        if self._fallback_model:
+        # research is re-served by the fallback model in the same call (Fable-5
+        # guidance). A fallback equal to the primary (the haiku-everywhere cost
+        # default) is a no-op — skip the opt-in rather than fall back to itself.
+        if self._fallback_model and self._fallback_model != self._model:
             headers["anthropic-beta"] = _SERVER_SIDE_FALLBACK_BETA
             payload["fallbacks"] = [{"model": self._fallback_model}]
 
