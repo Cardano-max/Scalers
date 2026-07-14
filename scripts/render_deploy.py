@@ -138,7 +138,10 @@ def main() -> int:
         return 2
     branch = os.environ.get("DEPLOY_BRANCH") or "main"
     region = os.environ.get("RENDER_REGION", "oregon")
-    plan_web = os.environ.get("RENDER_PLAN_WEB", "starter")
+    plan_engine = os.environ.get("RENDER_PLAN_ENGINE",
+                                 os.environ.get("RENDER_PLAN_WEB", "standard"))
+    plan_console = os.environ.get("RENDER_PLAN_CONSOLE",
+                                  os.environ.get("RENDER_PLAN_WEB", "starter"))
     plan_db = os.environ.get("RENDER_PLAN_DB", "basic_256mb")
 
     owners = _req("GET", "/owners?limit=20")
@@ -152,6 +155,10 @@ def main() -> int:
     # An EXTERNAL managed Postgres (Neon/Supabase — no card needed) short-circuits
     # Render's database billing wall: set the EXTERNAL_DATABASE_URL repo secret.
     db_url = (os.environ.get("EXTERNAL_DATABASE_URL") or "").strip()
+    if os.environ.get("USE_RENDER_DB") == "1" and db_url:
+        print("USE_RENDER_DB=1 — ignoring EXTERNAL_DATABASE_URL, provisioning "
+              "Render Postgres (long-term single-invoice setup)")
+        db_url = ""
     if db_url:
         print("postgres: using EXTERNAL_DATABASE_URL (Neon/Supabase — not printed)")
     else:
@@ -206,14 +213,14 @@ def main() -> int:
     if engine is None:
         print("creating scalers-engine …")
         details: dict = {
-            "env": "docker", "plan": plan_web, "region": region,
+            "env": "docker", "plan": plan_engine, "region": region,
             "healthCheckPath": "/healthz",
             "envSpecificDetails": {"dockerfilePath": "./Dockerfile.engine",
                                    "dockerContext": "."},
         }
         # Persistent disks are a paid-plan feature; on the free plan uploads under
         # var/artifacts survive requests but not redeploys (honest limitation).
-        if plan_web != "free":
+        if plan_engine != "free":
             details["disk"] = {"name": "artifacts", "mountPath": "/app/engine/var",
                                "sizeGB": 5}
         else:
@@ -254,7 +261,7 @@ def main() -> int:
             "repo": REPO_URL, "branch": branch, "autoDeploy": "yes", "rootDir": "web",
             "envVars": console_env,
             "serviceDetails": {
-                "env": "node", "plan": plan_web, "region": region,
+                "env": "node", "plan": plan_console, "region": region,
                 "envSpecificDetails": {"buildCommand": "npm ci && npm run build",
                                        "startCommand": "npm run start"},
             },

@@ -51,8 +51,13 @@ jobs:
           # entirely (Render requires a card for databases; these don't).
           EXTERNAL_DATABASE_URL: ${{ secrets.EXTERNAL_DATABASE_URL }}
           DEPLOY_BRANCH: ${{ inputs.branch != '' && inputs.branch || github.ref_name }}
-          # Free-tier defaults (the operator's account has no card). Upgrade path:
-          # set repo Actions variables RENDER_PLAN_WEB/RENDER_PLAN_DB and re-run.
-          RENDER_PLAN_WEB: ${{ vars.RENDER_PLAN_WEB || 'free' }}
-          RENDER_PLAN_DB: ${{ vars.RENDER_PLAN_DB || 'free' }}
+          # SAFE production setup (operator-approved, client-reimbursed):
+          # engine standard (2GB, no sleep), console starter, Render Postgres
+          # basic-256mb — one invoice. Override via repo Actions variables.
+          RENDER_PLAN_ENGINE: ${{ vars.RENDER_PLAN_ENGINE || 'standard' }}
+          RENDER_PLAN_CONSOLE: ${{ vars.RENDER_PLAN_CONSOLE || 'starter' }}
+          RENDER_PLAN_DB: ${{ vars.RENDER_PLAN_DB || 'basic_256mb' }}
+          # All-Render database for the long-term single-invoice setup (the Neon
+          # secret stays in place but is ignored while this is 1).
+          USE_RENDER_DB: "1"
         run: python3 scripts/render_deploy.py
