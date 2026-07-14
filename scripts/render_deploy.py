@@ -149,24 +149,45 @@ def main() -> int:
     print(f"owner: {owner_id} | branch: {branch} | region: {region}")
 
     # ── 1. Postgres ────────────────────────────────────────────────────────────
-    db = find_by_name("/postgres", "scalers-db", "postgres")
-    if db is None:
-        print("creating postgres scalers-db …")
-        db = _req("POST", "/postgres", {
-            "name": "scalers-db", "ownerId": owner_id, "plan": plan_db,
-            "region": region, "version": "16",
-        })
-        db = db.get("postgres") or db
-    db_id = db["id"]
-    wait("postgres", lambda: _req("GET", f"/postgres/{db_id}"),
-         lambda cur: True if (cur.get("postgres") or cur).get("status") == "available"
-         else (cur.get("postgres") or cur).get("status", "creating"))
-    conn = _req("GET", f"/postgres/{db_id}/connection-info")
-    db_url = conn.get("internalConnectionString") or conn.get("externalConnectionString")
-    if not db_url:
-        print(f"FATAL: no connection string in {list(conn.keys())}")
-        return 2
-    print("postgres: connection string obtained (not printed)")
+    # An EXTERNAL managed Postgres (Neon/Supabase — no card needed) short-circuits
+    # Render's database billing wall: set the EXTERNAL_DATABASE_URL repo secret.
+    db_url = (os.environ.get("EXTERNAL_DATABASE_URL") or "").strip()
+    if db_url:
+        print("postgres: using EXTERNAL_DATABASE_URL (Neon/Supabase — not printed)")
+    else:
+        db = find_by_name("/postgres", "scalers-db", "postgres")
+        if db is None:
+            print("creating postgres scalers-db …")
+            try:
+                db = _req("POST", "/postgres", {
+                    "name": "scalers-db", "ownerId": owner_id, "plan": plan_db,
+                    "region": region, "version": "16",
+                })
+            except RuntimeError as exc:
+                if "402" in str(exc):
+                    print(
+                        "FATAL: Render requires payment info on file to create a "
+                        "database (free web services don't, databases do).\n"
+                        "Fix EITHER way:\n"
+                        "  a) add a card at https://dashboard.render.com/billing "
+                        "and re-run, OR\n"
+                        "  b) create a free Neon database (no card): neon.tech → "
+                        "new project → copy the connection string → add it as the "
+                        "EXTERNAL_DATABASE_URL repo Actions secret and re-run."
+                    )
+                    return 3
+                raise
+            db = db.get("postgres") or db
+        db_id = db["id"]
+        wait("postgres", lambda: _req("GET", f"/postgres/{db_id}"),
+             lambda cur: True if (cur.get("postgres") or cur).get("status") == "available"
+             else (cur.get("postgres") or cur).get("status", "creating"))
+        conn = _req("GET", f"/postgres/{db_id}/connection-info")
+        db_url = conn.get("internalConnectionString") or conn.get("externalConnectionString")
+        if not db_url:
+            print(f"FATAL: no connection string in {list(conn.keys())}")
+            return 2
+        print("postgres: connection string obtained (not printed)")
 
     # ── 2. Engine (Docker) ─────────────────────────────────────────────────────
     engine_env = [{"key": "ENGINE_DATABASE_URL", "value": db_url},

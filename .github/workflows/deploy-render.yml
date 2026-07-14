@@ -47,6 +47,9 @@ jobs:
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
           SCALERS_ENV: ${{ secrets.SCALERS_ENV }}
+          # Optional: a Neon/Supabase connection string — skips Render Postgres
+          # entirely (Render requires a card for databases; these don't).
+          EXTERNAL_DATABASE_URL: ${{ secrets.EXTERNAL_DATABASE_URL }}
           DEPLOY_BRANCH: ${{ inputs.branch != '' && inputs.branch || github.ref_name }}
           # Free-tier defaults (the operator's account has no card). Upgrade path:
           # set repo Actions variables RENDER_PLAN_WEB/RENDER_PLAN_DB and re-run.
