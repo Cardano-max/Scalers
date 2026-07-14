@@ -56,8 +56,8 @@ class Span(BaseModel):
     output_truncated: bool = False
 
     # The pinned model id that produced this span's output, for a model-backed
-    # span (e.g. ``"anthropic:claude-haiku-4-5"`` for the draft cell,
-    # ``"anthropic:claude-sonnet-4-5"`` for the Opus jurors). ``None`` for a
+    # span (e.g. ``"anthropic:claude-haiku-4-5"`` for the draft cell and — under
+    # the 2026-07-14 cost order — for every juror too). ``None`` for a
     # structural/stub span where no model was called — never invented. Queryable
     # from ``runs.steps`` as ``s->>'model'``.
     model: str | None = None

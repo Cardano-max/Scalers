@@ -52,14 +52,14 @@ ANTHROPIC_API_BASE = "https://api.anthropic.com"
 _API_HOST = "api.anthropic.com"
 _MESSAGES_PATH = "/v1/messages"
 
-# The primary research model the client asked for (PA meeting 2026-07-11), with a
-# server-side fallback so a false-positive safety decline on adjacent (benign)
-# research is re-served. Aligned with CLAUDE.md's model policy ("Fable 5 for
-# hardest strategy, with server-side fallback"). Both are ENV-OVERRIDABLE so the
-# operator keeps cost control — set RESEARCH_PRIMARY_MODEL / RESEARCH_FALLBACK_MODEL
-# to dial the research path down (e.g. to a cheaper model) without a code change.
-PRIMARY_MODEL = os.environ.get("RESEARCH_PRIMARY_MODEL", "claude-fable-5")
-FALLBACK_MODEL = os.environ.get("RESEARCH_FALLBACK_MODEL", "claude-opus-4-8")
+# Model policy (operator order 2026-07-14: "haiku 4.5 all the places, not
+# bigger model, to avoid API cost"): the research path now DEFAULTS to haiku,
+# with the same server-side fallback shape kept. Both stay ENV-OVERRIDABLE —
+# set RESEARCH_PRIMARY_MODEL / RESEARCH_FALLBACK_MODEL to dial the research
+# path back up (e.g. to claude-fable-5 per the PA-meeting stack decision)
+# without a code change, when the operator lifts the cost order.
+PRIMARY_MODEL = os.environ.get("RESEARCH_PRIMARY_MODEL", "claude-haiku-4-5")
+FALLBACK_MODEL = os.environ.get("RESEARCH_FALLBACK_MODEL", "claude-haiku-4-5")
 
 # A NON-STREAMING messages call that runs server-side web search takes minutes, not
 # seconds — the tool loops several searches before the final text. 120s produced

@@ -41,6 +41,8 @@ from typing import Any
 from fastapi import Request
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, DeferredToolRequests, RunContext
+
+from harness.config import POLICY_CEILING_MODEL as _POLICY_CEILING
 from pydantic_ai.ui import StateDeps  # noqa: F401  (re-exported for callers/tests)
 
 from studio.campaign_plan_store import latest_plans, upsert_plan
@@ -55,8 +57,10 @@ from studio.chat_store import VALID_ROLES, PostgresChatStore
 HOST_AGUI_MODEL = "anthropic:claude-haiku-4-5"
 # The REAL model the compose/brainstorm jury runs (Agent(JURY_MODEL).run). The
 # provided-leads staged-count check is pure code and records DETERMINISTIC_JURY_MODEL
-# from autonomy.jury instead (65w.15) — never this id.
-JURY_MODEL = "anthropic:claude-sonnet-4-5"
+# from autonomy.jury instead (65w.15) — never this id. Derived from the policy
+# ceiling (haiku under the operator's 2026-07-14 cost order; ENGINE_MODEL_CEILING
+# lifts it) instead of a literal that could silently outspend the policy.
+JURY_MODEL = f"anthropic:{_POLICY_CEILING}"
 
 
 def _draft_quality_conf(verdict: str | None, confidence: float | None) -> float | None:
@@ -2531,27 +2535,47 @@ def _execute_provided_leads_sync(
     strat_cell = build_strategy_cell()
     strat_model = _cell_model(strat_cell)
     campaign_angle: str | None = None
-    try:
-        strategy = strat_cell.run_sync(
-            build_strategy_prompt(describe_tenant(tenant_id), _brief_from_plan(plan))
-        )
-        campaign_angle = (strategy.target_angle or "").strip() or None
+    # LLM cells (strategist/critic) follow the SAME switch as the copywriter: no
+    # Anthropic key (or SCALERS_OUTREACH_LLM=0) → an honest SKIP, never a network
+    # attempt. A keyless run used to attempt-and-error here anyway, which was
+    # both slow (per-lead retry time) and FLAKY: whether the error classified as
+    # a "model error" depended on how the network refused, so the failure
+    # breaker sometimes tripped a keyless CI run at exactly 5 drafts.
+    from studio.customer_research import _llm_copy_enabled as _llm_cells_enabled
+
+    _cells_on = _llm_cells_enabled()
+    if not _cells_on:
         _rec(
             "strategist",
             strat_model,
             {"goal": goal, "n_leads": len(leads), "lead_source": "provided"},
-            strategy.model_dump(),
+            {"status": "skipped",
+             "note": "LLM cells disabled (no Anthropic key or SCALERS_OUTREACH_LLM=0)"
+                     " — drafting deterministically from the goal"},
             id_=f"ar_strategist_{hashlib.sha1(str(run_id).encode()).hexdigest()[:16]}",
         )
-    except Exception as exc:  # honest failed run, never a fabricated strategy
-        _strategist_failed = True
-        _rec(
-            "strategist",
-            strat_model,
-            {"goal": goal, "lead_source": "provided"},
-            {"status": "failed", "error": f"{type(exc).__name__}: {exc}"},
-            id_=f"ar_strategist_{hashlib.sha1(str(run_id).encode()).hexdigest()[:16]}",
-        )
+    else:
+        try:
+            strategy = strat_cell.run_sync(
+                build_strategy_prompt(describe_tenant(tenant_id), _brief_from_plan(plan))
+            )
+            campaign_angle = (strategy.target_angle or "").strip() or None
+            _rec(
+                "strategist",
+                strat_model,
+                {"goal": goal, "n_leads": len(leads), "lead_source": "provided"},
+                strategy.model_dump(),
+                id_=f"ar_strategist_{hashlib.sha1(str(run_id).encode()).hexdigest()[:16]}",
+            )
+        except Exception as exc:  # honest failed run, never a fabricated strategy
+            _strategist_failed = True
+            _rec(
+                "strategist",
+                strat_model,
+                {"goal": goal, "lead_source": "provided"},
+                {"status": "failed", "error": f"{type(exc).__name__}: {exc}"},
+                id_=f"ar_strategist_{hashlib.sha1(str(run_id).encode()).hexdigest()[:16]}",
+            )
 
     # ARTWORK ATTACH GATE (engine-core item 3, spec §9/10/22) — AFTER strategy, BEFORE
     # any drafting. When the operator asked for artwork on this cohort, surface the TOP
@@ -3188,39 +3212,51 @@ def _execute_provided_leads_sync(
         # both None -> honest unknown conf, never a fabricated score.
         crit_verdict: str | None = None
         crit_confidence: float | None = None
-        try:
-            crit = critic_cell.run_sync(crit_prompt)
-            crit_verdict, crit_confidence = crit.verdict.value, float(crit.confidence)
-            # A REAL model call succeeded for this lead — the failure streak breaks.
-            _model_fail_streak = 0
+        if not _cells_on:
+            # Same switch as the strategist: keyless/LLM-off is a SKIP, not a
+            # per-lead network error that could feed the failure breaker.
             _rec(
                 "critic",
                 _cell_model(critic_cell),
                 {"customer_id": cust_id, "channel": draft["channel"]},
-                {
-                    "verdict": crit_verdict,
-                    "confidence": crit_confidence,
-                    "rationale": crit.rationale,
-                },
+                {"verdict": "skipped", "confidence": None,
+                 "rationale": "LLM cells disabled (no Anthropic key or "
+                              "SCALERS_OUTREACH_LLM=0) — no critic verdict"},
             )
-        except Exception as exc:  # honest failed verdict, never fabricated praise
-            # Circuit-breaker signal: this lead hit a REAL model/HTTP error (in the
-            # critic, or already in the draft cell whose copy fell back to template).
-            if _is_model_error(exc) or _draft_model_fallback(draft):
-                _model_fail_streak += 1
-                _last_model_error = f"{type(exc).__name__}: {exc}"
-            else:
+        else:
+            try:
+                crit = critic_cell.run_sync(crit_prompt)
+                crit_verdict, crit_confidence = crit.verdict.value, float(crit.confidence)
+                # A REAL model call succeeded for this lead — the failure streak breaks.
                 _model_fail_streak = 0
-            _rec(
-                "critic",
-                _cell_model(critic_cell),
-                {"customer_id": cust_id, "channel": draft["channel"]},
-                {
-                    "verdict": "error",
-                    "confidence": 0.0,
-                    "rationale": f"critic cell failed: {type(exc).__name__}: {exc}",
-                },
-            )
+                _rec(
+                    "critic",
+                    _cell_model(critic_cell),
+                    {"customer_id": cust_id, "channel": draft["channel"]},
+                    {
+                        "verdict": crit_verdict,
+                        "confidence": crit_confidence,
+                        "rationale": crit.rationale,
+                    },
+                )
+            except Exception as exc:  # honest failed verdict, never fabricated praise
+                # Circuit-breaker signal: this lead hit a REAL model/HTTP error (in the
+                # critic, or already in the draft cell whose copy fell back to template).
+                if _is_model_error(exc) or _draft_model_fallback(draft):
+                    _model_fail_streak += 1
+                    _last_model_error = f"{type(exc).__name__}: {exc}"
+                else:
+                    _model_fail_streak = 0
+                _rec(
+                    "critic",
+                    _cell_model(critic_cell),
+                    {"customer_id": cust_id, "channel": draft["channel"]},
+                    {
+                        "verdict": "error",
+                        "confidence": 0.0,
+                        "rationale": f"critic cell failed: {type(exc).__name__}: {exc}",
+                    },
+                )
 
         # MODEL-FAILURE CIRCUIT BREAKER trip check: strategist failed AND the last
         # MODEL_FAILURE_BREAKER_THRESHOLD leads ALL hit real model errors. This lead's

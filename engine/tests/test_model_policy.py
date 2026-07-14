@@ -107,20 +107,44 @@ def test_default_is_haiku():
 
 
 def test_ceiling_and_dated_ids_allowed():
-    assert resolve_model("claude-sonnet-4-5") == "claude-sonnet-4-5"
+    # Policy-relative: whatever the ceiling is (haiku under the 2026-07-14 cost
+    # order; env-liftable), it and dated haiku snapshots pass unclamped.
+    assert resolve_model(POLICY_CEILING_MODEL) == POLICY_CEILING_MODEL
     assert resolve_model("anthropic:claude-haiku-4-5") == "anthropic:claude-haiku-4-5"
     assert resolve_model("claude-haiku-4-5-20251001") == "claude-haiku-4-5-20251001"
 
 
+def test_ceiling_env_lift_is_the_operators_knob(monkeypatch):
+    """ENGINE_MODEL_CEILING lifts the ceiling WITHOUT a code edit (2026-07-14
+    order kept reversible). Reload-scoped: the module reads it at import."""
+    import importlib
+
+    import harness.config as hc
+
+    monkeypatch.setenv("ENGINE_MODEL_CEILING", "claude-sonnet-4-5")
+    importlib.reload(hc)
+    try:
+        assert hc.POLICY_CEILING_MODEL == "claude-sonnet-4-5"
+        assert hc.model_allowed("claude-sonnet-4-5")
+        assert hc.resolve_model("claude-opus-4-8") == "claude-sonnet-4-5"  # still clamps
+    finally:
+        monkeypatch.delenv("ENGINE_MODEL_CEILING")
+        importlib.reload(hc)
+
+
 @pytest.mark.parametrize(
     "banned",
-    ["claude-sonnet-4-6", "claude-opus-4-8", "claude-fable-5", "anthropic:claude-opus-4-8"],
+    ["claude-sonnet-4-5", "claude-sonnet-4-6", "claude-opus-4-8", "claude-fable-5",
+     "anthropic:claude-opus-4-8"],
 )
 def test_above_ceiling_clamps_down_never_up(banned):
+    # 2026-07-14 order: sonnet is above the (haiku) ceiling too, unless the
+    # operator lifts it via ENGINE_MODEL_CEILING.
     resolved = resolve_model(banned)
     assert model_allowed(resolved)
     assert POLICY_CEILING_MODEL in resolved  # clamped DOWN to the ceiling
     assert "opus" not in resolved and "4-6" not in resolved and "fable" not in resolved
+    assert "sonnet" not in resolved
 
 
 def test_non_anthropic_provider_passes_through():
@@ -129,8 +153,8 @@ def test_non_anthropic_provider_passes_through():
 
 
 def test_env_override_allowed_value(monkeypatch):
-    monkeypatch.setenv("ENGINE_MODEL_DEFAULT", "claude-sonnet-4-5")
-    assert resolve_model() == "claude-sonnet-4-5"
+    monkeypatch.setenv("ENGINE_MODEL_DEFAULT", "claude-haiku-4-5-20251001")
+    assert resolve_model() == "claude-haiku-4-5-20251001"
 
 
 def test_env_override_banned_value_is_clamped(monkeypatch):

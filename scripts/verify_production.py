@@ -26,6 +26,7 @@ import urllib.error
 import urllib.request
 
 BASE = os.environ.get("ENGINE_URL", "https://scalers-engine.onrender.com").rstrip("/")
+CONSOLE = os.environ.get("CONSOLE_URL", "https://scalers-console.onrender.com").rstrip("/")
 TENANT = os.environ.get("TENANT_ID", "ladies8391")
 SESSION = os.environ.get("SESSION_ID", "studio-live-session")
 # When set (CI), gate on Render reporting THIS commit live before the scenario
@@ -148,6 +149,39 @@ def main() -> None:
     names = [a.get("name") for a in artists.get("artists", [])]
     assert "Kaps" in names, f"Kaps missing from roster: {names}"
     print(f"roster OK: {names}")
+
+    # 2b. the CONSOLE — what the operator's browser actually loads. The page must
+    #     serve, and the console's OWN /studio/artists proxy (the exact request the
+    #     Artists tab makes) must return the roster — this is the end-to-end check
+    #     for "the site is up but the artists tab is empty".
+    try:
+        req = urllib.request.Request(CONSOLE + "/", headers={"accept": "text/html"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            assert r.status == 200
+        print(f"console page OK: {CONSOLE}/")
+        via_console = None
+        for attempt in range(4):
+            try:
+                req = urllib.request.Request(
+                    CONSOLE + "/studio/artists", headers={"accept": "application/json"})
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    via_console = json.loads(r.read() or b"{}")
+                break
+            except urllib.error.HTTPError as e:
+                if e.code in (502, 503, 504) and attempt < 3:
+                    time.sleep(15)
+                    continue
+                raise
+        proxied = [a.get("name") for a in (via_console or {}).get("artists", [])]
+        assert "Kaps" in proxied, (
+            f"console→engine proxy broken: /studio/artists via console = {proxied} "
+            "(engine has the roster, so STUDIO_BACKEND_ORIGIN on the console is wrong "
+            "or its deploy is stale)")
+        print(f"console proxy OK — Artists tab data via console: {proxied}")
+    except AssertionError:
+        raise
+    except Exception as e:  # noqa: BLE001 — name the console as the failing side
+        raise SystemExit(f"console check failed ({CONSOLE}): {e}") from e
     mem = call("GET", f"/studio/memory-state?tenant_id={TENANT}")
     print("memory-state:", json.dumps({k: mem.get(k) for k in
           ("customers_total", "review_queue", "drafts")}, default=str)[:300])

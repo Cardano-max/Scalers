@@ -95,14 +95,15 @@ def require_foreplay_api_key() -> str:
     return _require_api_key("FOREPLAY_API_KEY", needed_for="Phase 3 (Foreplay research)")
 
 
-# ── MODEL POLICY (CustomerAcq-8sk; operator order 2026-07-02) ─────────────────
-# Every engine LLM call defaults to claude-haiku-4-5; claude-sonnet-4-5 is the
-# ABSOLUTE ceiling. Nothing above (sonnet-4-6, opus, fable) may be named for a
-# live call: resolve_model() clamps any out-of-policy request DOWN to the ceiling
-# and logs the clamp honestly. Protects the operator's freshly-funded credits;
-# supersedes the stack-decision tiering until the operator lifts the policy.
+# ── MODEL POLICY (CustomerAcq-8sk; operator orders 2026-07-02 + 2026-07-14) ───
+# Every engine LLM call defaults to claude-haiku-4-5 — and per the operator's
+# 2026-07-14 order ("use haiku 4.5 all the places, not bigger model, to avoid
+# API cost") haiku is now ALSO the ceiling: every tier resolves to haiku and any
+# bigger request clamps DOWN with an honest log. When the operator lifts the
+# policy, set ENGINE_MODEL_CEILING to the bigger allowed id (e.g. the sonnet-4-5
+# one) in the environment — no code edit.
 POLICY_DEFAULT_MODEL = "claude-haiku-4-5"
-POLICY_CEILING_MODEL = "claude-sonnet-4-5"
+POLICY_CEILING_MODEL = os.environ.get("ENGINE_MODEL_CEILING", "claude-haiku-4-5")
 # Dated snapshots of the allowed models (e.g. claude-haiku-4-5-20251001) pass too.
 _POLICY_ALLOWED_PREFIXES = (POLICY_DEFAULT_MODEL, POLICY_CEILING_MODEL)
 
@@ -156,7 +157,11 @@ def resolve_model(requested: str | None = None) -> str:
 
 
 # Pinned Claude model IDs. Exact strings — no date suffixes. POLICY-CLAMPED
-# (8sk): haiku-4.5 is the default for every tier; sonnet-4.5 is the top tier.
+# (8sk): every tier resolves through the policy — the "bigger" tiers are the
+# ceiling (haiku under the 2026-07-14 order; ENGINE_MODEL_CEILING lifts it).
+# DEFAULT_OPUS exists so studio.model_routing's import binds to THIS policy
+# instead of its own fallback literals (which silently pinned sonnet).
+DEFAULT_OPUS = POLICY_CEILING_MODEL
 DEFAULT_SONNET = POLICY_CEILING_MODEL
 DEFAULT_HAIKU = POLICY_DEFAULT_MODEL
 
