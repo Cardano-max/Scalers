@@ -24,6 +24,7 @@ import { ArtifactMedia } from './ArtifactMedia';
 import {
   addArtistMemory,
   artifactRawUrl,
+  createArtist,
   fetchArtist,
   fetchArtists,
   uploadArtworkImage,
@@ -35,6 +36,16 @@ import {
 } from '@/lib/studio/artists';
 
 const TEAL = '#0F8A82';
+
+const addFieldStyle: React.CSSProperties = {
+  font: 'inherit',
+  fontSize: 12.5,
+  padding: '8px 10px',
+  border: '1px solid var(--hairline)',
+  borderRadius: 9,
+  background: '#fff',
+  color: 'var(--ink)',
+};
 
 export function ArtistsScreen() {
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
@@ -59,6 +70,35 @@ function rosterSort(a: { artworkCount: number; campaignCount: number; memoryCoun
 function ArtistRoster({ onOpen }: { onOpen: (slug: string) => void }) {
   const roster = useAsync(() => fetchArtists(), []);
   const [query, setQuery] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState({ name: '', studio: '', instagram: '', brandVoice: '' });
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  const submitCreate = async () => {
+    if (!form.name.trim() || createBusy) return;
+    setCreateBusy(true);
+    setCreateError(null);
+    try {
+      const res = await createArtist({
+        name: form.name.trim(),
+        studio: form.studio.trim() || undefined,
+        instagram: form.instagram.trim() || undefined,
+        brandVoice: form.brandVoice.trim() || undefined,
+      });
+      if (!res.ok || !res.slug) {
+        setCreateError(res.error ?? 'create failed');
+        return;
+      }
+      setAdding(false);
+      setForm({ name: '', studio: '', instagram: '', brandVoice: '' });
+      onOpen(res.slug); // straight into the new profile — upload artwork next
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : 'create failed');
+    } finally {
+      setCreateBusy(false);
+    }
+  };
 
   const visible = useMemo(() => {
     const all = [...(roster.data ?? [])].sort(rosterSort);
@@ -78,6 +118,24 @@ function ArtistRoster({ onOpen }: { onOpen: (slug: string) => void }) {
         <span className="label" style={{ fontSize: 10 }}>
           {roster.data ? `${roster.data.length} artist${roster.data.length === 1 ? '' : 's'}` : ''}
         </span>
+        <button
+          type="button"
+          onClick={() => setAdding((v) => !v)}
+          data-testid="add-artist-toggle"
+          style={{
+            font: 'inherit',
+            fontSize: 12.5,
+            fontWeight: 600,
+            padding: '7px 14px',
+            border: 'none',
+            borderRadius: 'var(--radius-pill)',
+            background: TEAL,
+            color: '#fff',
+            cursor: 'pointer',
+          }}
+        >
+          {adding ? 'Close' : '＋ Add artist'}
+        </button>
         <input
           type="search"
           value={query}
@@ -97,6 +155,85 @@ function ArtistRoster({ onOpen }: { onOpen: (slug: string) => void }) {
           }}
         />
       </div>
+
+      {adding && (
+        <section
+          aria-label="Add artist"
+          style={{
+            border: '1px solid var(--hairline)',
+            borderRadius: 'var(--radius-card)',
+            background: 'var(--surface)',
+            boxShadow: 'var(--shadow-card)',
+            padding: 16,
+            marginBottom: 16,
+            display: 'grid',
+            gap: 10,
+          }}
+        >
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
+            <input
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              placeholder="Artist name (required)"
+              aria-label="Artist name"
+              data-testid="add-artist-name"
+              style={addFieldStyle}
+            />
+            <input
+              value={form.studio}
+              onChange={(e) => setForm((f) => ({ ...f, studio: e.target.value }))}
+              placeholder="Studio (e.g. Skin Design Tattoos)"
+              aria-label="Studio"
+              style={addFieldStyle}
+            />
+            <input
+              value={form.instagram}
+              onChange={(e) => setForm((f) => ({ ...f, instagram: e.target.value }))}
+              placeholder="Instagram (@handle, optional)"
+              aria-label="Instagram handle"
+              style={addFieldStyle}
+            />
+          </div>
+          <textarea
+            value={form.brandVoice}
+            onChange={(e) => setForm((f) => ({ ...f, brandVoice: e.target.value }))}
+            rows={2}
+            placeholder="Brand voice notes (optional) — e.g. warm, direct, never discount-led. Stored as artist memory; the drafting team reads it."
+            aria-label="Brand voice notes"
+            style={{ ...addFieldStyle, resize: 'vertical' }}
+          />
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button
+              type="button"
+              onClick={submitCreate}
+              disabled={createBusy || !form.name.trim()}
+              data-testid="add-artist-submit"
+              style={{
+                font: 'inherit',
+                fontSize: 12.5,
+                fontWeight: 600,
+                padding: '8px 16px',
+                border: 'none',
+                borderRadius: 'var(--radius-button)',
+                background: TEAL,
+                color: '#fff',
+                cursor: createBusy || !form.name.trim() ? 'not-allowed' : 'pointer',
+                opacity: createBusy || !form.name.trim() ? 0.55 : 1,
+              }}
+            >
+              {createBusy ? 'Creating…' : 'Create artist'}
+            </button>
+            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              Opens the profile next — upload artwork there (multi-select supported).
+            </span>
+          </div>
+          {createError && (
+            <div role="alert" style={{ fontSize: 12.5, color: 'var(--danger-text)' }}>
+              {createError}
+            </div>
+          )}
+        </section>
+      )}
 
       {roster.loading && roster.data === undefined ? (
         <Skeleton rows={4} label="Loading artists…" />
@@ -477,28 +614,76 @@ function UploadArtworkBlock({
   const [error, setError] = useState<string | null>(null);
   const [importNote, setImportNote] = useState<string | null>(null);
 
+  const [queue, setQueue] = useState<File[]>([]);
+  const [bulk, setBulk] = useState<{ done: number; total: number; failed: string[] } | null>(null);
+
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files ?? []);
     e.target.value = '';
-    if (!file) return;
+    if (!files.length) return;
     setResult(null);
     setError(null);
-    if (!ACCEPTED_IMAGE_TYPES.includes(file.type)) {
-      setError(`Unsupported file type ${file.type || '(unknown)'} — use PNG/JPEG/WebP or MP4/MOV/WebM.`);
+    setBulk(null);
+    const bad = files.filter((f) => !ACCEPTED_IMAGE_TYPES.includes(f.type));
+    if (bad.length) {
+      setError(`Unsupported file type in selection (${bad[0].name}) — use PNG/JPEG/WebP or MP4/MOV/WebM.`);
       return;
     }
+    if (files.length > 1) {
+      // BULK: many pieces at once (the "50 pictures" flow) — queued, uploaded
+      // one-by-one so every image gets its own real VLM analysis.
+      setQueue(files);
+      setFileName(null);
+      setFileB64(null);
+      setFileType(null);
+      return;
+    }
+    setQueue([]);
     try {
-      const b64 = await readFileBase64(file);
-      setFileName(file.name);
+      const b64 = await readFileBase64(files[0]);
+      setFileName(files[0].name);
       setFileB64(b64);
-      setFileType(file.type);
+      setFileType(files[0].type);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'file read failed');
     }
   };
 
   const upload = async () => {
-    if (!fileB64 || !fileName || busy) return;
+    if (busy) return;
+    // BULK path: sequential uploads with live progress; failures collected, not
+    // silently dropped — the operator sees exactly which files need a retry.
+    if (queue.length > 0) {
+      setBusy(true);
+      setError(null);
+      setResult(null);
+      const failed: string[] = [];
+      const total = queue.length;
+      setBulk({ done: 0, total, failed });
+      for (let i = 0; i < total; i += 1) {
+        const file = queue[i];
+        try {
+          const b64 = await readFileBase64(file);
+          const res = await uploadArtworkImage({
+            name: file.name,
+            contentBase64: b64,
+            mediaType: file.type || undefined,
+            artist: artistSlug,
+            prompt: prompt.trim() || undefined,
+          });
+          if (!res.ok) failed.push(`${file.name}: ${res.error ?? 'upload failed'}`);
+        } catch (err) {
+          failed.push(`${file.name}: ${err instanceof Error ? err.message : 'failed'}`);
+        }
+        setBulk({ done: i + 1, total, failed: [...failed] });
+      }
+      setQueue([]);
+      setPrompt('');
+      setBusy(false);
+      onUploaded();
+      return;
+    }
+    if (!fileB64 || !fileName) return;
     setBusy(true);
     setError(null);
     setResult(null);
@@ -553,6 +738,7 @@ function UploadArtworkBlock({
           <input
             ref={fileRef}
             type="file"
+            multiple
             accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime,video/webm"
             onChange={onFile}
             style={{ display: 'none' }}
@@ -574,12 +760,16 @@ function UploadArtworkBlock({
               cursor: busy ? 'wait' : 'pointer',
             }}
           >
-            {fileName ? `Picked: ${fileName}` : 'Pick image or video'}
+            {queue.length > 1
+              ? `Picked: ${queue.length} files`
+              : fileName
+                ? `Picked: ${fileName}`
+                : 'Pick images or videos (multi-select)'}
           </button>
           <button
             type="button"
             onClick={upload}
-            disabled={busy || !fileB64}
+            disabled={busy || (!fileB64 && queue.length === 0)}
             style={{
               font: 'inherit',
               fontSize: 12.5,
@@ -589,11 +779,17 @@ function UploadArtworkBlock({
               borderRadius: 'var(--radius-button)',
               background: TEAL,
               color: '#fff',
-              cursor: busy || !fileB64 ? 'not-allowed' : 'pointer',
-              opacity: busy || !fileB64 ? 0.55 : 1,
+              cursor: busy || (!fileB64 && queue.length === 0) ? 'not-allowed' : 'pointer',
+              opacity: busy || (!fileB64 && queue.length === 0) ? 0.55 : 1,
             }}
           >
-            {busy ? 'Uploading…' : 'Upload artwork'}
+            {busy && bulk
+              ? `Uploading ${bulk.done}/${bulk.total}…`
+              : busy
+                ? 'Uploading…'
+                : queue.length > 1
+                  ? `Upload ${queue.length} artworks`
+                  : 'Upload artwork'}
           </button>
           <span style={{ flex: 1 }} />
           {/* Honest import stubs — NOT connected; no fake integration. */}
@@ -642,6 +838,23 @@ function UploadArtworkBlock({
         {ackLine && (
           <div role="status" style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--success-text, #157F4B)' }}>
             {ackLine}
+          </div>
+        )}
+        {bulk && (
+          <div role="status" style={{ fontSize: 12.5, lineHeight: 1.6 }}>
+            <span style={{ color: 'var(--success-text, #157F4B)' }}>
+              {busy
+                ? `Uploading + tagging ${bulk.done}/${bulk.total}…`
+                : `${bulk.total - bulk.failed.length}/${bulk.total} uploaded and visually analyzed.`}
+            </span>
+            {!busy && bulk.failed.length > 0 && (
+              <div role="alert" style={{ color: 'var(--danger-text)', marginTop: 4 }}>
+                {bulk.failed.length} failed — pick just these and retry:
+                {bulk.failed.slice(0, 5).map((f) => (
+                  <div key={f} style={{ fontSize: 12 }}>{f}</div>
+                ))}
+              </div>
+            )}
           </div>
         )}
         {error && (

@@ -115,6 +115,93 @@ def studio_artists() -> dict:
     return {"artists": list_artists(_tenant())}
 
 
+@router.post("/studio/artists")
+async def studio_artist_create(request: Request):  # noqa: ANN202
+    """Create (or idempotently match) a roster artist. Body::
+
+        {"name": "Kaps", "studio": "Skin Design Tattoos", "instagram": "@kaps",
+         "email": "", "phone": "", "persona": "black & grey realism specialist",
+         "brandVoice": "warm, direct, no discounts"}
+
+    Only ``name`` is required. Re-POSTing the same name matches the existing row
+    (never a duplicate). ``brandVoice``/``persona`` notes are stored verbatim —
+    the persona lands on the artists row, the brand-voice note becomes a real
+    artist memory the drafting brief loads. Nothing is fabricated or sent."""
+    import uuid as _uuid
+
+    import psycopg
+    from psycopg.rows import dict_row
+    from psycopg.types.json import Json
+
+    from studio.artist_memory import write_artist_memory
+    from studio.artists_directory import _dsn, artist_slug
+
+    try:
+        payload = json.loads(await request.body() or b"{}")
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    name = (payload.get("name") or "").strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "artist name is required"},
+                            status_code=400)
+    studio_name = (payload.get("studio") or "").strip()
+    instagram = (payload.get("instagram") or "").strip().lstrip("@")
+    email = (payload.get("email") or "").strip() or None
+    phone = (payload.get("phone") or "").strip() or None
+    persona = (payload.get("persona") or "").strip() or None
+    brand_voice = (payload.get("brandVoice") or payload.get("brand_voice") or "").strip()
+    tenant_id = _tenant()
+    slug = artist_slug(name)
+
+    with psycopg.connect(_dsn(None), autocommit=True, row_factory=dict_row) as conn:
+        existing = conn.execute(
+            "SELECT id, name FROM artists WHERE tenant_id = %s AND lower(name) = lower(%s) LIMIT 1",
+            (tenant_id, name),
+        ).fetchone()
+        if existing is not None:
+            artist_id, created = existing["id"], False
+            if persona:  # backfill only — never clobber an existing persona
+                conn.execute(
+                    "UPDATE artists SET artist_persona = COALESCE(artist_persona, %s) WHERE id = %s",
+                    (persona, artist_id),
+                )
+        else:
+            artist_id, created = f"artist_{slug}_{_uuid.uuid4().hex[:6]}", True
+            conn.execute(
+                "INSERT INTO artists (id, tenant_id, name, email, phone, is_test, "
+                "artist_persona, artist_style_tags) VALUES (%s,%s,%s,%s,%s,FALSE,%s,%s)",
+                (artist_id, tenant_id, name, email, phone, persona,
+                 Json([s.strip() for s in (payload.get("styleTags") or [])
+                       if str(s or "").strip()])),
+            )
+        if studio_name:
+            conn.execute(
+                "INSERT INTO artist_studios (artist_id, studio_name) VALUES (%s, %s) "
+                "ON CONFLICT DO NOTHING",
+                (artist_id, studio_name),
+            )
+
+    memory_id = None
+    notes = []
+    if instagram:
+        notes.append(f"Instagram: @{instagram}")
+    if brand_voice:
+        notes.append(f"Brand voice: {brand_voice}")
+    if notes:
+        try:
+            memory_id = write_artist_memory(
+                tenant_id, slug, " | ".join(notes),
+                metadata={"kind": "brand_voice" if brand_voice else "profile",
+                          "instagram": instagram or None},
+            )
+        except Exception:
+            pass  # profile note is best-effort; the roster row already exists
+    return JSONResponse({"ok": True, "artistId": artist_id, "slug": slug,
+                         "created": created, "memoryId": memory_id})
+
+
 @router.get("/studio/artists/{slug}")
 def studio_artist_detail(slug: str) -> dict:
     """One artist's full real record — 404 for a slug that matches nobody."""
