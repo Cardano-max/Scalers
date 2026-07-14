@@ -311,6 +311,50 @@ def _child_snapshot(
     return entry
 
 
+def _lead_insights(
+    tenant_id: str, run_id: str, dsn: str | None
+) -> list[dict[str, Any]]:
+    """Per-lead identity + location facts for the voice host, from the run's
+    RECORDED researcher cells (never re-researched, never invented): who the
+    Identity Guardian verified/set aside, and the lead's grounded location.
+    Empty list when the run recorded no per-lead research."""
+    from studio.agui import _agent_runs_for
+    from studio.customer_research import lookup_lead
+    from studio.location import resolve_customer_location
+
+    out: list[dict[str, Any]] = []
+    for ar in _agent_runs_for(run_id, dsn):
+        if str(ar.get("role") or "") != "researcher":
+            continue
+        row = ar.get("output") or {}
+        cust_id = row.get("customer_id")
+        if not cust_id or any(e.get("customerId") == cust_id for e in out):
+            continue
+        entry: dict[str, Any] = {"lead": row.get("lead"), "customerId": cust_id}
+        idc = (row.get("public_enrichment") or {}).get("identity") or {}
+        if idc:
+            entry["identity"] = (
+                f"{idc.get('confirmed', 0)} confirmed, {idc.get('likely', 0)} likely, "
+                f"{idc.get('uncertain', 0)} uncertain (shown, never used), "
+                f"{idc.get('rejected', 0)} rejected"
+            )
+        else:
+            entry["identity"] = "no public candidates found — first-party data only"
+        try:
+            facts = lookup_lead(tenant_id, customer_id=cust_id, dsn=dsn) or {}
+            loc = resolve_customer_location(facts)
+            entry["location"] = (
+                f"{loc['display']} (source: {loc['source']})" if loc.get("display")
+                else "unknown — not invented"
+            )
+        except Exception:
+            entry["location"] = "unknown — not invented"
+        out.append(entry)
+        if len(out) >= 15:
+            break
+    return out
+
+
 def voice_run_status_snapshot(
     tenant_id: str, session_id: str, *, dsn: str | None = None
 ) -> dict[str, Any]:
@@ -389,6 +433,12 @@ def voice_run_status_snapshot(
             out["activity"] = agent_activity(tenant_id, dsn=dsn)
         except Exception as exc:
             out["activity"] = {"error": f"{type(exc).__name__}: {exc}"}
+        try:
+            insights = _lead_insights(tenant_id, run_id, dsn)
+            if insights:
+                out["leadInsights"] = insights
+        except Exception:
+            pass
     else:
         out["runId"] = None
         out["drafts"] = None
@@ -412,8 +462,11 @@ def voice_run_status_snapshot(
         out["queue"] = f"unreadable: {type(exc).__name__}: {exc}"
     out["rule"] = (
         "These are the ONLY run facts, lead names, draft counts and statuses you "
-        "may state. Draft #1 is the first entry in drafts. If a name or number is "
-        "not here, you do not know it — say so instead of guessing."
+        "may state. Draft #1 is the first entry in drafts. leadInsights (when "
+        "present) is the ONLY source for identity-verification and location "
+        "answers — e.g. 'was the profile verified?' / 'which location was found?'. "
+        "If a name or number is not here, you do not know it — say so instead of "
+        "guessing."
     )
     return out
 
