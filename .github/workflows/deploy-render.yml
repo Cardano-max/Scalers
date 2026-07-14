@@ -48,6 +48,8 @@ jobs:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
           SCALERS_ENV: ${{ secrets.SCALERS_ENV }}
           DEPLOY_BRANCH: ${{ inputs.branch != '' && inputs.branch || github.ref_name }}
-          RENDER_PLAN_WEB: ${{ vars.RENDER_PLAN_WEB || 'starter' }}
-          RENDER_PLAN_DB: ${{ vars.RENDER_PLAN_DB || 'basic_256mb' }}
+          # Free-tier defaults (the operator's account has no card). Upgrade path:
+          # set repo Actions variables RENDER_PLAN_WEB/RENDER_PLAN_DB and re-run.
+          RENDER_PLAN_WEB: ${{ vars.RENDER_PLAN_WEB || 'free' }}
+          RENDER_PLAN_DB: ${{ vars.RENDER_PLAN_DB || 'free' }}
         run: python3 scripts/render_deploy.py

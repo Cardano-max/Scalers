@@ -184,18 +184,25 @@ def main() -> int:
     engine = find_by_name("/services?type=web_service", "scalers-engine", "service")
     if engine is None:
         print("creating scalers-engine …")
+        details: dict = {
+            "env": "docker", "plan": plan_web, "region": region,
+            "healthCheckPath": "/healthz",
+            "envSpecificDetails": {"dockerfilePath": "./Dockerfile.engine",
+                                   "dockerContext": "."},
+        }
+        # Persistent disks are a paid-plan feature; on the free plan uploads under
+        # var/artifacts survive requests but not redeploys (honest limitation).
+        if plan_web != "free":
+            details["disk"] = {"name": "artifacts", "mountPath": "/app/engine/var",
+                               "sizeGB": 5}
+        else:
+            print("free plan: skipping persistent disk (artwork uploads won't "
+                  "survive a redeploy until the service is upgraded)")
         created = _req("POST", "/services", {
             "type": "web_service", "name": "scalers-engine", "ownerId": owner_id,
             "repo": REPO_URL, "branch": branch, "autoDeploy": "yes", "rootDir": "",
             "envVars": engine_env,
-            "serviceDetails": {
-                "env": "docker", "plan": plan_web, "region": region,
-                "healthCheckPath": "/healthz",
-                "envSpecificDetails": {"dockerfilePath": "./Dockerfile.engine",
-                                       "dockerContext": "."},
-                "disk": {"name": "artifacts", "mountPath": "/app/engine/var",
-                         "sizeGB": 5},
-            },
+            "serviceDetails": details,
         })
         engine = created.get("service") or created
     else:
