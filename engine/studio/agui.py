@@ -2839,6 +2839,15 @@ def _execute_provided_leads_sync(
                     # as THIS customer vs surfaced-unverified vs rejected strangers.
                     "identity": _enr.get("identity_counts"),
                     "unverified": len(_enr.get("unverified") or []),
+                    # The uncertain candidates THEMSELVES (url + why they were not
+                    # used) so the operator can see exactly what was set aside —
+                    # shown, never personalized on.
+                    "unverified_detail": [
+                        {"url": u.get("url"),
+                         "reason": ((u.get("identity") or {}).get("concerns")
+                                    or ["unverified"])[-1]}
+                        for u in (_enr.get("unverified") or [])[:3]
+                    ],
                     "suppressed": int(_enr.get("suppressed") or 0),
                     "misses": len(_enr.get("misses") or []),
                     "memory_id": _enr.get("memory_id"),

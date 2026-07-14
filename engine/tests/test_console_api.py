@@ -269,8 +269,13 @@ def test_action_contributions_assembles_per_agent_trail():
          {"customer_id": cust_id, "cited": 2,
           "sources": [{"url": "https://example.org/a"}, {"url": "https://example.org/b"}],
           "db_history": {"past_tattoos": 1, "lifecycle": "returning"},
-          "public_enrichment": {"found": 2, "identity":
-                                {"confirmed": 1, "likely": 1, "uncertain": 3, "rejected": 2}}}),
+          "public_enrichment": {"found": 2,
+                                "identity": {"confirmed": 1, "likely": 1,
+                                             "uncertain": 3, "rejected": 2},
+                                "unverified_detail": [
+                                    {"url": "https://about.me/riolead",
+                                     "reason": "name-only match — could be any "
+                                               "person with this name"}]}}),
         ("analyst", "anthropic:test", {"customer_id": cust_id},
          {"customer_id": cust_id, "primary_objection": "price", "objection_signal": "stated",
           "readiness_stage": "consideration", "grounded_fields": 8,
@@ -316,6 +321,10 @@ def test_action_contributions_assembles_per_agent_trail():
             "past_tattoos": 1, "lifecycle": "returning"}
         assert "1 confirmed" in by_agent["Identity Guardian"]["output"]
         assert "3 uncertain" in by_agent["Identity Guardian"]["output"]
+        # the set-aside candidate is SHOWN with its reason — never personalized on
+        assert by_agent["Identity Guardian"]["evidence"] == [
+            "set aside: https://about.me/riolead — name-only match — could be any "
+            "person with this name"]
         # no city/location on file -> honest-missing, never invented
         assert by_agent["Location Resolver"]["status"] == "missing"
         assert "not invented" in by_agent["Location Resolver"]["output"]

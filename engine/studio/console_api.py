@@ -384,6 +384,10 @@ def action_contributions(action_id: str) -> dict:
             "status": "degraded" if out.get("degraded") else "done",
         })
         if enr:
+            unv = [
+                f"set aside: {u.get('url')} — {u.get('reason')}"
+                for u in (enr.get("unverified_detail") or []) if u.get("url")
+            ]
             entries.append({
                 "agent": "Identity Guardian",
                 "model": "deterministic:identity-evidence",
@@ -395,6 +399,7 @@ def action_contributions(action_id: str) -> dict:
                             f"{idc.get('rejected', 0)} rejected") if idc else
                            "no public candidates found — nothing to vet; the draft "
                            "stayed on first-party data"),
+                **({"evidence": unv} if unv else {}),
                 "nextUse": "Only confirmed/likely facts reached the dossier the "
                            "copywriter saw.",
                 "status": "done" if idc else "idle",
