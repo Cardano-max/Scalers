@@ -331,8 +331,11 @@ def _lead_insights(
         if not cust_id or any(e.get("customerId") == cust_id for e in out):
             continue
         entry: dict[str, Any] = {"lead": row.get("lead"), "customerId": cust_id}
-        idc = (row.get("public_enrichment") or {}).get("identity") or {}
-        if idc:
+        # Merge BOTH guardian gates (dossier enrichment + raw name-search hits).
+        idc = dict((row.get("public_enrichment") or {}).get("identity") or {})
+        for k, v in ((row.get("sources_identity") or {}).get("counts") or {}).items():
+            idc[k] = int(idc.get(k) or 0) + int(v or 0)
+        if any(idc.values()):
             entry["identity"] = (
                 f"{idc.get('confirmed', 0)} confirmed, {idc.get('likely', 0)} likely, "
                 f"{idc.get('uncertain', 0)} uncertain (shown, never used), "

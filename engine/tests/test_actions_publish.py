@@ -26,6 +26,14 @@ def _legacy_passthrough_env(monkeypatch):
     # the legacy 'ladies8391' tenant, which production lists in
     # TEST_MODE_LEGACY_PASSTHROUGH — declare the same here.
     monkeypatch.setenv("TEST_MODE_LEGACY_PASSTHROUGH", "ladies8391,test_safe_send")
+    # HERMETIC registry read: these are send-path unit tests (store patched,
+    # connectors faked). A developer DB that happens to hold a fail-closed
+    # 'ladies8391' registry row (deploy_migrate seeds one) must not flip this
+    # file — the gate still runs its REAL logic, but against the no-row branch
+    # the passthrough above targets. The row rules have their own suites.
+    import tenants.store as _ts
+
+    monkeypatch.setattr(_ts, "get_tenant", lambda tenant_id, dsn=None: None)
 
 
 class _FakeStore:

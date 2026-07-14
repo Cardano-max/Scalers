@@ -152,3 +152,25 @@ def test_enrich_lead_writes_only_identity_verified_facts(monkeypatch):
     assert len(out["unverified"]) == 1
     assert written["facts"] == out["found"]
     assert out["identity_counts"]["uncertain"] == 1
+
+
+# ── the copywriter's research feed is guardian-gated (stranger-leak fix) ──────
+
+
+def test_identity_verified_research_drops_stranger_hits(monkeypatch):
+    """A real prod run surfaced an actress's Wikipedia page for a common-name
+    lead; identity_verified_research must pass only hits the guardian vouches
+    for, so a stranger never reaches the angle chooser or the email prompt."""
+    import studio.customer_research as cr
+
+    hits = [
+        {"url": "https://instagram.com/maya.ink", "snippet": "@maya.ink flash",
+         "title": "IG", "source_type": "social", "customer_id": "cust_m"},
+        {"url": "https://en.wikipedia.org/wiki/Maya_Torres",
+         "snippet": "Maya Torres is an actress", "title": "Wikipedia",
+         "source_type": "website", "customer_id": "cust_m"},
+    ]
+    monkeypatch.setattr(cr, "research_studio", lambda facts, *, enabled: hits)
+    out = cr.identity_verified_research(MAYA | {"customer_id": "cust_m"}, enabled=True)
+    assert [h["url"] for h in out] == ["https://instagram.com/maya.ink"]
+    assert out[0]["identity"]["verdict"] == "confirmed"

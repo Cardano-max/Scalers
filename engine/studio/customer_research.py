@@ -606,6 +606,19 @@ def _research_query(facts: dict[str, Any]) -> str:
     return " ".join(x for x in [f'"{name}"', city, interest, "tattoo"] if x)
 
 
+def identity_verified_research(
+    facts: dict[str, Any], *, enabled: bool
+) -> list[dict[str, Any]]:
+    """``research_studio`` hits the Identity Guardian will vouch for — the ONLY
+    form of public hit the copywriter may read. The raw hits come from a NAME
+    search, so for a common-name lead they can be strangers (a real run surfaced
+    an actress's Wikipedia page); only confirmed/likely hits pass, each annotated
+    with its ``identity`` verdict. A stranger never molds a draft."""
+    from studio.identity_guardian import partition_verified
+
+    return partition_verified(facts, research_studio(facts, enabled=enabled))["verified"]
+
+
 def research_studio(facts: dict[str, Any], *, enabled: bool) -> list[dict[str, Any]]:
     """Verified web research for the RECIPIENT studio via the wired Firecrawl provider
     (``research.pipeline.live_registry`` — enabled only when a key is present). Returns
@@ -1830,7 +1843,7 @@ def build_outreach_draft(
     # Resolve research up front so the angle can prefer this lead's verified public
     # positioning (its strongest differentiator) when one exists.
     if research is None and ch in ("gmail", "email") and _llm_copy_enabled():
-        research = research_studio(
+        research = identity_verified_research(
             facts, enabled=_research_enabled(deep_research, research_depth)
         )
     angle = _choose_angle(facts, research, profile=profile, offer=offer)
@@ -1870,7 +1883,7 @@ def build_outreach_draft(
             brand_voice_context, approved_claims = resolve_brand_voice(tenant_id)
             # Research already resolved above for the angle; only fetch if still unset.
             if research is None:
-                research = research_studio(
+                research = identity_verified_research(
                     facts, enabled=_research_enabled(deep_research, research_depth)
                 )
             from cells.copywriter import build_copywriter_email_cell

@@ -2819,7 +2819,16 @@ def _execute_provided_leads_sync(
             if _prior_aid:
                 pending.append(_prior_aid)
             continue
-        research = research_studio(facts, enabled=deep)  # real Firecrawl about THIS studio
+        # Per-lead web hits, GATED by the Identity Guardian before anything reads
+        # them: research_studio searches by the lead's NAME, so its raw hits can be
+        # strangers (a real prod run surfaced an actress's Wikipedia page for a
+        # common-name lead). Only confirmed/likely hits may reach the copywriter
+        # or count as "cited"; the set-asides are recorded with their reason.
+        from studio.identity_guardian import partition_verified as _partition_identity
+
+        _raw_hits = research_studio(facts, enabled=deep)
+        _hits_gate = _partition_identity(facts, _raw_hits)
+        research = _hits_gate["verified"]
         # PER-LEAD PUBLIC ENRICHMENT (deep research on): the cited public-web read
         # of THIS lead (their business/professional/social presence — every stored
         # fact carries its source URL; sensitive traits are suppressed and counted;
@@ -2880,6 +2889,17 @@ def _execute_provided_leads_sync(
             {
                 "cited": len(sources),
                 "sources": sources,
+                # The guardian's read of the RAW name-search hits: how many were
+                # verified as this lead vs set aside (with the reason) vs rejected.
+                "sources_identity": {
+                    "counts": _hits_gate["counts"],
+                    "set_aside": [
+                        {"url": u.get("url"),
+                         "reason": ((u.get("identity") or {}).get("concerns")
+                                    or ["unverified"])[-1]}
+                        for u in _hits_gate["unverified"][:3]
+                    ],
+                },
                 "lead": facts.get("name"),
                 "customer_id": cust_id,
                 "public_enrichment": public_enrichment,

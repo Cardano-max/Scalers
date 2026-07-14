@@ -365,7 +365,14 @@ def action_contributions(action_id: str) -> dict:
     if res:
         out = res.get("output") or {}
         enr = out.get("public_enrichment") or {}
-        idc = enr.get("identity") or {}
+        # TWO guardian gates feed one entry: the dossier enrichment pass
+        # (public_enrichment.identity) and the raw name-search hits gate
+        # (sources_identity.counts). Sum them so the operator sees every
+        # candidate the guardian judged for this lead.
+        src_gate = out.get("sources_identity") or {}
+        idc = dict(enr.get("identity") or {})
+        for k, v in (src_gate.get("counts") or {}).items():
+            idc[k] = int(idc.get(k) or 0) + int(v or 0)
         db = out.get("db_history") or {}
         cited = int(out.get("cited") or 0)
         evidence = [s.get("url") for s in (out.get("sources") or []) if s.get("url")]
@@ -383,11 +390,13 @@ def action_contributions(action_id: str) -> dict:
                        "this grounding.",
             "status": "degraded" if out.get("degraded") else "done",
         })
-        if enr:
+        if enr or src_gate:
             unv = [
                 f"set aside: {u.get('url')} — {u.get('reason')}"
-                for u in (enr.get("unverified_detail") or []) if u.get("url")
-            ]
+                for u in [*(enr.get("unverified_detail") or []),
+                          *(src_gate.get("set_aside") or [])]
+                if u.get("url")
+            ][:5]
             entries.append({
                 "agent": "Identity Guardian",
                 "model": "deterministic:identity-evidence",
@@ -396,13 +405,14 @@ def action_contributions(action_id: str) -> dict:
                 "output": ((f"{idc.get('confirmed', 0)} confirmed · "
                             f"{idc.get('likely', 0)} likely · "
                             f"{idc.get('uncertain', 0)} uncertain (shown, not used) · "
-                            f"{idc.get('rejected', 0)} rejected") if idc else
+                            f"{idc.get('rejected', 0)} rejected")
+                           if any(idc.values()) else
                            "no public candidates found — nothing to vet; the draft "
                            "stayed on first-party data"),
                 **({"evidence": unv} if unv else {}),
                 "nextUse": "Only confirmed/likely facts reached the dossier the "
                            "copywriter saw.",
-                "status": "done" if idc else "idle",
+                "status": "done" if any(idc.values()) else "idle",
             })
 
     # Location — resolved live from the customer row (source + confidence).
@@ -484,7 +494,8 @@ def action_contributions(action_id: str) -> dict:
                        + (f" · confidence {out.get('confidence')}" if out.get("confidence") else "")),
             "rationale": out.get("rationale"),
             "nextUse": "Only an approved draft is staged for YOUR review.",
-            "status": "done",
+            # An errored critic cell must read as failed — not as a completed check.
+            "status": "failed" if out.get("verdict") == "error" else "done",
         })
 
     jury = _run_level("jury")
