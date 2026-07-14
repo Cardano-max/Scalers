@@ -244,6 +244,23 @@ class BrandStudyConfig(BaseModel):
     objectives: tuple[str, ...] = ("followers", "engagement", "sales")
     max_brands: int = Field(default=8, ge=1)
 
+    @field_validator("objectives")
+    @classmethod
+    def _objectives_known(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        """Only the three client-framed objectives exist (follower growth /
+        engagement / sales). The principle library silently DROPS unknown names, so
+        a typo like "grow_followers" in an enabled pack would render an empty study
+        block with no error — reject it at load instead (fail LOUD, same posture as
+        the min_engagement_rate bound). Case/whitespace are normalized."""
+        allowed = {"followers", "engagement", "sales"}
+        normalized = tuple(str(o).strip().lower() for o in v if str(o or "").strip())
+        unknown = [o for o in normalized if o not in allowed]
+        if unknown:
+            raise ValueError(
+                f"unknown brand_study objectives {unknown!r}; valid: {sorted(allowed)}"
+            )
+        return normalized
+
 
 class InkPulseConfig(BaseModel):
     """Ingestion source for Ink Pulse leads — the pre-CRM conversation platform.

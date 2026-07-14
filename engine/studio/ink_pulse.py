@@ -180,7 +180,14 @@ def _upsert_ink_pulse_lead(
     lead is a pre-CRM prospect who went QUIET — merely having emailed the studio once
     is NOT marketing consent, so the lead is ingested/enriched/targetable but a real
     email or SMS send still requires an explicit opt-in (the send-safety + named-cohort
-    gates enforce this downstream regardless)."""
+    gates enforce this downstream regardless).
+
+    RACE-SAFE: dedup is a pre-SELECT, so two concurrent ingests of the same lead (a
+    double-clicked upload) could both miss and both INSERT. Two defenses: (1) partial
+    UNIQUE backstops on (tenant, phone) / (tenant, lower(ig_handle)) — the same DB-
+    boundary discipline the email path already has — and (2) an INSERT that catches
+    ``UniqueViolation``, re-finds the racing writer's row, and converts to a match
+    (self-heal) instead of crashing or duplicating."""
     import uuid
 
     import psycopg
@@ -203,63 +210,128 @@ def _upsert_ink_pulse_lead(
     interests = [s.strip() for s in interests_raw.replace(",", ";").split(";") if s.strip()]
     notes = (row.get("notes") or "").strip() or None
 
+    def _backfill(conn: Any, row_id: str) -> None:
+        """Backfill NULL/empty columns on the matched row — including ``email``, so a
+        phone-matched lead that NOW carries an email becomes findable by email later
+        (else a future email-only export of the same person duplicates them). The
+        email backfill can trip customers_tenant_email_uniq when a DIFFERENT row
+        already owns that address — that is a genuine cross-person collision, so we
+        retry keeping everything EXCEPT the email (never clobber, never crash)."""
+        sql = """
+            UPDATE customers SET
+                name       = COALESCE(NULLIF(name, ''), %s),
+                email      = COALESCE(email, %s),
+                phone      = COALESCE(phone, %s),
+                ig_handle  = COALESCE(ig_handle, %s),
+                city       = COALESCE(city, %s),
+                state      = COALESCE(state, %s),
+                interests  = CASE WHEN interests IS NULL OR cardinality(interests) = 0
+                                  THEN %s ELSE interests END,
+                notes      = COALESCE(notes, %s),
+                source     = COALESCE(source, %s),
+                lead_stage = COALESCE(lead_stage, %s)
+            WHERE id = %s
+        """
+        try:
+            conn.execute(sql, (name, email, phone, ig, city, state, interests,
+                               notes, SOURCE_INK_PULSE, SOURCE_INK_PULSE, row_id))
+        except psycopg.errors.UniqueViolation:
+            conn.execute(sql, (name, None, phone, ig, city, state, interests,
+                               notes, SOURCE_INK_PULSE, SOURCE_INK_PULSE, row_id))
+
     ensure_lead_columns(dsn)
+    _ensure_contact_unique_indexes(dsn)
     with psycopg.connect(_dsn(dsn), autocommit=True, row_factory=dict_row) as conn:
-        # Match on any handle the lead actually carries (tenant-scoped) so a
-        # re-ingest of the same person — by email, phone, OR instagram — never
-        # duplicates. Absent handles contribute no clause (never a false match).
-        clauses: list[str] = []
-        params: list[Any] = [tenant_id]
-        if email:
-            clauses.append("lower(email) = lower(%s)")
-            params.append(email)
-        if phone:
-            clauses.append("phone = %s")
-            params.append(phone)
-        if ig:
-            clauses.append("lower(ig_handle) = %s")  # ig already lowercased above
-            params.append(ig)
-        existing = None
-        if clauses:
-            existing = conn.execute(
-                f"SELECT id FROM customers WHERE tenant_id = %s AND ({' OR '.join(clauses)}) LIMIT 1",
-                tuple(params),
-            ).fetchone()
+        existing = _find_existing(conn, tenant_id, email=email, phone=phone, ig=ig)
         if existing is not None:
-            conn.execute(
-                """
-                UPDATE customers SET
-                    name       = COALESCE(NULLIF(name, ''), %s),
-                    phone      = COALESCE(phone, %s),
-                    ig_handle  = COALESCE(ig_handle, %s),
-                    city       = COALESCE(city, %s),
-                    state      = COALESCE(state, %s),
-                    interests  = CASE WHEN interests IS NULL OR cardinality(interests) = 0
-                                      THEN %s ELSE interests END,
-                    notes      = COALESCE(notes, %s),
-                    source     = COALESCE(source, %s),
-                    lead_stage = COALESCE(lead_stage, %s)
-                WHERE id = %s
-                """,
-                (name, phone, ig, city, state, interests, notes,
-                 SOURCE_INK_PULSE, SOURCE_INK_PULSE, existing["id"]),
-            )
+            _backfill(conn, existing["id"])
             return {"customer_id": existing["id"], "created": False}
 
         cust_id = "cust_" + uuid.uuid4().hex[:16]
-        conn.execute(
-            """
-            INSERT INTO customers
-                (id, tenant_id, name, email, phone, ig_handle, city, state,
-                 interests, preferred_channels, email_opt_in, sms_opt_in,
-                 source, notes, lead_stage)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            """,
-            (cust_id, tenant_id, name, email, phone, ig, city, state,
-             interests, [], False, False,  # opt-ins default OFF — quiet lead, no consent
-             SOURCE_INK_PULSE, notes, SOURCE_INK_PULSE),
-        )
+        try:
+            conn.execute(
+                """
+                INSERT INTO customers
+                    (id, tenant_id, name, email, phone, ig_handle, city, state,
+                     interests, preferred_channels, email_opt_in, sms_opt_in,
+                     source, notes, lead_stage)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """,
+                (cust_id, tenant_id, name, email, phone, ig, city, state,
+                 interests, [], False, False,  # opt-ins default OFF — quiet lead, no consent
+                 SOURCE_INK_PULSE, notes, SOURCE_INK_PULSE),
+            )
+        except psycopg.errors.UniqueViolation:
+            # A concurrent ingest won the INSERT race — adopt its row (self-heal).
+            racer = _find_existing(conn, tenant_id, email=email, phone=phone, ig=ig)
+            if racer is None:
+                raise  # violation not explainable by our handles — surface it
+            _backfill(conn, racer["id"])
+            return {"customer_id": racer["id"], "created": False}
         return {"customer_id": cust_id, "created": True}
+
+
+def _find_existing(
+    conn: Any, tenant_id: str, *, email: str | None, phone: str | None, ig: str | None
+) -> dict[str, Any] | None:
+    """The tenant's existing row matching ANY provided contact handle, else None.
+    Absent handles contribute no clause (never a false match)."""
+    clauses: list[str] = []
+    params: list[Any] = [tenant_id]
+    if email:
+        clauses.append("lower(email) = lower(%s)")
+        params.append(email)
+    if phone:
+        clauses.append("phone = %s")
+        params.append(phone)
+    if ig:
+        clauses.append("lower(ig_handle) = %s")  # callers pass ig pre-lowercased
+        params.append(ig)
+    if not clauses:
+        return None
+    return conn.execute(
+        f"SELECT id FROM customers WHERE tenant_id = %s AND ({' OR '.join(clauses)}) LIMIT 1",
+        tuple(params),
+    ).fetchone()
+
+
+_contact_indexes_ensured: set[str] = set()
+
+
+def _ensure_contact_unique_indexes(dsn: str | None = None) -> None:
+    """Idempotently add the phone / instagram UNIQUE backstops to ``customers`` —
+    the DB-boundary guarantee that a pre-SELECT race can never yield two rows for
+    one person (mirrors customers_tenant_email_uniq for email). Partial + non-empty
+    predicates so legacy ''-valued rows never block creation. Best-effort and
+    memoized like :func:`studio.customer_research.ensure_lead_columns`: a legacy DB
+    with pre-existing duplicates degrades to the INSERT self-heal, never crashes."""
+    import psycopg
+
+    from studio.customer_research import _dsn
+
+    key = _dsn(dsn)
+    if key in _contact_indexes_ensured:
+        return
+    try:
+        with psycopg.connect(key, autocommit=True) as conn:
+            # Phone backstop scoped to ink_pulse-sourced rows ONLY — other import
+            # paths also write phone, and two real customers can share one number
+            # (a couple booking together); a global unique index would crash them.
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS customers_tenant_phone_inkpulse_uniq "
+                "ON customers (tenant_id, phone) "
+                "WHERE phone IS NOT NULL AND phone <> '' AND source = 'ink_pulse'"
+            )
+            # IG backstop is global: only ink_pulse writes ig_handle, and an
+            # Instagram handle identifies exactly one account.
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS customers_tenant_ig_uniq "
+                "ON customers (tenant_id, lower(ig_handle)) "
+                "WHERE ig_handle IS NOT NULL AND ig_handle <> ''"
+            )
+        _contact_indexes_ensured.add(key)
+    except Exception:
+        pass  # no table yet / legacy dupes — the self-heal still prevents new dupes
 
 
 def ingest_ink_pulse(
@@ -268,27 +340,41 @@ def ingest_ink_pulse(
     """Parse + idempotently UPSERT an Ink Pulse export into ``customers``. Returns
     honest counts:
 
-        {"ok", "rows", "ingested", "created", "matched", "customer_ids"}
+        {"ok", "rows", "ingested", "created", "matched", "customer_ids", "errors"}
 
     Idempotent on any contact handle (email / phone / instagram), so re-ingesting
     the same export creates nothing new. An export with no reachable rows returns
-    zero counts (nothing invented)."""
+    zero counts (nothing invented).
+
+    PARTIAL-FAILURE HONESTY: each row commits independently (autocommit), so a
+    failure on row k must NOT be reported as "nothing was stored" — rows 1..k-1 are
+    already durably in. A failing row is recorded in ``errors`` (row index + name +
+    real error) and the batch continues; ``ok`` is True only when every row landed.
+    The operator therefore sees exactly what was stored, and a retry of the same
+    export is safe (the survivors just match — never duplicate)."""
     rows = parse_ink_pulse_export(content)
     if not rows:
         return {"ok": True, "rows": 0, "ingested": 0, "created": 0,
-                "matched": 0, "customer_ids": []}
+                "matched": 0, "customer_ids": [], "errors": []}
     created = matched = 0
     ids: list[str] = []
-    for row in rows:
-        res = _upsert_ink_pulse_lead(tenant_id, row, dsn=dsn)
+    errors: list[dict[str, Any]] = []
+    for idx, row in enumerate(rows):
+        try:
+            res = _upsert_ink_pulse_lead(tenant_id, row, dsn=dsn)
+        except Exception as exc:  # noqa: BLE001 — one bad row never voids the batch
+            errors.append({"row": idx, "name": row.get("name", ""),
+                           "error": f"{type(exc).__name__}: {exc}"})
+            continue
         ids.append(res["customer_id"])
         if res["created"]:
             created += 1
         else:
             matched += 1
     return {
-        "ok": True, "rows": len(rows), "ingested": len(ids),
+        "ok": not errors, "rows": len(rows), "ingested": len(ids),
         "created": created, "matched": matched, "customer_ids": ids,
+        "errors": errors,
     }
 
 

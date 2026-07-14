@@ -214,3 +214,106 @@ def test_reingest_is_idempotent_across_handle_case_and_email_less_leads():
     )
     assert second["created"] == 0 and second["matched"] == 1
     assert second["customer_ids"] == first["customer_ids"]  # matched the same row
+
+
+@pytest.mark.integration
+@_pg
+def test_matched_lead_backfills_email_so_cross_handle_reingest_never_duplicates():
+    # Phone-only first; then the same person exports WITH an email (phone matches);
+    # then an EMAIL-only export of the same person. All three must land on ONE row —
+    # which requires the phone-matched pass to backfill the email column.
+    tenant = "t_inkpulse_" + uuid.uuid4().hex[:8]
+    r1 = ingest_ink_pulse(tenant, "name,phone,conversation\nLee,555-0100,quote sent\n")
+    assert r1["created"] == 1
+    r2 = ingest_ink_pulse(
+        tenant, "name,phone,email,conversation\nLee,555-0100,lee@x.com,came back\n"
+    )
+    assert r2["created"] == 0 and r2["customer_ids"] == r1["customer_ids"]
+    r3 = ingest_ink_pulse(tenant, "name,email,conversation\nLee,LEE@x.com,final ask\n")
+    assert r3["created"] == 0 and r3["customer_ids"] == r1["customer_ids"]
+    row = _fetch(tenant, r1["customer_ids"][0])
+    assert row["email"] == "lee@x.com" and row["phone"] == "555-0100"
+
+
+@pytest.mark.integration
+@_pg
+def test_insert_race_self_heals_to_a_match(monkeypatch):
+    # Simulate the double-click race: the pre-SELECT misses the concurrent writer's
+    # row (first _find_existing returns None), the INSERT then trips the IG unique
+    # backstop, and the upsert must ADOPT the existing row instead of crashing.
+    import studio.ink_pulse as ip
+
+    tenant = "t_inkpulse_" + uuid.uuid4().hex[:8]
+    first = ingest_ink_pulse(tenant, "name,instagram,conversation\nRae,@rae.ink,hi\n")
+    assert first["created"] == 1
+    real_find = ip._find_existing
+    calls = {"n": 0}
+
+    def racy_find(conn, tenant_id, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None  # the race: SELECT ran before the other writer committed
+        return real_find(conn, tenant_id, **kw)
+
+    monkeypatch.setattr(ip, "_find_existing", racy_find)
+    res = ip._upsert_ink_pulse_lead(
+        tenant, {"name": "Rae", "ig_handle": "rae.ink", "notes": ""}
+    )
+    assert res["created"] is False
+    assert res["customer_id"] == first["customer_ids"][0]  # adopted, not duplicated
+
+
+@pytest.mark.integration
+@_pg
+def test_phone_unique_backstop_scoped_to_ink_pulse_rows_only():
+    # The DB-boundary backstop: a second ink_pulse row with the same tenant+phone is
+    # REJECTED by the index — but a studio_upload row sharing that phone is fine
+    # (couples share numbers; other import paths must not be constrained).
+    import psycopg
+
+    tenant = "t_inkpulse_" + uuid.uuid4().hex[:8]
+    ingest_ink_pulse(tenant, "name,phone,conversation\nSam,555-0199,hello\n")
+    with psycopg.connect(_dsn(), autocommit=True) as conn:
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            conn.execute(
+                "INSERT INTO customers (id, tenant_id, phone, source) "
+                "VALUES ('cust_dupe_ip', %s, '555-0199', 'ink_pulse')",
+                (tenant,),
+            )
+        # Same phone under a different source: allowed (index is scoped).
+        conn.execute(
+            "INSERT INTO customers (id, tenant_id, phone, source) "
+            "VALUES ('cust_dupe_su_' || substr(md5(random()::text),1,8), %s, "
+            "'555-0199', 'studio_upload')",
+            (tenant,),
+        )
+
+
+def test_partial_failure_reports_survivors_honestly(monkeypatch):
+    # Row 2 of 3 fails mid-batch: the committed prefix must be REPORTED (ok=False,
+    # counts for what landed, the real error per failed row) — never "nothing stored".
+    import studio.ink_pulse as ip
+
+    results = iter([
+        {"customer_id": "cust_ok1", "created": True},
+        RuntimeError("connection dropped"),
+        {"customer_id": "cust_ok3", "created": False},
+    ])
+
+    def fake_upsert(tenant_id, row, *, dsn=None):
+        r = next(results)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    monkeypatch.setattr(ip, "_upsert_ink_pulse_lead", fake_upsert)
+    out = ip.ingest_ink_pulse(
+        "t_x",
+        "name,email,conversation\nA,a@x.com,hi\nB,b@x.com,hi\nC,c@x.com,hi\n",
+    )
+    assert out["ok"] is False
+    assert out["ingested"] == 2 and out["created"] == 1 and out["matched"] == 1
+    assert out["customer_ids"] == ["cust_ok1", "cust_ok3"]
+    assert len(out["errors"]) == 1
+    err = out["errors"][0]
+    assert err["row"] == 1 and err["name"] == "B" and "connection dropped" in err["error"]

@@ -120,6 +120,19 @@ def test_new_configs_default_cleanly_on_a_bare_pack():
     assert pack.meta_pixel is None
 
 
+def test_brand_study_rejects_unknown_objectives_loud():
+    # The principle library silently drops unknown objective names, so a typo like
+    # "grow_followers" in an ENABLED pack would render an empty study block with no
+    # error. Reject at load instead (same fail-loud posture as the engagement bound).
+    from config import BrandStudyConfig
+
+    with pytest.raises(ValidationError):
+        BrandStudyConfig(enabled=True, objectives=["grow_followers"])
+    # Valid names pass, and case/whitespace are normalized.
+    cfg = BrandStudyConfig(enabled=True, objectives=[" Followers ", "SALES"])
+    assert cfg.objectives == ("followers", "sales")
+
+
 def test_competitor_discovery_rejects_negative_floors():
     with pytest.raises(ValidationError):
         CompetitorDiscoveryConfig(min_followers=-1)
