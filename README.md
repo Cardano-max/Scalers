@@ -1,5 +1,14 @@
 # Scalers
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Cardano-max/Scalers)
+
+**Deploy everything in one click** — the button above reads [`render.yaml`](render.yaml)
+and provisions the full stack: pgvector Postgres + the Python engine (Docker,
+auto-migrating, persistent artwork disk) + the operator console. It prompts for the
+secrets (never committed). Full runbook, the Vercel-console variant, and the
+local-Docker/Cloudflare-tunnel path: [`docs/deploy.md`](docs/deploy.md).
+*(The button reads the default branch — merge the release PR first.)*
+
 Internal, single-client, engine-first **agentic social-media marketing system**.
 Three engines on one deterministic harness + a shared deep-research engine:
 
