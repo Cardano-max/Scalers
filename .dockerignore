@@ -1,0 +1,16 @@
+# Keep the engine image lean + secret-free. Build context is the repo root
+# (Dockerfile.engine copies engine/ + infra/initdb/).
+.git
+.env
+.env.*
+!.env.example
+engine/.venv
+engine/var
+engine/**/__pycache__
+engine/.pytest_cache
+web/node_modules
+web/.next
+docs
+infra/grafana
+infra/prometheus
+*.log

@@ -1,0 +1,33 @@
+# Scalers Growth Engine — production container (Render / Railway / Fly / any
+# Docker host). Build from the REPO ROOT so infra/initdb rides along:
+#
+#     docker build -f Dockerfile.engine -t scalers-engine .
+#
+# Boot: apply the idempotent schema chain + store bootstraps, then serve. The
+# platform injects PORT; ENGINE_DATABASE_URL (or DATABASE_URL) points at the
+# managed Postgres (pgvector recommended, degrades honestly without it).
+
+FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim AS build
+WORKDIR /app/engine
+# Layer-cache deps: lock + manifest first, code after.
+COPY engine/pyproject.toml engine/uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project --extra postgres
+COPY engine/ ./
+RUN uv sync --frozen --no-dev --extra postgres
+
+FROM python:3.11-slim-bookworm
+WORKDIR /app/engine
+COPY --from=build /app/engine /app/engine
+COPY infra/initdb /app/infra/initdb
+ENV PATH="/app/engine/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    # Offline deterministic embedder by default — no model download at boot.
+    # Switch to fastembed once the host allows the one-time model fetch.
+    SCALERS_EMBEDDER=deterministic
+# var/artifacts holds uploaded artwork bytes — mount a persistent disk here in
+# production or uploads will not survive a redeploy (documented in docs/deploy.md).
+RUN mkdir -p /app/engine/var/artifacts
+EXPOSE 8010
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s \
+    CMD python -c "import urllib.request,os;urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\",\"8010\")}/healthz',timeout=4)" || exit 1
+CMD ["sh", "-c", "python deploy_migrate.py && exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8010}"]
