@@ -631,6 +631,20 @@ def build_ig_brief_block(
             parts.append(study_block)
     except Exception:
         pass  # grounding never breaks the run; block simply absent
+    # Operator style preferences learned from REAL Review-Queue edits (the trainable
+    # loop): rules accumulated from stored (original, edited) pairs order this draft
+    # toward the operator's own voice. No edits on file -> no block (never invented).
+    try:
+        from studio.style_memory import (
+            load_style_preferences,
+            render_style_preferences_block,
+        )
+
+        style_block = render_style_preferences_block(load_style_preferences(tenant_id))
+        if style_block:
+            parts.append(style_block)
+    except Exception:
+        pass  # learning never breaks the run; block simply absent
     parts.append(render_broll_block(broll))
     if artwork:
         parts.append(

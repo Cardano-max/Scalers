@@ -21,22 +21,20 @@ Two honest layers:
     does it repeatedly) and render the brief block that ORDERS the next draft to
     honor them.
 
-STATUS — GROUNDWORK (like Meta Pixel): the distillation + accumulation intelligence
-above is COMPLETE and unit-tested (the trainable core). Two wiring steps remain, and
-they are deliberately NOT shipped here because the trigger they need does not exist
-in the locked console yet:
+The loop is CLOSED end-to-end:
 
-  1. a draft-EDIT-CAPTURE hook — the console must send the (original, edited) caption
-     pair when an operator edits-then-approves a draft; there is no backend endpoint
-     that receives an edited draft body today (approve/override carry a reason, not
-     revised text), so nothing produces the training signal yet; and
-  2. persistence — a ``style`` subject on the ``memories`` table (its subject_type
-     CHECK would be widened the same way :mod:`studio.artist_memory` widens it for
-     ``'artist'``), read back into :func:`studio.ig_pipeline.build_ig_brief_block`.
+  1. CAPTURE — the Review Queue's real edit gesture (the ``editActionDraft``
+     GraphQL mutation → :func:`obsapi.repo.edit_action_draft`) records each
+     (original, edited) pair via :func:`record_style_edit`;
+  2. PERSIST — a ``style`` subject on the shared ``memories`` table (subject-type
+     CHECK widened idempotently, mirroring :mod:`studio.artist_memory`), idempotent
+     per exact edit pair so a retried mutation never double-counts;
+  3. FEED BACK — :func:`load_style_preferences` rebuilds the accumulated rules
+     deterministically from the stored pairs and
+     :func:`studio.ig_pipeline.build_ig_brief_block` appends
+     :func:`render_style_preferences_block` to every subsequent drafting brief.
 
-Both steps are specified in ``docs/style-memory-feasibility.md``. Until the capture
-hook lands, wiring the brief read alone would render nothing (no captured edits),
-so it is honestly deferred rather than shipped as an always-empty block.
+Empty history renders nothing — the block appears only once real edits exist.
 """
 
 from __future__ import annotations
@@ -179,3 +177,136 @@ def render_style_preferences_block(prefs: dict[str, Any] | None) -> str:
     for phrase in avoid[:5]:
         lines.append(f"  - avoid phrasing like: \"{phrase[:120]}\"")
     return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
+# Persistence — the ``style`` subject on the shared ``memories`` table.
+# The write side is triggered by the REAL operator gesture (the Review Queue's
+# edit-draft mutation records each (original, edited) pair); the read side feeds
+# the accumulated preferences back into the drafting brief. This closes the
+# trainable loop the client asked for: edits become durable guidance.
+# --------------------------------------------------------------------------- #
+
+STYLE_SUBJECT_TYPE = "style"
+
+# Idempotent widening of the memories subject-type CHECK to admit 'style'. Keeps
+# every previously-admitted value (incl. 'artist') so this composes with
+# studio.artist_memory's own widen block regardless of run order.
+_WIDEN_SQL = """
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'memories'::regclass
+          AND conname  = 'memories_subject_type_check'
+          AND pg_get_constraintdef(oid) NOT LIKE '%%style%%'
+    ) THEN
+        ALTER TABLE memories DROP CONSTRAINT memories_subject_type_check;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'memories'::regclass
+          AND conname  = 'memories_subject_type_check'
+    ) THEN
+        ALTER TABLE memories ADD CONSTRAINT memories_subject_type_check
+            CHECK (subject_type IN
+                   ('customer','campaign','conversation','fact','artist','style'));
+    END IF;
+END $$;
+"""
+
+
+def _dsn(dsn: str | None = None) -> str:
+    import os
+
+    return (dsn or os.environ.get("ENGINE_DATABASE_URL")
+            or "postgresql://scalers:scalers@localhost:5432/scalers")
+
+
+def _connect(dsn: str | None = None):
+    import psycopg
+    from psycopg.rows import dict_row
+
+    return psycopg.connect(_dsn(dsn), autocommit=True, row_factory=dict_row)
+
+
+def ensure_style_memory_schema(dsn: str | None = None) -> None:
+    """Ensure ``memories`` exists and its subject-type CHECK admits ``'style'``.
+    Idempotent, mirrors :func:`studio.artist_memory.ensure_artist_memory_schema`."""
+    from memory import MemoryStore
+
+    MemoryStore(dsn=_dsn(dsn)).ensure_schema()
+    with _connect(dsn) as conn:
+        conn.execute(_WIDEN_SQL)
+
+
+def record_style_edit(
+    tenant_id: str,
+    original: str,
+    edited: str,
+    *,
+    action_id: str | None = None,
+    channel: str | None = None,
+    dsn: str | None = None,
+) -> dict[str, Any]:
+    """Distill + persist ONE real operator edit. Returns the distilled preference
+    (``{"signals", "removed_phrases"}``) — empty when the edit carried no signal
+    (nothing is stored; a non-change trains nothing). Idempotent on the exact
+    (original, edited) pair via the memories natural key, so a retried mutation
+    never double-counts an edit toward the rule threshold."""
+    import hashlib
+    import uuid as _uuid
+
+    pref = learn_style_preference(original, edited)
+    if not (pref["signals"] or pref["removed_phrases"]):
+        return {}
+    ensure_style_memory_schema(dsn)
+    text = "style edit: " + ", ".join(pref["signals"] or ["phrase-cut"])
+    chash = hashlib.sha256(f"{original}\x00{edited}".encode("utf-8")).hexdigest()
+    from psycopg.types.json import Json
+
+    with _connect(dsn) as conn:
+        conn.execute(
+            """
+            INSERT INTO memories
+                (id, tenant_id, subject_type, subject_id, text, embedding,
+                 metadata, content_hash, is_test)
+            VALUES (%s, %s, %s, %s, %s, NULL, %s, %s, FALSE)
+            ON CONFLICT (tenant_id, subject_type, COALESCE(subject_id, ''), content_hash)
+            DO NOTHING
+            """,
+            ("mem_" + _uuid.uuid4().hex[:16], tenant_id, STYLE_SUBJECT_TYPE,
+             channel or "default", text,
+             Json({"original": original, "edited": edited,
+                   "signals": pref["signals"],
+                   "removed_phrases": pref["removed_phrases"],
+                   "action_id": action_id}),
+             chash),
+        )
+    return pref
+
+
+def load_style_preferences(
+    tenant_id: str, *, limit: int = 200, dsn: str | None = None
+) -> dict[str, Any] | None:
+    """The tenant's accumulated style preferences, rebuilt deterministically from
+    the stored (original, edited) pairs — or ``None`` when no edits are on file
+    (the brief block renders nothing; never a fabricated preference)."""
+    try:
+        with _connect(dsn) as conn:
+            rows = conn.execute(
+                "SELECT metadata FROM memories WHERE tenant_id = %s "
+                "AND subject_type = %s AND is_test = FALSE "
+                "ORDER BY created_at ASC LIMIT %s",
+                (tenant_id, STYLE_SUBJECT_TYPE, limit),
+            ).fetchall()
+    except Exception:
+        return None  # no DB / no table — honest nothing
+    edits: list[tuple[str, str]] = []
+    for r in rows:
+        md = r.get("metadata") or {}
+        if isinstance(md, dict) and md.get("original") and md.get("edited"):
+            edits.append((md["original"], md["edited"]))
+    if not edits:
+        return None
+    return accumulate_preferences(edits)

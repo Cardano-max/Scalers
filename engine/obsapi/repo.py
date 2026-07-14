@@ -1175,11 +1175,42 @@ def regenerate_action(action_id: str) -> Action | None:
 def edit_action_draft(action_id: str, draft: str) -> Action | None:
     """Edit the pending draft in place. This is a benign, well-defined local
     write (no send), so it updates the ``actions`` row directly rather than via a
-    seam — the seam set has no edit function and the demo's edit button needs it."""
+    seam — the seam set has no edit function and the demo's edit button needs it.
+
+    Two additions to the bare UPDATE:
+
+    * AUDIT GUARD — a ``sent`` action is terminal; rewriting its draft would
+      falsify the record of what was actually delivered, so the edit is refused.
+    * TRAINABLE LOOP — every real edit is the operator's training signal (the
+      client's "we can start training it"). The (original, edited) pair is
+      distilled + persisted via :func:`studio.style_memory.record_style_edit`
+      (best-effort — a learning hiccup never blocks the operator's edit), and the
+      accumulated preferences feed back into every subsequent drafting brief."""
 
     with connect() as conn:
+        row = conn.execute(
+            "SELECT tenant_id, channel, status, draft FROM actions WHERE id=%s",
+            (action_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        if (row["status"] or "").lower() == "sent":
+            raise ValueError(
+                f"action {action_id} was already sent — its draft is the audit "
+                "record of what was delivered and cannot be edited"
+            )
+        original = row["draft"] or ""
         conn.execute(
             "UPDATE actions SET draft=%s, updated_at=now() WHERE id=%s",
             (draft, action_id),
         )
+    try:
+        from studio.style_memory import record_style_edit
+
+        record_style_edit(
+            row["tenant_id"], original, draft,
+            action_id=action_id, channel=row["channel"],
+        )
+    except Exception:
+        pass  # learning is best-effort; the edit itself already landed
     return action(action_id)

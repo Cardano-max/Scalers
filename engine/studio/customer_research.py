@@ -543,9 +543,26 @@ def resolve_brand_voice(tenant_id: str | None = None) -> tuple[str, tuple[str, .
 
         pack = load_pack(tid)
         dims = load_voice_dimensions(pack)
-        return _render_voice_context(dims), tuple(dims.vocabulary.approved_claims)
+        context = _render_voice_context(dims)
+        claims = tuple(dims.vocabulary.approved_claims)
     except Exception:
         return "", ()
+    # Operator style preferences learned from REAL Review-Queue edits (the trainable
+    # loop) ride along with the brand voice so EVERY outreach draft honors them.
+    # No edits on file -> empty block -> context unchanged. Best-effort: a learning
+    # read hiccup never degrades the voice itself.
+    try:
+        from studio.style_memory import (
+            load_style_preferences,
+            render_style_preferences_block,
+        )
+
+        block = render_style_preferences_block(load_style_preferences(tid))
+        if block:
+            context = f"{context}\n{block}"
+    except Exception:
+        pass
+    return context, claims
 
 
 _SOCIAL_HOSTS = ("instagram.", "facebook.", "tiktok.", "twitter.", "x.com", "linkedin.")

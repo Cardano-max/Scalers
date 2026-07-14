@@ -2,10 +2,16 @@
 
 **Source:** client direction, PA meeting 2026-07-11. Jigger called the drafts
 "generic" and framed the system as "a trainable agent … we can start training it."
-The training signal we already have is the operator's own EDITS to a draft before
-approval. This doc is the groundwork; the distillation core is built and tested,
-and the two wiring steps below are **not** shipped yet because the trigger they
-need does not exist in the locked console today.
+
+**STATUS: SHIPPED.** The loop is closed end-to-end and live-verified: the Review
+Queue's real `editActionDraft` GraphQL mutation captures each (original, edited)
+pair (`obsapi.repo.edit_action_draft` → `studio.style_memory.record_style_edit`),
+persists it on the `memories` table's `style` subject (CHECK widened idempotently,
+idempotent per exact edit pair), and the accumulated preferences feed back into
+BOTH drafting surfaces — the IG brief (`build_ig_brief_block`) and every outreach
+draft (`resolve_brand_voice` appends the learned block). A `sent` action's draft
+is the delivery audit record and now refuses edits. The sections below stand as
+the original design record.
 
 ## What is DONE (the trainable core — `engine/studio/style_memory.py`)
 
