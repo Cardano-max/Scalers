@@ -61,6 +61,12 @@ _MESSAGES_PATH = "/v1/messages"
 PRIMARY_MODEL = os.environ.get("RESEARCH_PRIMARY_MODEL", "claude-fable-5")
 FALLBACK_MODEL = os.environ.get("RESEARCH_FALLBACK_MODEL", "claude-opus-4-8")
 
+# A NON-STREAMING messages call that runs server-side web search takes minutes, not
+# seconds — the tool loops several searches before the final text. 120s produced
+# real read-timeouts on the very first live call, so the default is generous and
+# env-overridable (the operator's knob, like the model ids above).
+DEFAULT_TIMEOUT_S = float(os.environ.get("RESEARCH_HTTP_TIMEOUT_S", "300"))
+
 # web search + server-side fallback are both beta surfaces on the Messages API.
 _SERVER_SIDE_FALLBACK_BETA = "server-side-fallback-2026-06-01"
 _WEB_SEARCH_TOOL = "web_search_20260209"
@@ -105,7 +111,7 @@ class AnthropicResearchProvider:
         max_tokens: int = 4096,
         rate: float = 1.0,
         burst: int = 3,
-        timeout: float = 120.0,
+        timeout: float = DEFAULT_TIMEOUT_S,
         clock=None,
         resolver=None,
     ) -> None:
